@@ -1,0 +1,71 @@
+<!-- LobbyPage.xaml -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="SpeedyCompass.LobbyPage"
+             Title="Group Lobby">
+
+    <Grid RowDefinitions="Auto, Auto, *, Auto" Padding="20" RowSpacing="15">
+
+        <!-- ROW 0: Connection Status & Group Name -->
+        <Grid Grid.Row="0" ColumnDefinitions="*, Auto">
+            <VerticalStackLayout>
+                <Label Text="GROUP" FontSize="12" TextColor="Gray" />
+                <Label x:Name="GroupNameLabel" FontSize="22" FontAttributes="Bold" />
+            </VerticalStackLayout>
+
+            <HorizontalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="5">
+                <Ellipse x:Name="ConnectionIndicator" WidthRequest="12" HeightRequest="12" Fill="Green" />
+                <Label x:Name="ConnectionStatusLabel" Text="Connected" FontSize="14" TextColor="Gray" />
+            </HorizontalStackLayout>
+        </Grid>
+
+        <!-- ROW 1: Current User Profile Card -->
+        <Border Grid.Row="1" StrokeShape="RoundRectangle 10" BackgroundColor="#F3F4F6" Padding="15">
+            <HorizontalStackLayout Spacing="10">
+                <Label Text="👤" FontSize="24" VerticalOptions="Center"/>
+                <VerticalStackLayout VerticalOptions="Center">
+                    <Label x:Name="CurrentUserNameLabel" FontSize="18" FontAttributes="Bold" />
+                    <Label x:Name="CurrentUserRoleLabel" FontSize="14" TextColor="DarkOrange" />
+                </VerticalStackLayout>
+            </HorizontalStackLayout>
+        </Border>
+
+        <!-- ROW 2: The Roster (Other Members) -->
+        <VerticalStackLayout Grid.Row="2" Spacing="10">
+            <Label Text="Riders in Lobby" FontSize="16" FontAttributes="Bold" />
+
+            <CollectionView x:Name="RidersCollectionView">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnDefinitions="*, Auto" Padding="10, 15">
+                            <Label Grid.Column="0" Text="{Binding Name}" FontSize="16" VerticalOptions="Center" />
+                            <Border Grid.Column="1" StrokeShape="RoundRectangle 5" BackgroundColor="{Binding RoleColor}" Padding="8,4">
+                                <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="12" FontAttributes="Bold" />
+                            </Border>
+                        </Grid>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+        </VerticalStackLayout>
+
+        <!-- ROW 3: Action Area (Role Dependent) -->
+        <VerticalStackLayout Grid.Row="3" Spacing="10">
+            <!-- Visible ONLY to Admin -->
+            <Button x:Name="SelectDestinationButton" 
+                    Text="Choose Destination &amp; Start" 
+                    BackgroundColor="#2196F3"
+                    FontAttributes="Bold"
+                    HeightRequest="50"
+                    Clicked="OnSelectDestinationClicked" 
+                    IsVisible="False" />
+
+            <!-- Visible ONLY to regular Riders -->
+            <Label x:Name="WaitingForAdminLabel"
+                   Text="Waiting for Admin to select destination..."
+                   HorizontalOptions="Center"
+                   TextColor="Gray"
+                   IsVisible="False" />
+        </VerticalStackLayout>
+
+    </Grid>
+</ContentPage>

@@ -1,0 +1,43 @@
+<svg width="140" height="70" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Shadow -->
+  <filter id="shadow">
+    <feDropShadow dx="0" dy="2" stdDeviation="2"
+        flood-opacity="0.35"/>
+  </filter>
+
+  <!-- Bubble -->
+  <g filter="url(#shadow)">
+    <rect
+        x="20"
+        y="5"
+        rx="15"
+        ry="15"
+        width="{RECTWIDTH}"
+        height="40"
+        fill="{BUBBLECOLOR}"/>
+
+    <!-- Pointer -->
+    <polygon
+        points="{POINTER}"
+        fill="{BUBBLECOLOR}"/>
+  </g>
+
+  <!-- Green Indicator -->
+  <polygon
+      points="{INDICATOR}"
+      fill="{INDICATORCOLOR}"/>
+
+  <!-- Text -->
+  <text
+      x="70"
+      y="30"
+      text-anchor="middle"
+      font-size="18"
+      font-family="Arial"
+      fill="white"
+      font-weight="bold">
+      {TEXT}
+  </text>
+
+</svg>
