@@ -1,71 +1,143 @@
-<!-- LobbyPage.xaml -->
+<?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:maps="clr-namespace:Microsoft.Maui.Controls.Maps;assembly=Microsoft.Maui.Controls.Maps"
+             xmlns:controls="clr-namespace:SpeedyCompass.Controls"
+             xmlns:local="clr-namespace:SpeedyCompass"
              x:Class="SpeedyCompass.LobbyPage"
-             Title="Group Lobby">
+             x:Name="ThisPage"
+             Title="Ride Lobby">
+    <!-- Remove x:DataType from root, set BindingContext in code-behind instead -->
+    <Grid RowDefinitions="Auto, *">
+        <!-- 1. Custom Tab Bar -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,*" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
+            <Button x:Name="TabRoster" 
+                    Text="Roster" 
+                    Clicked="OnTabClicked" 
+                    CornerRadius="10" 
+                    BackgroundColor="DodgerBlue" 
+                    TextColor="White"
+                    FontAttributes="Bold"/>
 
-    <Grid RowDefinitions="Auto, Auto, *, Auto" Padding="20" RowSpacing="15">
-
-        <!-- ROW 0: Connection Status & Group Name -->
-        <Grid Grid.Row="0" ColumnDefinitions="*, Auto">
-            <VerticalStackLayout>
-                <Label Text="GROUP" FontSize="12" TextColor="Gray" />
-                <Label x:Name="GroupNameLabel" FontSize="22" FontAttributes="Bold" />
-            </VerticalStackLayout>
-
-            <HorizontalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="5">
-                <Ellipse x:Name="ConnectionIndicator" WidthRequest="12" HeightRequest="12" Fill="Green" />
-                <Label x:Name="ConnectionStatusLabel" Text="Connected" FontSize="14" TextColor="Gray" />
-            </HorizontalStackLayout>
+            <Button x:Name="TabMap" 
+                    Grid.Column="1" 
+                    Text="Live Map" 
+                    Clicked="OnTabClicked" 
+                    CornerRadius="10" 
+                    BackgroundColor="Transparent" 
+                    TextColor="{AppThemeBinding Light=Black, Dark=White}"
+                    FontAttributes="Bold"/>
         </Grid>
 
-        <!-- ROW 1: Current User Profile Card -->
-        <Border Grid.Row="1" StrokeShape="RoundRectangle 10" BackgroundColor="#F3F4F6" Padding="15">
-            <HorizontalStackLayout Spacing="10">
-                <Label Text="👤" FontSize="24" VerticalOptions="Center"/>
-                <VerticalStackLayout VerticalOptions="Center">
-                    <Label x:Name="CurrentUserNameLabel" FontSize="18" FontAttributes="Bold" />
-                    <Label x:Name="CurrentUserRoleLabel" FontSize="14" TextColor="DarkOrange" />
-                </VerticalStackLayout>
-            </HorizontalStackLayout>
-        </Border>
+        <!-- 2. TAB 1: The Roster View -->
+        <Grid x:Name="RosterView" Grid.Row="1" RowDefinitions="Auto, Auto, Auto, *" Padding="20">
 
-        <!-- ROW 2: The Roster (Other Members) -->
-        <VerticalStackLayout Grid.Row="2" Spacing="10">
-            <Label Text="Riders in Lobby" FontSize="16" FontAttributes="Bold" />
+            <!-- Connection Status Indicator -->
+            <Frame Grid.Row="0" CornerRadius="8" Padding="10" Margin="0,0,0,15" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" BorderColor="Transparent" HasShadow="False">
+                <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="8">
+                    <BoxView x:Name="StatusDot" WidthRequest="12" HeightRequest="12" CornerRadius="6" BackgroundColor="Orange" VerticalOptions="Center"/>
+                    <Label x:Name="StatusLabel" Text="Connecting..." VerticalOptions="Center" FontSize="14" FontAttributes="Bold"/>
+                </StackLayout>
+            </Frame>
 
-            <CollectionView x:Name="RidersCollectionView">
+            <StackLayout Grid.Row="1" HorizontalOptions="Center" Margin="0,0,0,20">
+                <Label Text="Group ID" FontSize="14" TextColor="Gray" HorizontalOptions="Center"/>
+                <Label x:Name="GroupNameLabel" FontSize="28" FontAttributes="Bold" HorizontalOptions="Center" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+            </StackLayout>
+
+            <Frame Grid.Row="2" CornerRadius="12" HasShadow="True" Padding="15" Margin="0,0,0,20" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" BorderColor="Transparent">
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackLayout Grid.Column="0">
+                        <Label Text="You" FontSize="12" TextColor="Gray"/>
+                        <Label x:Name="CurrentUserNameLabel" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                    </StackLayout>
+                    <Label x:Name="CurrentUserRoleLabel" Grid.Column="1" VerticalOptions="Center" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                </Grid>
+            </Frame>
+
+            <CollectionView x:Name="RidersCollectionView" Grid.Row="3">
                 <CollectionView.ItemTemplate>
-                    <DataTemplate>
-                        <Grid ColumnDefinitions="*, Auto" Padding="10, 15">
-                            <Label Grid.Column="0" Text="{Binding Name}" FontSize="16" VerticalOptions="Center" />
-                            <Border Grid.Column="1" StrokeShape="RoundRectangle 5" BackgroundColor="{Binding RoleColor}" Padding="8,4">
-                                <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="12" FontAttributes="Bold" />
-                            </Border>
-                        </Grid>
+                    <DataTemplate x:DataType="local:Rider">
+                        <!-- Now x:DataType is properly used in the template -->
+                        <Frame CornerRadius="8" HasShadow="False" Padding="15" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F9F9F9, Dark=#2C2C2C}" BorderColor="Transparent">
+                            <Grid ColumnDefinitions="*, Auto">
+                                <Label Text="{Binding Name}" Grid.Column="0" VerticalOptions="Center" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                                <Frame Grid.Column="1" BackgroundColor="{Binding RoleColor}" CornerRadius="6" Padding="8,4" HasShadow="False">
+                                    <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="12" FontAttributes="Bold"/>
+                                </Frame>
+                            </Grid>
+                        </Frame>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>
             </CollectionView>
-        </VerticalStackLayout>
+        </Grid>
 
-        <!-- ROW 3: Action Area (Role Dependent) -->
-        <VerticalStackLayout Grid.Row="3" Spacing="10">
-            <!-- Visible ONLY to Admin -->
-            <Button x:Name="SelectDestinationButton" 
-                    Text="Choose Destination &amp; Start" 
-                    BackgroundColor="#2196F3"
+        <!-- 3. TAB 2: The Unified Live Map View -->
+        <Grid x:Name="MapView" Grid.Row="1" IsVisible="False" RowDefinitions="Auto, *">
+
+            <!-- Map Container bound to the ObservableCollection using MVVM -->
+            <controls:CustomMap x:Name="LiveMap" 
+                                Grid.Row="0" Grid.RowSpan="2"
+                                MapClicked="OnMapClicked" 
+                                IsShowingUser="True"
+                                CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}"
+                                
+                                
+            />
+
+            <!-- Destination Picker UI (Admin Only) -->
+            <Grid x:Name="AdminSearchUI" Grid.Row="0" ColumnDefinitions="*, Auto" Margin="15,15,15,10" IsVisible="False">
+                <Frame Grid.Column="0" Padding="0" CornerRadius="25" HasShadow="True" BorderColor="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
+                    <SearchBar x:Name="DestinationSearchBar"
+                               Placeholder="Search or tap map..."
+                               SearchButtonPressed="OnSearchPressed"
+                               BackgroundColor="Transparent"
+                               TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                </Frame>
+                <Button x:Name="ConfirmDestButton" 
+                        Grid.Column="1" 
+                        Text="✔️" 
+                        Clicked="OnConfirmDestinationClicked" 
+                        Margin="10,0,0,0" 
+                        WidthRequest="50"
+                        HeightRequest="50"
+                        CornerRadius="25" 
+                        BackgroundColor="DodgerBlue" 
+                        TextColor="White"
+                        FontAttributes="Bold"
+                        IsEnabled="False"
+                        Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
+            </Grid>
+
+            <Frame x:Name="AdminInstructionBanner" 
+                   Grid.Row="1"
+                   VerticalOptions="Start" 
+                   HorizontalOptions="Center" 
+                   Margin="0,15,0,0" 
+                   Padding="15,10" 
+                   CornerRadius="20" 
+                   BackgroundColor="#CC000000" 
+                   BorderColor="Transparent"
+                   IsVisible="False">
+                <Label Text="Tap the map or search to set a destination" TextColor="White" FontAttributes="Bold" FontSize="14"/>
+            </Frame>
+
+            <Button x:Name="StartNavButton"
+                    Grid.Row="1"
+                    Text="GO"
+                    IsVisible="False"
+                    Clicked="OnLaunchNativeNavClicked"
+                    HorizontalOptions="End"
+                    VerticalOptions="End"
+                    Margin="0,0,20,40" 
+                    WidthRequest="70"
+                    HeightRequest="70"
+                    CornerRadius="35"
+                    BackgroundColor="MediumSeaGreen"
+                    TextColor="White"
+                    FontSize="18"
                     FontAttributes="Bold"
-                    HeightRequest="50"
-                    Clicked="OnSelectDestinationClicked" 
-                    IsVisible="False" />
-
-            <!-- Visible ONLY to regular Riders -->
-            <Label x:Name="WaitingForAdminLabel"
-                   Text="Waiting for Admin to select destination..."
-                   HorizontalOptions="Center"
-                   TextColor="Gray"
-                   IsVisible="False" />
-        </VerticalStackLayout>
-
+                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=10}" />
+        </Grid>
     </Grid>
 </ContentPage>

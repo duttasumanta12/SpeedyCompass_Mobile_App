@@ -75,6 +75,16 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <Compile Remove="ActiveMapPage.xaml.cs" />
+	  <Compile Remove="DestinationPickerPage.xaml.cs" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <MauiXaml Remove="ActiveMapPage.xaml" />
+	  <MauiXaml Remove="DestinationPickerPage.xaml" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
 		<PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.9" />
 		<PackageReference Include="Microsoft.Extensions.Configuration.UserSecrets" Version="6.0.1" />
@@ -87,15 +97,13 @@
 	</ItemGroup>
 
 	<ItemGroup>
-	  <MauiXaml Update="ActiveMapPage.xaml">
-	    <Generator>MSBuild:Compile</Generator>
-	  </MauiXaml>
-	  <MauiXaml Update="DestinationPickerPage.xaml">
-	    <Generator>MSBuild:Compile</Generator>
-	  </MauiXaml>
 	  <MauiXaml Update="LobbyPage.xaml">
 	    <Generator>MSBuild:Compile</Generator>
 	  </MauiXaml>
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="ControlHandlers\" />
 	</ItemGroup>
 
 </Project>

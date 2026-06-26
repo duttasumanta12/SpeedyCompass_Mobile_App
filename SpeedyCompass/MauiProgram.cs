@@ -1,5 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Maui.Maps.Handlers;
+using SpeedyCompass.Controls;
 using SpeedyCompass.Services;
 
 namespace SpeedyCompass
@@ -16,6 +18,13 @@ namespace SpeedyCompass
                 {
                     fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
                     fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
+                })
+                .ConfigureMauiHandlers(handlers =>
+                {
+#if ANDROID
+                    //handlers.AddHandler<RiderPin, MapPinHandler>();
+                    handlers.AddHandler<CustomMap, SpeedyCompass.Platforms.Android.CustomMapHandler>();
+#endif
                 });
 
             // 1. Register Global Exception Handlers
@@ -26,20 +35,7 @@ namespace SpeedyCompass
             // 1. Register the Services (Singletons live forever)
             builder.Services.AddSingleton<HttpClient>();
             builder.Services.AddSingleton<SignalRService>();
-            builder
-            .UseMauiApp<App>()
-            .ConfigureFonts(fonts =>
-            {
-                fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
-                fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
-            })
-            .ConfigureMauiHandlers(handlers =>
-            {
-#if ANDROID
-                //handlers.AddHandler(typeof(Microsoft.Maui.Controls.Maps.Map), typeof(Platforms.Android.CustomMapHandler));
-#endif
-            })
-            .UseMauiMaps();
+            
 #if DEBUG
             builder.Logging.AddDebug();
 #endif
