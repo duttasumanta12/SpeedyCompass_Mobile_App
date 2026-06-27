@@ -29,6 +29,7 @@ public class RiderPin : System.ComponentModel.INotifyPropertyChanged
     public Color PinColor { get => pinColor; set { pinColor = value; OnPropertyChanged(); } }
     public string ImageSource { get => imageSource; set { imageSource = value; OnPropertyChanged(); } }
     public ICommand ClickedCommand { get; set; }
+    public float ZIndex { get; set; }
     public Location Location { get => location; set { location = value; OnPropertyChanged(); } }
     public RiderPin(Action<RiderPin> clicked)
     {

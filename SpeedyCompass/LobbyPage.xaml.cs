@@ -98,14 +98,16 @@ public partial class LobbyPage : ContentPage
     private readonly ConcurrentDictionary<string, RiderPin> _riderViewModels = new();
     private readonly Random _randomColorGen = new();
 
+    // --- NEW SIMULATION VARIABLES ---
+    private List<Location> _currentRoutePoints = new();
+    private bool _isSimulating = false;
+
     public LobbyPage(SignalRService signalRService, string groupName)
     {
         InitializeComponent();
 
         // Ensure UI elements bind to this code-behind class
         BindingContext = this;
-
-        AddRandomMapPins();
 
         _signalRService = signalRService;
 
@@ -133,7 +135,7 @@ public partial class LobbyPage : ContentPage
 
     protected override async void OnAppearing()
     {
-        
+
         base.OnAppearing();
         if (_hasJoined) return;
 
@@ -143,7 +145,7 @@ public partial class LobbyPage : ContentPage
             else await _signalRService.JoinGroup(GroupNameLabel.Text, _myName);
 
             _hasJoined = true;
-            
+
             InitializeLocalTrackingAsync();
         }
         catch (Exception ex)
@@ -265,6 +267,7 @@ public partial class LobbyPage : ContentPage
 
         string destName = DestinationSearchBar.Text ?? "Destination";
 
+        // --- MODIFIED: Capture route points ---
         await CalculateAndDrawRoute(_lastKnownLocation, _pendingDestination);
 
         _activeDestination = _pendingDestination;
@@ -273,6 +276,12 @@ public partial class LobbyPage : ContentPage
 
         // Inform the entire group of the destination
         await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
+
+        // --- NEW: Start Simulation ---
+        if (_currentRoutePoints != null && _currentRoutePoints.Any())
+        {
+            await SimulateMovementAlongRouteAsync();
+        }
     }
 
     private async void OnNavigationStarted(double destLat, double destLng, string destName)
@@ -289,7 +298,14 @@ public partial class LobbyPage : ContentPage
             var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
             if (loc != null)
             {
+                // --- MODIFIED: Capture route points ---
                 await CalculateAndDrawRoute(loc, _activeDestination);
+
+                // --- NEW: Start Simulation ---
+                if (_currentRoutePoints != null && _currentRoutePoints.Any())
+                {
+                    await SimulateMovementAlongRouteAsync();
+                }
             }
 
             StartNavButton.IsVisible = true;
@@ -326,7 +342,9 @@ public partial class LobbyPage : ContentPage
                 if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
 
                 _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 8 };
-                foreach (var coord in DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline))
+
+                _currentRoutePoints = DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
+                foreach (var coord in _currentRoutePoints)
                 {
                     _activeRouteLine.Geopath.Add(coord);
                 }
@@ -370,42 +388,58 @@ public partial class LobbyPage : ContentPage
                 _lastKnownLocation = currentLocation;
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    if (_myPinVm == null)
+                    // Collect all colors used by other users (excluding "You")
+                    var usedColors = MapPins
+                        .Where(pin => pin.Username != "You")
+                        .Select(pin => pin.PinColor)
+                        .ToHashSet();
+
+                    // Generate a unique random color
+                    Color uniqueColor;
+                    var rand = new Random();
+                    do
                     {
-                        // Add ourselves to the MVVM collection
-                        _myPinVm = new RiderPin(MapPinClicked)
-                        {
-                            Username = "You",
-                            Speed = "0 mph",
-                            Location = currentLocation,
-                            PinColor = Colors.DodgerBlue,
-                            ImageSource = "icon_type_four"
-                        };
-                        MapPins.Add(_myPinVm);
-                        FitMapToBounds();
-                    }
+                        uniqueColor = Color.FromRgb(rand.Next(50, 230), rand.Next(50, 230), rand.Next(50, 230));
+                    } while (usedColors.Contains(uniqueColor));
+
+                    // Assign the unique color to your pin
+                    _myPinVm = new RiderPin(MapPinClicked)
+                    {
+                        Username = "You",
+                        Speed = "0 mph",
+                        Location = currentLocation,
+                        PinColor = uniqueColor,
+                        ZIndex = 100F, // Ensure your pin is on top
+
+                    };
+                    MapPins.Add(_myPinVm);
+                    FitMapToBounds();
+                
                  });
 
-                
+
 
 #if ANDROID
-                // Keep tracking alive in the background
-                var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
-                Android.App.Application.Context.StartForegroundService(intent);
+            // Keep tracking alive in the background
+            var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
+            Android.App.Application.Context.StartForegroundService(intent);
 #endif
 
-                StartTrackingLoop();
-            }
+            StartTrackingLoop();
+        }
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"GPS Init Error: {ex.Message}"); }
     }
 
     private async void StartTrackingLoop()
+{
+    _isTracking = true;
+    while (_isTracking)
     {
-        _isTracking = true;
-        while (_isTracking)
+        try
         {
-            try
+            // --> NEW: Only fetch real GPS if we aren't running the simulation loop
+            if (!_isSimulating)
             {
                 var location = await Geolocation.Default.GetLocationAsync(new GeolocationRequest(GeolocationAccuracy.Best, TimeSpan.FromSeconds(5)));
                 if (location != null)
@@ -432,144 +466,184 @@ public partial class LobbyPage : ContentPage
                         _lastKnownLocation = location;
                         await _signalRService.UpdateLocation(GroupNameLabel.Text, location.Latitude, location.Longitude, location.Course ?? 0);
                     }
-                }
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}"); }
 
-            await Task.Delay(2000);
-        }
-    }
-
-    private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
-    {
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            var newLoc = new Location(lat, lng);
-
-            if (_riderViewModels.TryGetValue(riderId, out var existingVm))
-            {
-                // Update remote user via DataBinding
-                existingVm.Location = newLoc;
-                existingVm.Speed = "Active";
-            }
-            else
-            {
-                Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
-                var newVm = new RiderPin(MapPinClicked) { Username = riderId, Speed = "Active", Location = newLoc, PinColor = randomColor, ImageSource = "icon_type_four" };
-
-                _riderViewModels.TryAdd(riderId, newVm);
-                MapPins.Add(newVm);
-            }
-
-            FitMapToBounds();
-        });
-    }
-
-    private void FitMapToBounds()
-    {
-        if (MapPins.Count == 0) return;
-
-        double minLat = double.MaxValue, minLng = double.MaxValue;
-        double maxLat = double.MinValue, maxLng = double.MinValue;
-
-        // Loop over the Data Models instead of the Map Elements directly
-        foreach (var pin in MapPins)
-        {
-            if (pin.Location.Latitude < minLat) minLat = pin.Location.Latitude;
-            if (pin.Location.Latitude > maxLat) maxLat = pin.Location.Latitude;
-            if (pin.Location.Longitude < minLng) minLng = pin.Location.Longitude;
-            if (pin.Location.Longitude > maxLng) maxLng = pin.Location.Longitude;
-        }
-
-        double centerLat = (minLat + maxLat) / 2.0;
-        double centerLng = (minLng + maxLng) / 2.0;
-
-        double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
-        double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
-
-        LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
-    }
-
-    private async void OnLaunchNativeNavClicked(object sender, EventArgs e)
-    {
-        if (_activeDestination == null) return;
-
-        try
-        {
-            if (DeviceInfo.Platform == DevicePlatform.Android)
-            {
-                await Launcher.OpenAsync($"google.navigation:q={_activeDestination.Latitude},{_activeDestination.Longitude}&mode=d");
-            }
-            else if (DeviceInfo.Platform == DevicePlatform.iOS)
-            {
-                bool hasGoogleMaps = await Launcher.TryOpenAsync($"comgooglemaps://?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&directionsmode=driving");
-                if (!hasGoogleMaps)
-                {
-                    await Launcher.OpenAsync($"http://maps.apple.com/?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&dirflg=d");
                 }
             }
         }
-        catch (Exception) { await DisplayAlert("Error", "Could not open map.", "OK"); }
-    }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}"); }
 
-    private void OnRosterUpdated(List<Rider> roster)
+        await Task.Delay(2000);
+    }
+}
+
+private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
+{
+    MainThread.BeginInvokeOnMainThread(() =>
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        var newLoc = new Location(lat, lng);
+
+        if (_riderViewModels.TryGetValue(riderId, out var existingVm))
         {
-            Riders.Clear();
-            foreach (var rider in roster)
-            {
-                if (rider.Name == _myName) rider.Name += " (You)";
-                Riders.Add(rider);
-            }
-        });
-    }
-
-    protected override void OnDisappearing()
-    {
-        base.OnDisappearing();
-        _isTracking = false;
-
-#if ANDROID
-        var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
-        Android.App.Application.Context.StopService(intent);
-#endif
-
-        _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
-        _signalRService.RosterUpdated -= OnRosterUpdated;
-        _signalRService.NavigationStarted -= OnNavigationStarted;
-        _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
-    }
-    private void MapPinClicked(RiderPin pin)
-    {
-        // Handle pin click
-    }
-
-    private void AddRandomMapPins(int count = 5)
-    {
-        MapPins.Clear();
-        double baseLat = 22.574354;
-        double baseLng = 88.362873;
-        var rand = new Random();
-
-        for (int i = 0; i < count; i++)
+            // Update remote user via DataBinding
+            existingVm.Location = newLoc;
+            existingVm.Speed = "Active";
+        }
+        else
         {
-            // Generate small random offsets (within ~0.005 degrees)
-            double latOffset = (rand.NextDouble() - 0.5) * 0.01;
-            double lngOffset = (rand.NextDouble() - 0.5) * 0.01;
-
-            var location = new Location(baseLat + latOffset, baseLng + lngOffset);
-
-            var pin = new RiderPin(MapPinClicked)
+            Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
+            var newVm = new RiderPin(MapPinClicked)
             {
-                Username = $"Rider_{i + 1}",
-                Speed = $"{rand.Next(5, 30)} mph",
-                Location = location,
-                PinColor = Color.FromRgb(rand.Next(50, 230), rand.Next(50, 230), rand.Next(50, 230)),
-                ImageSource = "icon_type_four"
+                Username = riderId,
+                Speed = "Active",
+                Location = newLoc,
+                PinColor = randomColor,
+                ZIndex = 50F // Ensure remote users are below "You"
             };
 
-            MapPins.Add(pin);
+            _riderViewModels.TryAdd(riderId, newVm);
+            MapPins.Add(newVm);
+        }
+
+        FitMapToBounds();
+    });
+}
+
+private void FitMapToBounds()
+{
+    if (MapPins.Count == 0) return;
+
+    double minLat = double.MaxValue, minLng = double.MaxValue;
+    double maxLat = double.MinValue, maxLng = double.MinValue;
+
+    // Loop over the Data Models instead of the Map Elements directly
+    foreach (var pin in MapPins)
+    {
+        if (pin.Location.Latitude < minLat) minLat = pin.Location.Latitude;
+        if (pin.Location.Latitude > maxLat) maxLat = pin.Location.Latitude;
+        if (pin.Location.Longitude < minLng) minLng = pin.Location.Longitude;
+        if (pin.Location.Longitude > maxLng) maxLng = pin.Location.Longitude;
+    }
+
+    double centerLat = (minLat + maxLat) / 2.0;
+    double centerLng = (minLng + maxLng) / 2.0;
+
+    double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
+    double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
+
+    LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
+}
+
+private async void OnLaunchNativeNavClicked(object sender, EventArgs e)
+{
+    if (_activeDestination == null) return;
+
+    try
+    {
+        if (DeviceInfo.Platform == DevicePlatform.Android)
+        {
+            await Launcher.OpenAsync($"google.navigation:q={_activeDestination.Latitude},{_activeDestination.Longitude}&mode=d");
+        }
+        else if (DeviceInfo.Platform == DevicePlatform.iOS)
+        {
+            bool hasGoogleMaps = await Launcher.TryOpenAsync($"comgooglemaps://?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&directionsmode=driving");
+            if (!hasGoogleMaps)
+            {
+                await Launcher.OpenAsync($"http://maps.apple.com/?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&dirflg=d");
+            }
         }
     }
+    catch (Exception) { await DisplayAlert("Error", "Could not open map.", "OK"); }
+}
+
+private void OnRosterUpdated(List<Rider> roster)
+{
+    MainThread.BeginInvokeOnMainThread(() =>
+    {
+        Riders.Clear();
+        foreach (var rider in roster)
+        {
+            if (rider.Name == _myName) rider.Name += " (You)";
+            Riders.Add(rider);
+        }
+    });
+}
+
+protected override void OnDisappearing()
+{
+    base.OnDisappearing();
+    _isTracking = false;
+
+#if ANDROID
+    var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
+    Android.App.Application.Context.StopService(intent);
+#endif
+
+    _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
+    _signalRService.RosterUpdated -= OnRosterUpdated;
+    _signalRService.NavigationStarted -= OnNavigationStarted;
+    _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
+}
+private void MapPinClicked(RiderPin pin)
+{
+    // Handle pin click
+}
+private async Task SimulateMovementAlongRouteAsync()
+{
+    if (_currentRoutePoints == null || _currentRoutePoints.Count == 0) return;
+
+    await Task.Delay(2000); // 2-second delay as requested
+    _isSimulating = true;   // Flag to pause real GPS fetching
+
+    foreach (var point in _currentRoutePoints)
+    {
+        if (!_isTracking) break; // Stop if user left the page
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (_myPinVm != null)
+            {
+                _myPinVm.Location = point;
+                _myPinVm.Speed = "Simulated";
+            }
+            FitMapToBounds(); // Optional: keeps camera following the action
+        });
+
+        _lastKnownLocation = point;
+
+        // Broadcast fake movement to the group!
+        await _signalRService.UpdateLocation(GroupNameLabel.Text, point.Latitude, point.Longitude, 0);
+
+        await Task.Delay(2000); // Move to the next point every 1 second
+    }
+
+    _isSimulating = false;
+}
+
+private void AddRandomMapPins(int count = 5)
+{
+    MapPins.Clear();
+    double baseLat = 22.574354;
+    double baseLng = 88.362873;
+    var rand = new Random();
+
+    for (int i = 0; i < count; i++)
+    {
+        // Generate small random offsets (within ~0.005 degrees)
+        double latOffset = (rand.NextDouble() - 0.5) * 0.01;
+        double lngOffset = (rand.NextDouble() - 0.5) * 0.01;
+
+        var location = new Location(baseLat + latOffset, baseLng + lngOffset);
+
+        var pin = new RiderPin(MapPinClicked)
+        {
+            Username = $"Rider_{i + 1}",
+            Speed = $"{rand.Next(5, 30)} mph",
+            Location = location,
+            PinColor = Color.FromRgb(rand.Next(50, 230), rand.Next(50, 230), rand.Next(50, 230)),
+            ImageSource = "clipart2240358"
+        };
+
+        MapPins.Add(pin);
+    }
+}
 }
