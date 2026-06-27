@@ -74,6 +74,8 @@ public partial class DestinationPickerPage : ContentPage
 
     // HTTP Client to call Google APIs
     private static readonly HttpClient _httpClient = new();
+    private int _autocompleteApiHits = 0;
+    private CancellationTokenSource _debounceCts;
 
     public DestinationPickerPage(SignalRService signalRService, string groupName)
     {
@@ -126,8 +128,15 @@ public partial class DestinationPickerPage : ContentPage
             return;
         }
 
+        // Cancel the previous debounce timer
+        _debounceCts?.Cancel();
+        _debounceCts = new CancellationTokenSource();
+
         try
         {
+            // Increase the API hit counter
+            _autocompleteApiHits++;
+
             // Call Google Places API (New) - Autocomplete endpoint
             var request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:autocomplete");
             request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
@@ -157,6 +166,15 @@ public partial class DestinationPickerPage : ContentPage
                 // Update: Toggle the Frame instead of the ListView
                 SuggestionsFrame.IsVisible = true;
             }
+
+            // Wait for a short duration to debounce rapid requests (e.g., 300ms)
+            await Task.Delay(300, _debounceCts.Token);
+
+            // Check if this is the latest request based on the counter
+            if (_autocompleteApiHits != _autocompleteApiHits)
+                return;
+
+            // Here, you can safely use the result for the latest request
         }
         catch (Exception ex)
         {
@@ -249,6 +267,71 @@ public partial class DestinationPickerPage : ContentPage
         {
             await DisplayAlert("Error", "Could not synchronize with the group server: " + ex.Message, "OK");
             StartNavButton.IsEnabled = true;
+        }
+    }
+    private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
+    {
+        string query = e.NewTextValue;
+
+        // Don't search until they've typed at least 3 characters
+        if (string.IsNullOrWhiteSpace(query) || query.Length < 3)
+        {
+            // Update: Toggle the Frame instead of the ListView
+            SuggestionsFrame.IsVisible = false;
+            return;
+        }
+
+        // Cancel the previous debounce timer
+        _debounceCts?.Cancel();
+        _debounceCts = new CancellationTokenSource();
+
+        try
+        {
+            // Increase the API hit counter
+            _autocompleteApiHits++;
+
+            // Call Google Places API (New) - Autocomplete endpoint
+            var request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:autocomplete");
+            request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
+
+            var reqBody = new AutocompleteRequest { Input = query };
+            request.Content = new StringContent(JsonSerializer.Serialize(reqBody), System.Text.Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<AutocompleteResponse>(responseBody);
+
+            if (result != null && result.Suggestions != null && result.Suggestions.Any())
+            {
+                // Map to our UI model so XAML binding still works perfectly
+                var displayList = result.Suggestions
+                    .Where(s => s.PlacePrediction != null)
+                    .Select(s => new UIPlaceSuggestion
+                    {
+                        Description = s.PlacePrediction.Text.Text,
+                        PlaceId = s.PlacePrediction.PlaceId
+                    }).ToList();
+
+                SuggestionsListView.ItemsSource = displayList;
+
+                // Update: Toggle the Frame instead of the ListView
+                SuggestionsFrame.IsVisible = true;
+            }
+
+            // Wait for a short duration to debounce rapid requests (e.g., 300ms)
+            await Task.Delay(300, _debounceCts.Token);
+
+            // Check if this is the latest request based on the counter
+            if (_autocompleteApiHits != _autocompleteApiHits)
+                return;
+
+            // Here, you can safely use the result for the latest request
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Search Error: {ex.Message}");
         }
     }
 }

@@ -232,6 +232,18 @@ namespace SpeedyCompass.Platforms.Android
                         entry.Marker.ShowInfoWindow();
                     }
                 }
+                else if(e.PropertyName == nameof(RiderPin.Heading))
+                {
+                    // 1. Move the marker
+                    entry.Marker.Position = new LatLng(pin.Location.Latitude, pin.Location.Longitude);
+
+                    // 2. ONLY rotate/move the camera if this is the CURRENT user's pin
+                    // (You don't want the map spinning wildly when other riders turn corners!)
+                    if (pin.Username == "You" && pin.IsAutoCentering)
+                    {
+                        UpdateCameraBearing(pin);
+                    }
+                }
             });
         }
 
@@ -257,6 +269,21 @@ namespace SpeedyCompass.Platforms.Android
             {
                 value.Pin.ClickedCommand?.Execute(null);
             }
+        }
+        private void UpdateCameraBearing(RiderPin pin)
+        {
+            if (Map == null) return;
+
+            // Build a new camera position
+            var cameraPosition = new CameraPosition.Builder()
+                .Target(new LatLng(pin.Location.Latitude, pin.Location.Longitude)) // Keep user centered
+                .Bearing((float)pin.Heading)                                       // Rotate the map!
+                .Zoom(Map.CameraPosition.Zoom)                                     // Maintain current zoom level
+                .Tilt(45f)                                                         // Optional: Give it that angled 3D GPS look
+                .Build();
+
+            // Use AnimateCamera for a smooth transition (MoveCamera is instant/choppy)
+            Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition));
         }
     }
 

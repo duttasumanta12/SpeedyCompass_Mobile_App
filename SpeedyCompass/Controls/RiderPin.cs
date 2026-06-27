@@ -30,6 +30,33 @@ public class RiderPin : System.ComponentModel.INotifyPropertyChanged
     public string ImageSource { get => imageSource; set { imageSource = value; OnPropertyChanged(); } }
     public ICommand ClickedCommand { get; set; }
     public float ZIndex { get; set; }
+    private double _heading;
+    private bool _isFirstHeading = true; // Ensures the map rotates immediately on launch
+
+    public double Heading
+    {
+        get => _heading;
+        set
+        {
+            // 1. Calculate the shortest angular difference (handling the 359 to 1 degree wrap-around)
+            double diff = Math.Abs(_heading - value);
+            if (diff > 180.0) diff = 360.0 - diff;
+
+            // 2. Only update if the turn is > 3 degrees, OR if it's the very first location fix
+            if (diff > 15.0 || _isFirstHeading)
+            {
+                _heading = value;
+                OnPropertyChanged(); // This now ONLY fires when it actually matters
+                _isFirstHeading = false;
+            }
+        }
+    }
+    private bool _isAutoCentering = true;
+    public bool IsAutoCentering
+    {
+        get => _isAutoCentering;
+        set { _isAutoCentering = value; OnPropertyChanged(); }
+    }
     public Location Location { get => location; set { location = value; OnPropertyChanged(); } }
     public RiderPin(Action<RiderPin> clicked)
     {

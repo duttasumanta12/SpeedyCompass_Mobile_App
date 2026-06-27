@@ -1,13 +1,20 @@
-using System.Collections.ObjectModel;
-using System.Collections.Concurrent;
-using System.Text.Json;
-using System.Text.Json.Serialization;
+#if ANDROID
+using AndroidX.ConstraintLayout.Core.Motion.Utils;
+#endif
+using Microsoft.Extensions.Configuration;
+using Microsoft.Maui.ApplicationModel;
 using Microsoft.Maui.Controls.Maps;
 using Microsoft.Maui.Maps;
-using Microsoft.Extensions.Configuration;
-using SpeedyCompass.Services;
 using SpeedyCompass.Controls;
-using Microsoft.Maui.ApplicationModel;
+using SpeedyCompass.Models;
+using SpeedyCompass.Services;
+using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+#if ANDROID
+using static Android.Provider.Contacts.Intents;
+#endif
 
 namespace SpeedyCompass;
 
@@ -102,6 +109,10 @@ public partial class LobbyPage : ContentPage
     private List<Location> _currentRoutePoints = new();
     private bool _isSimulating = false;
 
+    private double _currentHeading = 0; // Added to track our current rotation
+    private int _autocompleteApiHits = 0;
+    private CancellationTokenSource _debounceCts;
+
     public LobbyPage(SignalRService signalRService, string groupName)
     {
         InitializeComponent();
@@ -131,6 +142,7 @@ public partial class LobbyPage : ContentPage
         _signalRService.RosterUpdated += OnRosterUpdated;
         _signalRService.NavigationStarted += OnNavigationStarted;
         _signalRService.RiderLocationUpdated += OnRiderLocationUpdated;
+        _signalRService.NavigationCancelled += OnNavigationCancelled; // NEW
     }
 
     protected override async void OnAppearing()
@@ -260,28 +272,57 @@ public partial class LobbyPage : ContentPage
     {
         if (_pendingDestination == null || _lastKnownLocation == null) return;
 
-        ConfirmDestButton.IsEnabled = false;
-        AdminSearchUI.IsVisible = false;
+        // UI State Change: Lock search, swap buttons, keep search bar visible
+        ConfirmDestButton.IsVisible = false;
+        ResetDestButton.IsVisible = true;
+        DestinationSearchBar.IsReadOnly = true;
         AdminInstructionBanner.IsVisible = false;
         _routeIsActive = true;
+        EnableNavigationUI();
 
         string destName = DestinationSearchBar.Text ?? "Destination";
 
-        // --- MODIFIED: Capture route points ---
         await CalculateAndDrawRoute(_lastKnownLocation, _pendingDestination);
 
         _activeDestination = _pendingDestination;
         StartNavButton.IsVisible = true;
-        FitMapToBounds();
+        //FitMapToBounds();
 
         // Inform the entire group of the destination
         await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
 
+#if DEBUG
         // --- NEW: Start Simulation ---
         if (_currentRoutePoints != null && _currentRoutePoints.Any())
         {
             await SimulateMovementAlongRouteAsync();
         }
+#endif
+    }
+    private async void OnResetDestinationClicked(object sender, EventArgs e)
+    {
+        // 1. Reset UI elements
+        ResetDestButton.IsVisible = false;
+        ConfirmDestButton.IsVisible = true;
+        DestinationSearchBar.IsReadOnly = false;
+        StartNavButton.IsVisible = true;
+        AdminInstructionBanner.IsVisible = true;
+        _routeIsActive = false;
+        _isSimulating = false;
+
+        // 2. Remove the navigation route (Polyline)
+        if (_activeRouteLine != null)
+        {
+            LiveMap.MapElements.Remove(_activeRouteLine);
+            _activeRouteLine = null;
+        }
+
+        await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
+
+        // Note: The destination MapPinViewModel remains in the collection, so the pin stays on the map!
+
+        // 3. Re-adjust the camera
+        FitMapToBounds();
     }
 
     private async void OnNavigationStarted(double destLat, double destLng, string destName)
@@ -301,11 +342,13 @@ public partial class LobbyPage : ContentPage
                 // --- MODIFIED: Capture route points ---
                 await CalculateAndDrawRoute(loc, _activeDestination);
 
+#if DEBUG
                 // --- NEW: Start Simulation ---
                 if (_currentRoutePoints != null && _currentRoutePoints.Any())
                 {
                     await SimulateMovementAlongRouteAsync();
                 }
+#endif
             }
 
             StartNavButton.IsVisible = true;
@@ -414,236 +457,458 @@ public partial class LobbyPage : ContentPage
                     };
                     MapPins.Add(_myPinVm);
                     FitMapToBounds();
-                
-                 });
+
+                });
 
 
 
 #if ANDROID
-            // Keep tracking alive in the background
-            var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
-            Android.App.Application.Context.StartForegroundService(intent);
+                // Keep tracking alive in the background
+                var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
+                Android.App.Application.Context.StartForegroundService(intent);
 #endif
 
-            StartTrackingLoop();
-        }
+                StartTrackingLoop();
+            }
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"GPS Init Error: {ex.Message}"); }
     }
 
     private async void StartTrackingLoop()
-{
-    _isTracking = true;
-    while (_isTracking)
     {
-        try
+        _isTracking = true;
+        while (_isTracking)
         {
-            // --> NEW: Only fetch real GPS if we aren't running the simulation loop
-            if (!_isSimulating)
+            try
             {
-                var location = await Geolocation.Default.GetLocationAsync(new GeolocationRequest(GeolocationAccuracy.Best, TimeSpan.FromSeconds(5)));
-                if (location != null)
+                // --> NEW: Only fetch real GPS if we aren't running the simulation loop
+                if (!_isSimulating)
                 {
-                    double speedMph = (location.Speed ?? 0) * 2.23694;
-                    double distanceThreshold = 5 + speedMph;
+                    var location = await Geolocation.Default.GetLocationAsync(new GeolocationRequest(GeolocationAccuracy.Best, TimeSpan.FromSeconds(5)));
+                    if (location != null)
+                    {
+                        double speedMph = (location.Speed ?? 0) * 2.23694;
+                        double distanceThreshold = 5 + speedMph;
 
-                    double distanceMoved = _lastKnownLocation == null
+                        double distanceMoved = _lastKnownLocation == null
                         ? double.MaxValue
                         : Location.CalculateDistance(_lastKnownLocation, location, DistanceUnits.Kilometers) * 1000;
 
-                    MainThread.BeginInvokeOnMainThread(() =>
-                    {
-                        if (_myPinVm != null)
+                        // 1.Calculate heading BEFORE updating the UI
+                        if (distanceMoved >= distanceThreshold && _lastKnownLocation != null)
                         {
-                            // MVVM DATA BINDING MAGIC: We just update the properties. The Map redraws it automatically!
-                            _myPinVm.Location = location;
-                            _myPinVm.Speed = $"{Math.Round(speedMph)} mph";
+                            _currentHeading = (location.Course.HasValue && location.Course.Value > 0)
+                                ? location.Course.Value
+                                : CalculateBearing(_lastKnownLocation, location);
                         }
-                    });
 
-                    if (distanceMoved >= distanceThreshold)
-                    {
-                        _lastKnownLocation = location;
-                        await _signalRService.UpdateLocation(GroupNameLabel.Text, location.Latitude, location.Longitude, location.Course ?? 0);
+                        MainThread.BeginInvokeOnMainThread(() =>
+                        {
+                            if (_myPinVm != null)
+                            {
+                                _myPinVm.Location = location;
+                                _myPinVm.Speed = $"{Math.Round(speedMph)} mph";
+
+                                // 2. Pass the heading to the ViewModel so the CustomMapHandler can rotate the camera natively!
+                                _myPinVm.Heading = _currentHeading;
+                            }
+                        });
+
+                        if (distanceMoved >= distanceThreshold)
+                        {
+                            _lastKnownLocation = location;
+                            await _signalRService.UpdateLocation(GroupNameLabel.Text, location.Latitude, location.Longitude, _currentHeading);
+                        }
                     }
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}"); }
 
+            await Task.Delay(2000);
+        }
+    }
+
+    private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            var newLoc = new Location(lat, lng);
+
+            if (_riderViewModels.TryGetValue(riderId, out var existingVm))
+            {
+                // Update remote user via DataBinding
+                existingVm.Location = newLoc;
+                existingVm.Speed = "Active";
+            }
+            else
+            {
+                Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
+                var newVm = new RiderPin(MapPinClicked)
+                {
+                    Username = riderId,
+                    Speed = "Active",
+                    Location = newLoc,
+                    PinColor = randomColor,
+                    ZIndex = 50F // Ensure remote users are below "You"
+                };
+
+                _riderViewModels.TryAdd(riderId, newVm);
+                MapPins.Add(newVm);
+            }
+
+            //FitMapToBounds();
+        });
+    }
+
+    private void FitMapToBounds()
+    {
+        if (MapPins.Count == 0) return;
+
+        double minLat = double.MaxValue, minLng = double.MaxValue;
+        double maxLat = double.MinValue, maxLng = double.MinValue;
+
+        // Loop over the Data Models instead of the Map Elements directly
+        foreach (var pin in MapPins)
+        {
+            if (pin.Location.Latitude < minLat) minLat = pin.Location.Latitude;
+            if (pin.Location.Latitude > maxLat) maxLat = pin.Location.Latitude;
+            if (pin.Location.Longitude < minLng) minLng = pin.Location.Longitude;
+            if (pin.Location.Longitude > maxLng) maxLng = pin.Location.Longitude;
+        }
+
+        double centerLat = (minLat + maxLat) / 2.0;
+        double centerLng = (minLng + maxLng) / 2.0;
+
+        double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
+        double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
+
+        LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
+    }
+    // --- BEARING / ROTATION HELPER ---
+    private double CalculateBearing(Location start, Location end)
+    {
+        double lat1 = start.Latitude * (Math.PI / 180.0);
+        double lon1 = start.Longitude * (Math.PI / 180.0);
+        double lat2 = end.Latitude * (Math.PI / 180.0);
+        double lon2 = end.Longitude * (Math.PI / 180.0);
+
+        double dLon = lon2 - lon1;
+
+        double y = Math.Sin(dLon) * Math.Cos(lat2);
+        double x = Math.Cos(lat1) * Math.Sin(lat2) - Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dLon);
+
+        double bearing = Math.Atan2(y, x) * (180.0 / Math.PI);
+        return (bearing + 360.0) % 360.0;
+    }
+
+    private async void OnLaunchNativeNavClicked(object sender, EventArgs e)
+    {
+        if (_activeDestination == null) return;
+
+        try
+        {
+            if (DeviceInfo.Platform == DevicePlatform.Android)
+            {
+                await Launcher.OpenAsync($"google.navigation:q={_activeDestination.Latitude},{_activeDestination.Longitude}&mode=d");
+            }
+            else if (DeviceInfo.Platform == DevicePlatform.iOS)
+            {
+                bool hasGoogleMaps = await Launcher.TryOpenAsync($"comgooglemaps://?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&directionsmode=driving");
+                if (!hasGoogleMaps)
+                {
+                    await Launcher.OpenAsync($"http://maps.apple.com/?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&dirflg=d");
                 }
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}"); }
-
-        await Task.Delay(2000);
-    }
-}
-
-private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
-{
-    MainThread.BeginInvokeOnMainThread(() =>
-    {
-        var newLoc = new Location(lat, lng);
-
-        if (_riderViewModels.TryGetValue(riderId, out var existingVm))
-        {
-            // Update remote user via DataBinding
-            existingVm.Location = newLoc;
-            existingVm.Speed = "Active";
-        }
-        else
-        {
-            Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
-            var newVm = new RiderPin(MapPinClicked)
-            {
-                Username = riderId,
-                Speed = "Active",
-                Location = newLoc,
-                PinColor = randomColor,
-                ZIndex = 50F // Ensure remote users are below "You"
-            };
-
-            _riderViewModels.TryAdd(riderId, newVm);
-            MapPins.Add(newVm);
-        }
-
-        FitMapToBounds();
-    });
-}
-
-private void FitMapToBounds()
-{
-    if (MapPins.Count == 0) return;
-
-    double minLat = double.MaxValue, minLng = double.MaxValue;
-    double maxLat = double.MinValue, maxLng = double.MinValue;
-
-    // Loop over the Data Models instead of the Map Elements directly
-    foreach (var pin in MapPins)
-    {
-        if (pin.Location.Latitude < minLat) minLat = pin.Location.Latitude;
-        if (pin.Location.Latitude > maxLat) maxLat = pin.Location.Latitude;
-        if (pin.Location.Longitude < minLng) minLng = pin.Location.Longitude;
-        if (pin.Location.Longitude > maxLng) maxLng = pin.Location.Longitude;
+        catch (Exception) { await DisplayAlert("Error", "Could not open map.", "OK"); }
     }
 
-    double centerLat = (minLat + maxLat) / 2.0;
-    double centerLng = (minLng + maxLng) / 2.0;
-
-    double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
-    double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
-
-    LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
-}
-
-private async void OnLaunchNativeNavClicked(object sender, EventArgs e)
-{
-    if (_activeDestination == null) return;
-
-    try
+    private void OnRosterUpdated(List<Rider> roster)
     {
-        if (DeviceInfo.Platform == DevicePlatform.Android)
+        MainThread.BeginInvokeOnMainThread(() =>
         {
-            await Launcher.OpenAsync($"google.navigation:q={_activeDestination.Latitude},{_activeDestination.Longitude}&mode=d");
-        }
-        else if (DeviceInfo.Platform == DevicePlatform.iOS)
-        {
-            bool hasGoogleMaps = await Launcher.TryOpenAsync($"comgooglemaps://?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&directionsmode=driving");
-            if (!hasGoogleMaps)
+            Riders.Clear();
+            foreach (var rider in roster)
             {
-                await Launcher.OpenAsync($"http://maps.apple.com/?daddr={_activeDestination.Latitude},{_activeDestination.Longitude}&dirflg=d");
+                if (rider.Name == _myName) rider.Name += " (You)";
+                Riders.Add(rider);
             }
-        }
+        });
     }
-    catch (Exception) { await DisplayAlert("Error", "Could not open map.", "OK"); }
-}
 
-private void OnRosterUpdated(List<Rider> roster)
-{
-    MainThread.BeginInvokeOnMainThread(() =>
+    protected override void OnDisappearing()
     {
-        Riders.Clear();
-        foreach (var rider in roster)
-        {
-            if (rider.Name == _myName) rider.Name += " (You)";
-            Riders.Add(rider);
-        }
-    });
-}
-
-protected override void OnDisappearing()
-{
-    base.OnDisappearing();
-    _isTracking = false;
+        base.OnDisappearing();
+        _isTracking = false;
 
 #if ANDROID
-    var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
-    Android.App.Application.Context.StopService(intent);
+        var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
+        Android.App.Application.Context.StopService(intent);
 #endif
 
-    _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
-    _signalRService.RosterUpdated -= OnRosterUpdated;
-    _signalRService.NavigationStarted -= OnNavigationStarted;
-    _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
-}
-private void MapPinClicked(RiderPin pin)
-{
-    // Handle pin click
-}
-private async Task SimulateMovementAlongRouteAsync()
-{
-    if (_currentRoutePoints == null || _currentRoutePoints.Count == 0) return;
-
-    await Task.Delay(2000); // 2-second delay as requested
-    _isSimulating = true;   // Flag to pause real GPS fetching
-
-    foreach (var point in _currentRoutePoints)
+        _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        _signalRService.RosterUpdated -= OnRosterUpdated;
+        _signalRService.NavigationStarted -= OnNavigationStarted;
+        _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
+    }
+    private void MapPinClicked(RiderPin pin)
     {
-        if (!_isTracking) break; // Stop if user left the page
+        // Handle pin click
+    }
+    private async Task SimulateMovementAlongRouteAsync()
+    {
+        if (_currentRoutePoints == null || _currentRoutePoints.Count == 0) return;
+
+        await Task.Delay(2000); // 2-second delay as requested
+        _isSimulating = true;   // Flag to pause real GPS fetching
+
+        foreach (var point in _currentRoutePoints)
+        {
+            if (!_isTracking || !_isSimulating) break; // Stop if user left the page
+
+            // 1. Calculate the simulated heading
+            double fakeHeading = _lastKnownLocation != null
+                ? CalculateBearing(_lastKnownLocation, point)
+                : 0;
+
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_myPinVm != null)
+                {
+                    _myPinVm.Location = point;
+                    _myPinVm.Speed = "Simulated";
+                    // 2. Pass the heading to the ViewModel so the CustomMapHandler can rotate the camera natively!
+                    _myPinVm.Heading = fakeHeading;
+                }
+                //FitMapToBounds(); // Optional: keeps camera following the action
+            });
+
+            _lastKnownLocation = point;
+
+            // Broadcast fake movement to the group!
+            await _signalRService.UpdateLocation(GroupNameLabel.Text, point.Latitude, point.Longitude, fakeHeading);
+
+            await Task.Delay(2000); // Move to the next point every 1 second
+        }
+
+        _isSimulating = false;
+    }
+    private void OnNavigationCancelled()
+    {
+        if (_amIAdmin) return; // Admin already processed this locally
 
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            if (_myPinVm != null)
+            _routeIsActive = false;
+            _isSimulating = false;
+            StartNavButton.IsVisible = false;
+
+            // Remove the navigation route
+            if (_activeRouteLine != null)
             {
-                _myPinVm.Location = point;
-                _myPinVm.Speed = "Simulated";
+                LiveMap.MapElements.Remove(_activeRouteLine);
+                _activeRouteLine = null;
             }
-            FitMapToBounds(); // Optional: keeps camera following the action
+
+            // Keep the destination pin as requested, but re-adjust camera to fit everyone
+            FitMapToBounds();
         });
-
-        _lastKnownLocation = point;
-
-        // Broadcast fake movement to the group!
-        await _signalRService.UpdateLocation(GroupNameLabel.Text, point.Latitude, point.Longitude, 0);
-
-        await Task.Delay(2000); // Move to the next point every 1 second
     }
-
-    _isSimulating = false;
-}
-
-private void AddRandomMapPins(int count = 5)
-{
-    MapPins.Clear();
-    double baseLat = 22.574354;
-    double baseLng = 88.362873;
-    var rand = new Random();
-
-    for (int i = 0; i < count; i++)
+    private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
-        // Generate small random offsets (within ~0.005 degrees)
-        double latOffset = (rand.NextDouble() - 0.5) * 0.01;
-        double lngOffset = (rand.NextDouble() - 0.5) * 0.01;
+        string query = e.NewTextValue;
 
-        var location = new Location(baseLat + latOffset, baseLng + lngOffset);
-
-        var pin = new RiderPin(MapPinClicked)
+        // Don't search until they've typed at least 3 characters
+        if (string.IsNullOrWhiteSpace(query) || query.Length < 3)
         {
-            Username = $"Rider_{i + 1}",
-            Speed = $"{rand.Next(5, 30)} mph",
-            Location = location,
-            PinColor = Color.FromRgb(rand.Next(50, 230), rand.Next(50, 230), rand.Next(50, 230)),
-            ImageSource = "clipart2240358"
-        };
+            // Update: Toggle the Frame instead of the ListView
+            SuggestionsFrame.IsVisible = false;
+            return;
+        }
 
-        MapPins.Add(pin);
+        // Cancel the previous debounce timer
+        _debounceCts?.Cancel();
+        _debounceCts = new CancellationTokenSource();
+
+        try
+        {
+            // Increase the API hit counter
+            _autocompleteApiHits++;
+
+            // Call Google Places API (New) - Autocomplete endpoint
+            var request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:autocomplete");
+            request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
+
+            var reqBody = new AutocompleteRequest { Input = query };
+            request.Content = new StringContent(JsonSerializer.Serialize(reqBody), System.Text.Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+
+            var responseBody = await response.Content.ReadAsStringAsync();
+            var result = JsonSerializer.Deserialize<AutocompleteResponse>(responseBody);
+
+            if (result != null && result.Suggestions != null && result.Suggestions.Any())
+            {
+                // Map to our UI model so XAML binding still works perfectly
+                var displayList = result.Suggestions
+                    .Where(s => s.PlacePrediction != null)
+                    .Select(s => new UIPlaceSuggestion
+                    {
+                        Description = s.PlacePrediction.Text.Text,
+                        PlaceId = s.PlacePrediction.PlaceId
+                    }).ToList();
+
+                SuggestionsListView.ItemsSource = displayList;
+
+                // Update: Toggle the Frame instead of the ListView
+                SuggestionsFrame.IsVisible = true;
+            }
+
+            // Wait for a short duration to debounce rapid requests (e.g., 300ms)
+            await Task.Delay(300, _debounceCts.Token);
+
+            // Check if this is the latest request based on the counter
+            if (_autocompleteApiHits != _autocompleteApiHits)
+                return;
+
+            // Here, you can safely use the result for the latest request
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Search Error: {ex.Message}");
+        }
     }
-}
+    // UPDATED: Changed SelectionChangedEventArgs to SelectedItemChangedEventArgs for ListView compatibility
+    private async void OnSuggestionSelected(object sender, SelectedItemChangedEventArgs e)
+    {
+        // UPDATED: Use e.SelectedItem instead of e.CurrentSelection
+        if (e.SelectedItem is UIPlaceSuggestion selectedPlace)
+        {
+            // 1. Hide the suggestions dropdown frame and update the search bar text
+            SuggestionsFrame.IsVisible = false;
+            DestinationSearchBar.Text = selectedPlace.Description;
+
+            try
+            {
+                // 2. Fetch the exact coordinates using the Place API (New)
+                var request = new HttpRequestMessage(HttpMethod.Get, $"https://places.googleapis.com/v1/places/{selectedPlace.PlaceId}");
+                request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
+
+                // FieldMask is REQUIRED in the New API to tell Google exactly what data you want to retrieve
+                request.Headers.Add("X-Goog-FieldMask", "location");
+
+                var response = await _httpClient.SendAsync(request);
+                response.EnsureSuccessStatusCode();
+
+                var responseBody = await response.Content.ReadAsStringAsync();
+                var details = JsonSerializer.Deserialize<PlaceDetailsResponse>(responseBody);
+
+                if (details?.Location != null)
+                {
+                    double lat = details.Location.Latitude;
+                    double lng = details.Location.Longitude;
+
+                    _pendingDestination = new Location(lat, lng);
+
+                    // 3. Clear old preview pins
+                    LiveMap.Pins.Clear();
+
+                    // 4. Add new pin to map
+                    var pin = new Pin
+                    {
+                        Label = selectedPlace.Description,
+                        Type = PinType.Place,
+                        Location = _pendingDestination
+                    };
+                    LiveMap.Pins.Add(pin);
+
+                    // 5. Move map camera view to focus on the destination
+                    var mapSpan = MapSpan.FromCenterAndRadius(_pendingDestination, Distance.FromMiles(1));
+                    LiveMap.MoveToRegion(mapSpan);
+
+                    // 6. Enable the broadcast button
+                    ConfirmDestButton.IsEnabled = true;
+                    ConfirmDestButton.BackgroundColor = Colors.MediumSeaGreen;
+                }
+            }
+            catch (Exception ex)
+            {
+                await DisplayAlert("Error", "Could not fetch location details.", "OK");
+                System.Diagnostics.Debug.WriteLine($"Details Error: {ex.Message}");
+            }
+
+            // Clear selection so the user can tap it again if needed
+            SuggestionsListView.SelectedItem = null;
+        }
+    }
+
+    // Call this when navigation actually starts (e.g., inside OnConfirmDestinationClicked)
+    private void EnableNavigationUI()
+    {
+        OverviewButton.IsVisible = true;
+        ResumeNavButton.IsVisible = false;
+        if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
+    }
+
+    private async void OnOverviewClicked(object sender, EventArgs e)
+    {
+        if (_myPinVm == null) return;
+
+        // 1. Swap Buttons
+        OverviewButton.IsVisible = false;
+        ResumeNavButton.IsVisible = true;
+
+        // 2. Tell the Android handler to STOP forcing the camera to follow you
+        _myPinVm.IsAutoCentering = false;
+
+        // 3. Reset the 3D tilt and rotation back to a flat, top-down view
+        await LiveMap.RotateTo(0, 500, Microsoft.Maui.Easing.SinInOut);
+        LiveMap.Scale = 1.0;
+
+        // 4. Zoom out to show everyone
+        FitMapToBounds();
+    }
+
+    private void OnResumeNavClicked(object sender, EventArgs e)
+    {
+        if (_myPinVm == null) return;
+
+        // 1. Swap Buttons
+        ResumeNavButton.IsVisible = false;
+        OverviewButton.IsVisible = true;
+
+        // 2. Tell the Android Handler to take control again!
+        // As soon as this is true, the very next GPS tick will automatically 
+        // swoop the camera back down into the 3D navigation view.
+        _myPinVm.IsAutoCentering = true;
+    }
+
+    private void AddRandomMapPins(int count = 5)
+    {
+        MapPins.Clear();
+        double baseLat = 22.574354;
+        double baseLng = 88.362873;
+        var rand = new Random();
+
+        for (int i = 0; i < count; i++)
+        {
+            // Generate small random offsets (within ~0.005 degrees)
+            double latOffset = (rand.NextDouble() - 0.5) * 0.01;
+            double lngOffset = (rand.NextDouble() - 0.5) * 0.01;
+
+            var location = new Location(baseLat + latOffset, baseLng + lngOffset);
+
+            var pin = new RiderPin(MapPinClicked)
+            {
+                Username = $"Rider_{i + 1}",
+                Speed = $"{rand.Next(5, 30)} mph",
+                Location = location,
+                PinColor = Color.FromRgb(rand.Next(50, 230), rand.Next(50, 230), rand.Next(50, 230)),
+                ImageSource = "clipart2240358"
+            };
+
+            MapPins.Add(pin);
+        }
+    }
 }

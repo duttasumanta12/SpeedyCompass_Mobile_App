@@ -122,6 +122,26 @@ public class CompassHub : Hub
     }
 
     /// <summary>
+    /// Admin calls this to cancel the navigation for everyone.
+    /// </summary>
+    public async Task CancelNavigation(string groupName)
+    {
+        if (_activeGroups.TryGetValue(groupName, out var session))
+        {
+            // Security check: Only the Admin can cancel navigation
+            if (session.AdminConnectionId != Context.ConnectionId)
+            {
+                throw new HubException("Only the Admin can cancel navigation.");
+            }
+
+            session.IsNavigating = false;
+
+            // Broadcast to the entire group to reset their UI
+            await Clients.Group(groupName).SendAsync("NavigationCancelled");
+        }
+    }
+
+    /// <summary>
     /// The high-frequency telemetry payload.
     /// </summary>
     public async Task UpdateMyLocation(string groupName, double lat, double lng, double heading)
