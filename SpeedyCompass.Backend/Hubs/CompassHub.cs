@@ -140,6 +140,24 @@ public class CompassHub : Hub
             await Clients.Group(groupName).SendAsync("NavigationCancelled");
         }
     }
+    // --- NEW: Alert Broadcast Method ---
+    public async Task SendGroupAlert(string groupName, string alertType, string senderName)
+    {
+        if (_activeGroups.ContainsKey(groupName))
+        {
+            // Broadcast to EVERYONE in the group
+            await Clients.Group(groupName).SendAsync("ReceiveAlert", alertType, senderName);
+        }
+    }
+    // Add this new method near your StartNavigation method
+    public async Task SetDestination(string groupName, double destLat, double destLng, string destName)
+    {
+        if (_activeGroups.TryGetValue(groupName, out var session) && session.AdminConnectionId == Context.ConnectionId)
+        {
+            // Broadcast the destination so everyone can see it on their Roster tab
+            await Clients.Group(groupName).SendAsync("DestinationSet", destLat, destLng, destName);
+        }
+    }
 
     /// <summary>
     /// The high-frequency telemetry payload.

@@ -16,6 +16,9 @@ public class SignalRService
     public event Action NavigationCancelled; // NEW: Event for when navigation is stopped
     public event Action<string, Color> ConnectionStatusChanged;
     public event Action<string, double, double, double> RiderLocationUpdated;
+    public event Action<string, string> AlertReceived;
+    // 1. Add this new event near the top of your class
+    public event Action<double, double, string> DestinationSet;
 
     public SignalRService()
     {
@@ -61,11 +64,11 @@ public class SignalRService
                         }
 #endif
 #if IOS || MACCATALYST
-                        else if (handler is Foundation.NSUrlSessionHandler iosHandler)
-                        {
-                            iosHandler.TrustOverrideForUrl = 
-                                (sender, url, trust) => { return true; };
-                        }
+                        //else if (handler is Foundation.NSUrlSessionHandler iosHandler)
+                        //{
+                        //    iosHandler.TrustOverrideForUrl = 
+                        //        (sender, url, trust) => { return true; };
+                        //}
 #endif
                         return handler;
                     };
@@ -117,6 +120,16 @@ public class SignalRService
         _hubConnection.On<string, double, double, double>("ReceiveRiderLocation", (riderId, lat, lng, heading) =>
         {
             RiderLocationUpdated?.Invoke(riderId, lat, lng, heading);
+        });
+
+        _hubConnection.On<string, string>("ReceiveAlert", (alertType, senderName) =>
+        {
+            AlertReceived?.Invoke(alertType, senderName);
+        });
+
+        _hubConnection.On<double, double, string>("DestinationSet", (lat, lng, name) =>
+        {
+            DestinationSet?.Invoke(lat, lng, name);
         });
 
         // 2. Map connection health events
@@ -232,6 +245,28 @@ public class SignalRService
             LogException(nameof(UpdateLocation), ex);
         }
     }
+    public async Task SendGroupAlert(string groupName, string alertType, string senderName)
+    {
+        try
+        {
+            await _hubConnection.InvokeAsync("SendGroupAlert", groupName, alertType, senderName);
+        }
+        catch (Exception ex)
+        {
+            LogException(nameof(SendGroupAlert), ex);
+        }
+    }
+    public async Task SetGroupDestination(string groupName, double lat, double lng, string destName)
+    {
+        try
+        {
+            await _hubConnection.InvokeAsync("SetDestination", groupName, lat, lng, destName);
+        }
+        catch (Exception ex)
+        {
+            LogException(nameof(SetGroupDestination), ex);
+        }
+    }
 
     // Global Console Logger Helper
     private void LogException(string context, Exception ex)
@@ -242,4 +277,5 @@ public class SignalRService
         // Ensure it appears in the MAUI Debug output window
         System.Diagnostics.Debug.WriteLine($"[SignalR Exception] {context}: {ex}");
     }
+
 }

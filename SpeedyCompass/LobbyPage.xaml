@@ -30,7 +30,7 @@
         </Grid>
 
         <!-- 2. TAB 1: The Roster View -->
-        <Grid x:Name="RosterView" Grid.Row="1" RowDefinitions="Auto, Auto, Auto, *" Padding="20">
+        <Grid x:Name="RosterView" Grid.Row="1" RowDefinitions="Auto, Auto, Auto, Auto, *" Padding="20">
 
             <!-- Connection Status Indicator -->
             <Frame Grid.Row="0" CornerRadius="8" Padding="10" Margin="0,0,0,15" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" BorderColor="Transparent" HasShadow="False">
@@ -55,7 +55,25 @@
                 </Grid>
             </Frame>
 
-            <CollectionView x:Name="RidersCollectionView" Grid.Row="3">
+            <Frame x:Name="PendingDestinationFrame" Grid.Row="3" CornerRadius="12" HasShadow="True" Padding="15" Margin="0,0,0,20" BackgroundColor="{AppThemeBinding Light=#E3F2FD, Dark=#4A2C00}" BorderColor="DarkOrange" IsVisible="False">
+                <StackLayout>
+                    <Label Text="Target Destination" FontSize="12" TextColor="Gray"/>
+                    <Label x:Name="PendingDestinationLabel" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+
+                    <!-- Only visible to the Admin -->
+                    <Button x:Name="StartJourneyButton" 
+                            Text="🚀 Start Journey" 
+                            BackgroundColor="MediumSeaGreen" 
+                            TextColor="White" 
+                            FontAttributes="Bold" 
+                            CornerRadius="8" 
+                            Margin="0,10,0,0" 
+                            IsVisible="False" 
+                            Clicked="OnStartJourneyClicked" />
+                </StackLayout>
+            </Frame>
+
+            <CollectionView x:Name="RidersCollectionView" Grid.Row="4">
                 <CollectionView.ItemTemplate>
                     <DataTemplate x:DataType="local:Rider">
                         <!-- Now x:DataType is properly used in the template -->
@@ -85,10 +103,31 @@
                                 
                                 
             />
+            
+            
+
+            <StackLayout x:Name="ActionButtonsPanel" Grid.Row="1" Grid.RowSpan="0" Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Start" Margin="0,550,0,0" IsVisible="False" Spacing="15" ZIndex="10">
+                <Button Text="🛑" BackgroundColor="Wheat" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnEmergencyStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                <Button Text="⛽" BackgroundColor="DarkOrange" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRefuelStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                <Button Text="☕" BackgroundColor="DodgerBlue" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRestStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                <Button x:Name="StartNavButton" Text="GMAP" BackgroundColor="MediumSeaGreen" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnLaunchNativeNavClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                <Button x:Name="OverviewButton" Text="🤝" BackgroundColor="FloralWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                <Button x:Name="ResumeNavButton" Text="📍" BackgroundColor="AntiqueWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnResumeNavClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                <Button Text="🗣️" BackgroundColor="GhostWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+            </StackLayout>
+
+            <!-- FULL SCREEN SENSORY ALERT OVERLAY -->
+            <Grid x:Name="SensoryAlertOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="Red" Opacity="0" IsVisible="False" InputTransparent="True" ZIndex="999">
+                <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
+                    <Label x:Name="AlertIconLabel" Text="🛑" FontSize="100" HorizontalTextAlignment="Center" />
+                    <Label x:Name="AlertTitleLabel" Text="EMERGENCY STOP!" TextColor="White" FontSize="36" FontAttributes="Bold" HorizontalTextAlignment="Center" />
+                    <Label x:Name="AlertSenderLabel" Text="Triggered by: You" TextColor="White" FontSize="20" HorizontalTextAlignment="Center" />
+                </StackLayout>
+            </Grid>
 
             <!-- Destination Picker UI (Admin Only) -->
-            <Grid x:Name="AdminSearchUI" Grid.Row="0" ColumnDefinitions="*, Auto" Margin="15,15,15,10" IsVisible="False">
-                <Frame Grid.Column="0" Padding="0" CornerRadius="25" HasShadow="True" BorderColor="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
+            <Grid x:Name="AdminSearchUI" Grid.Row="0" ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto" Margin="15,15,15,10" IsVisible="False">
+                <Frame Grid.Row="0" Grid.Column="0" Padding="0" CornerRadius="25" HasShadow="True" BorderColor="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
                     <SearchBar x:Name="DestinationSearchBar"
                                TextChanged="OnSearchTextChanged"
                                Placeholder="Search or tap map..."
@@ -98,11 +137,12 @@
                 </Frame>
                 <!-- 3. Floating Suggestions List (Overlaps the top of the map only) -->
                 <Frame x:Name="SuggestionsFrame"
-                           Grid.Row="1" 
+                           Grid.Row="1"
+                           Grid.ColumnSpan="2"
                            VerticalOptions="Start"
-                           Margin="15,40,15,15" 
-                           Padding="0" 
-                           CornerRadius="12" 
+                           Margin="15,10,15,15"
+                           Padding="0"
+                           CornerRadius="12"
                            HasShadow="True"
                            BorderColor="Transparent"
                            IsVisible="False"
@@ -129,6 +169,7 @@
                     </ListView>
                 </Frame>
                 <Button x:Name="ConfirmDestButton" 
+                        Grid.Row="0"
                         Grid.Column="1" 
                         Text="✔️" 
                         Clicked="OnConfirmDestinationClicked" 
@@ -140,9 +181,11 @@
                         TextColor="White"
                         FontAttributes="Bold"
                         IsEnabled="False"
+                        VerticalOptions="Center"
                         Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
                 <!-- NEW: The Reset Button (Hidden by default) -->
                 <Button x:Name="ResetDestButton" 
+                        Grid.Row="0"
                         Grid.Column="1" 
                         Text="✖️" 
                         IsVisible="False"
@@ -154,6 +197,7 @@
                         BackgroundColor="Red" 
                         TextColor="White"
                         FontAttributes="Bold"
+                        VerticalOptions="Center"
                         Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
 
 
@@ -171,51 +215,18 @@
                    IsVisible="False">
                 <Label Text="Tap the map or search to set a destination" TextColor="White" FontAttributes="Bold" FontSize="14"/>
             </Frame>
-            <Button x:Name="OverviewButton"
+            <Button x:Name="MinimizePanelButton"
                     Grid.Row="1"
-                    Text="🤝"
+                    Text="−"
                     IsVisible="False"
-                    Clicked="OnOverviewClicked"
-                    WidthRequest="70"
-                    HeightRequest="70"
+                    Clicked="OnMinimizePanelClicked" 
+                    HorizontalOptions="End"
+                    VerticalOptions="End"
+                    Margin="0,0,20,120" 
+                    WidthRequest="50"
+                    HeightRequest="50"
                     CornerRadius="35"
-                    HorizontalOptions="End"
-                    VerticalOptions="End"
-                    Margin="0,0,20,180" 
-                    BackgroundColor="FloralWhite"
-                    TextColor="White"
-                                    FontSize="25"
-                FontAttributes="Bold"
-                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=10}"/>
-
-            <Button x:Name="ResumeNavButton"
-                    Grid.Row="1"
-                    Text="📍"
-                    IsVisible="False"
-                    Clicked="OnResumeNavClicked"
-                    HorizontalOptions="End"
-                    VerticalOptions="End"
-                    WidthRequest="70"
-                     HeightRequest="70"
-                     CornerRadius="35"
-                    Margin="0,0,20,180" 
-                    BackgroundColor="AntiqueWhite"
-                    TextColor="White"
-                    FontSize="25"
-FontAttributes="Bold"
-                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=10}"/>
-            <Button x:Name="StartNavButton"
-                    Grid.Row="1"
-                    Text="GO"
-                    IsVisible="False"
-                    Clicked="OnLaunchNativeNavClicked"
-                    HorizontalOptions="End"
-                    VerticalOptions="End"
-                    Margin="0,0,20,100" 
-                    WidthRequest="70"
-                    HeightRequest="70"
-                    CornerRadius="35"
-                    BackgroundColor="MediumSeaGreen"
+                    BackgroundColor="Grey"
                     TextColor="White"
                     FontSize="18"
                     FontAttributes="Bold"

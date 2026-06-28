@@ -143,6 +143,8 @@ public partial class LobbyPage : ContentPage
         _signalRService.NavigationStarted += OnNavigationStarted;
         _signalRService.RiderLocationUpdated += OnRiderLocationUpdated;
         _signalRService.NavigationCancelled += OnNavigationCancelled; // NEW
+        _signalRService.AlertReceived += OnAlertReceived;
+        _signalRService.DestinationSet += OnDestinationSet;
     }
 
     protected override async void OnAppearing()
@@ -272,45 +274,33 @@ public partial class LobbyPage : ContentPage
     {
         if (_pendingDestination == null || _lastKnownLocation == null) return;
 
-        // UI State Change: Lock search, swap buttons, keep search bar visible
         ConfirmDestButton.IsVisible = false;
         ResetDestButton.IsVisible = true;
         DestinationSearchBar.IsReadOnly = true;
         AdminInstructionBanner.IsVisible = false;
-        _routeIsActive = true;
-        EnableNavigationUI();
 
         string destName = DestinationSearchBar.Text ?? "Destination";
-
-        await CalculateAndDrawRoute(_lastKnownLocation, _pendingDestination);
-
         _activeDestination = _pendingDestination;
-        StartNavButton.IsVisible = true;
-        //FitMapToBounds();
 
-        // Inform the entire group of the destination
-        await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
+        // Switch the Admin's view to the Roster tab automatically to see the "Start Journey" button
+        OnTabClicked(TabRoster, EventArgs.Empty);
 
-#if DEBUG
-        // --- NEW: Start Simulation ---
-        if (_currentRoutePoints != null && _currentRoutePoints.Any())
-        {
-            await SimulateMovementAlongRouteAsync();
-        }
-#endif
+        // Broadcast the pending destination to everyone's Roster (does NOT start navigation yet)
+        await _signalRService.SetGroupDestination(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
     }
     private async void OnResetDestinationClicked(object sender, EventArgs e)
     {
-        // 1. Reset UI elements
         ResetDestButton.IsVisible = false;
         ConfirmDestButton.IsVisible = true;
         DestinationSearchBar.IsReadOnly = false;
-        StartNavButton.IsVisible = true;
+        StartNavButton.IsVisible = false;
+        ActionButtonsPanel.IsVisible = false;
+        MinimizePanelButton.IsVisible = false;
         AdminInstructionBanner.IsVisible = true;
+        PendingDestinationFrame.IsVisible = false; // Hide Roster dashboard
         _routeIsActive = false;
         _isSimulating = false;
 
-        // 2. Remove the navigation route (Polyline)
         if (_activeRouteLine != null)
         {
             LiveMap.MapElements.Remove(_activeRouteLine);
@@ -318,19 +308,16 @@ public partial class LobbyPage : ContentPage
         }
 
         await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
-
-        // Note: The destination MapPinViewModel remains in the collection, so the pin stays on the map!
-
-        // 3. Re-adjust the camera
         FitMapToBounds();
     }
 
     private async void OnNavigationStarted(double destLat, double destLng, string destName)
     {
-        if (_routeIsActive && _amIAdmin) return; // Admin already processed this locally
-
         MainThread.BeginInvokeOnMainThread(async () =>
         {
+            // 🚀 FORCE EVERYONE TO THE MAP TAB AUTOMATICALLY
+            OnTabClicked(TabMap, EventArgs.Empty);
+
             _activeDestination = new Location(destLat, destLng);
             _routeIsActive = true;
 
@@ -339,11 +326,13 @@ public partial class LobbyPage : ContentPage
             var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
             if (loc != null)
             {
-                // --- MODIFIED: Capture route points ---
                 await CalculateAndDrawRoute(loc, _activeDestination);
-
+                StartNavButton.IsVisible = true;
+                ActionButtonsPanel.IsVisible = true; // Show Emergency/Refuel buttons
+                MinimizePanelButton.IsVisible = true;
+                AdminInstructionBanner.IsVisible = false;
+                FitMapToBounds();
 #if DEBUG
-                // --- NEW: Start Simulation ---
                 if (_currentRoutePoints != null && _currentRoutePoints.Any())
                 {
                     await SimulateMovementAlongRouteAsync();
@@ -351,9 +340,7 @@ public partial class LobbyPage : ContentPage
 #endif
             }
 
-            StartNavButton.IsVisible = true;
-            AdminInstructionBanner.IsVisible = false;
-            FitMapToBounds();
+            
         });
     }
 
@@ -650,6 +637,9 @@ public partial class LobbyPage : ContentPage
         _signalRService.RosterUpdated -= OnRosterUpdated;
         _signalRService.NavigationStarted -= OnNavigationStarted;
         _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
+        _signalRService.NavigationCancelled += OnNavigationCancelled; // NEW
+        _signalRService.AlertReceived += OnAlertReceived;
+        _signalRService.DestinationSet += OnDestinationSet;
     }
     private void MapPinClicked(RiderPin pin)
     {
@@ -695,27 +685,29 @@ public partial class LobbyPage : ContentPage
     }
     private void OnNavigationCancelled()
     {
-        if (_amIAdmin) return; // Admin already processed this locally
+        if (_amIAdmin) return;
 
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _routeIsActive = false;
             _isSimulating = false;
             StartNavButton.IsVisible = false;
+            ActionButtonsPanel.IsVisible = false;
+            MinimizePanelButton.IsVisible = false;
+            PendingDestinationFrame.IsVisible = false; // Hide Roster dashboard
 
-            // Remove the navigation route
             if (_activeRouteLine != null)
             {
                 LiveMap.MapElements.Remove(_activeRouteLine);
                 _activeRouteLine = null;
             }
 
-            // Keep the destination pin as requested, but re-adjust camera to fit everyone
             FitMapToBounds();
         });
     }
     private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
+        if (e.OldTextValue == e.NewTextValue) return;
         string query = e.NewTextValue;
 
         // Don't search until they've typed at least 3 characters
@@ -766,7 +758,7 @@ public partial class LobbyPage : ContentPage
             }
 
             // Wait for a short duration to debounce rapid requests (e.g., 300ms)
-            await Task.Delay(300, _debounceCts.Token);
+            await Task.Delay(1000, _debounceCts.Token);
 
             // Check if this is the latest request based on the counter
             if (_autocompleteApiHits != _autocompleteApiHits)
@@ -882,6 +874,117 @@ public partial class LobbyPage : ContentPage
         // As soon as this is true, the very next GPS tick will automatically 
         // swoop the camera back down into the 3D navigation view.
         _myPinVm.IsAutoCentering = true;
+    }
+    private async void OnEmergencyStopClicked(object sender, EventArgs e)
+    {
+        await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Emergency", _myName);
+    }
+
+    private async void OnRefuelStopClicked(object sender, EventArgs e)
+    {
+        await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Refuel", _myName);
+    }
+
+    private async void OnRestStopClicked(object sender, EventArgs e)
+    {
+        await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Rest", _myName);
+    }
+    // --- SENSORY ALERT PROCESSOR ---
+    private async void OnAlertReceived(string alertType, string senderName)
+    {
+        MainThread.BeginInvokeOnMainThread(async () =>
+        {
+            int durationSeconds = 5;
+            string voiceMessage = "";
+
+            // Configure UI based on the alert type
+            if (alertType == "Emergency")
+            {
+                SensoryAlertOverlay.BackgroundColor = Colors.Red;
+                AlertTitleLabel.Text = "EMERGENCY STOP!";
+                AlertIconLabel.Text = "🛑";
+                durationSeconds = 10;
+                voiceMessage = $"Emergency Stop triggered by {senderName}. Please pull over safely immediately.";
+            }
+            else if (alertType == "Refuel")
+            {
+                SensoryAlertOverlay.BackgroundColor = Colors.DarkOrange;
+                AlertTitleLabel.Text = "REFUEL STOP";
+                AlertIconLabel.Text = "⛽";
+                durationSeconds = 5;
+                voiceMessage = $"{senderName} needs a refuel break. Prepare to stop at the next gas station.";
+            }
+            else if (alertType == "Rest")
+            {
+                SensoryAlertOverlay.BackgroundColor = Colors.DodgerBlue;
+                AlertTitleLabel.Text = "REST STOP";
+                AlertIconLabel.Text = "☕";
+                durationSeconds = 5;
+                voiceMessage = $"{senderName} requested a rest stop. Prepare to pull over soon.";
+            }
+
+            AlertSenderLabel.Text = $"Triggered by: {senderName}";
+            SensoryAlertOverlay.IsVisible = true;
+
+            // Trigger Voice Alert (acts as our complex beep/voice)
+            _ = TextToSpeech.Default.SpeakAsync(voiceMessage);
+
+            // Loop Vibration and Blinking Animation
+            var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromSeconds(durationSeconds));
+
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    // Vibrate the phone (requires Android.Permission.VIBRATE)
+                    Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500));
+
+                    // Flash opacity for blinking screen effect
+                    await SensoryAlertOverlay.FadeTo(0.8, 250);
+                    await SensoryAlertOverlay.FadeTo(0.2, 250);
+                }
+            }
+            catch (TaskCanceledException) { }
+
+            // Clean up when done
+            Vibration.Default.Cancel();
+            SensoryAlertOverlay.IsVisible = false;
+            SensoryAlertOverlay.Opacity = 0;
+        });
+    }
+    private bool _panelVisible = true;
+
+    private void OnMinimizePanelClicked(object sender, EventArgs e)
+    {
+        _panelVisible = !_panelVisible;
+        ActionButtonsPanel.IsVisible = _panelVisible;
+        MinimizePanelButton.Text = _panelVisible ? "−" : "+";
+    }
+    // 4. Add the handler for when a destination is broadcasted:
+    private void OnDestinationSet(double destLat, double destLng, string destName)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            _activeDestination = new Location(destLat, destLng);
+            PendingDestinationLabel.Text = destName;
+            PendingDestinationFrame.IsVisible = true;
+
+            if (_amIAdmin)
+            {
+                StartJourneyButton.IsVisible = true;
+                StartJourneyButton.IsEnabled = true;
+            }
+        });
+    }
+    // 5. Add the click handler for the Admin's "Start Journey" button:
+    private async void OnStartJourneyClicked(object sender, EventArgs e)
+    {
+        StartJourneyButton.IsEnabled = false; // Prevent double taps
+        string destName = PendingDestinationLabel.Text;
+
+        // Now we officially start the navigation loop for the whole group!
+        await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _activeDestination.Latitude, _activeDestination.Longitude, destName);
     }
 
     private void AddRandomMapPins(int count = 5)
