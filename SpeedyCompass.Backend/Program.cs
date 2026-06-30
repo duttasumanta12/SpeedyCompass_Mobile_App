@@ -5,6 +5,8 @@ using Microsoft.Azure.SignalR;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddSingleton<CompassStateManager>();
+
 // 1. Add SignalR and configure it to use Azure SignalR Service.
 // It will automatically look for a connection string in your appsettings.json
 // under the key: "Azure:SignalR:ConnectionString"

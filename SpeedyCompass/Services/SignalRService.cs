@@ -1,10 +1,22 @@
-﻿using Microsoft.AspNetCore.SignalR.Client;
+﻿using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
-using Microsoft.AspNetCore.Http.Connections;
 using System.Net.Http;
 using System.Net.Security;
+#if ANDROID
+using static Android.Provider.Settings;
+#endif
 
 namespace SpeedyCompass.Services;
+
+// Add this DTO at the top of the namespace
+public class ActiveGroupDto
+{
+    public string GroupName { get; set; } = string.Empty;
+    public int MemberCount { get; set; }
+    public string AdminGoogleId { get; set; } = string.Empty;
+    public bool IsNavigating { get; set; }
+}
 
 public class SignalRService
 {
@@ -19,6 +31,10 @@ public class SignalRService
     public event Action<string, string> AlertReceived;
     // 1. Add this new event near the top of your class
     public event Action<double, double, string> DestinationSet;
+    // Inside SignalRService class, add these events:
+    public event Action<string> UserJoinedAlert;
+    public event Action<string> UserLeftAlert;
+    public event Action GroupDeleted;
 
     public SignalRService()
     {
@@ -100,6 +116,10 @@ public class SignalRService
 
     private void RegisterHubListeners()
     {
+        // Inside RegisterHubListeners() add:
+        _hubConnection.On<string>("UserJoinedAlert", (userName) => UserJoinedAlert?.Invoke(userName));
+        _hubConnection.On<string>("UserLeftAlert", (userName) => UserLeftAlert?.Invoke(userName));
+        _hubConnection.On("GroupDeleted", () => GroupDeleted?.Invoke());
         // 1. Map raw SignalR string events to strongly-typed C# events
         _hubConnection.On<List<Rider>>("RosterUpdated", (roster) =>
         {
@@ -160,13 +180,30 @@ public class SignalRService
     // Explicit Hub Commands with Global Exception Handling
     public async Task StartAsync()
     {
+        // NEW: Only start if disconnected, allowing safe multiple calls from OnAppearing
+        if (_hubConnection.State == HubConnectionState.Disconnected)
+        {
+            try
+            {
+                await _hubConnection.StartAsync();
+            }
+            catch (Exception ex)
+            {
+                LogException(nameof(StartAsync), ex);
+            }
+        }
+    }
+    // --- NEW: AUTHENTICATION WRAPPERS ---
+    public async Task<string?> AuthenticateUser(string googleId)
+    {
         try
         {
-            await _hubConnection.StartAsync();
+            return await _hubConnection.InvokeAsync<string?>("AuthenticateUser", googleId);
         }
         catch (Exception ex)
         {
-            LogException(nameof(StartAsync), ex);
+            LogException(nameof(AuthenticateUser), ex);
+            return null;
         }
     }
 
@@ -221,6 +258,32 @@ public class SignalRService
         }
     }
 
+    public async Task<List<Rider>> GetGroupRoster(string groupName)
+    {
+        try
+        {
+            // Ask the server for the current roster on demand!
+            return await _hubConnection.InvokeAsync<List<Rider>>("GetGroupRoster", groupName);
+        }
+        catch (Exception ex)
+        {
+            LogException(nameof(GetGroupRoster), ex);
+            return new List<Rider>();
+        }
+    }
+    public async Task LeaveLobby()
+    {
+        try
+        {
+            // Tell the server we are stepping back to the MainPage
+            await _hubConnection.InvokeAsync("LeaveLobby");
+        }
+        catch (Exception ex)
+        {
+            LogException(nameof(LeaveLobby), ex);
+        }
+    }
+
     // NEW: Client command to reset the group's navigation
     public async Task CancelGroupNavigation(string groupName)
     {
@@ -256,6 +319,12 @@ public class SignalRService
             LogException(nameof(SendGroupAlert), ex);
         }
     }
+    public async Task<string> RegisterOrUpdateUser(string googleId, string desiredUsername)
+    {
+        // We DO NOT catch exceptions here because we want the HubException ("Username is already taken") 
+        // to bubble up to the MainPage so we can show a DisplayAlert to the user!
+        return await _hubConnection.InvokeAsync<string>("RegisterOrUpdateUser", googleId, desiredUsername);
+    }
     public async Task SetGroupDestination(string groupName, double lat, double lng, string destName)
     {
         try
@@ -267,6 +336,19 @@ public class SignalRService
             LogException(nameof(SetGroupDestination), ex);
         }
     }
+    // Inside SignalRService, update Create and Join and add new wrappers:
+    public async Task<List<ActiveGroupDto>> GetActiveGroups()
+        => await _hubConnection.InvokeAsync<List<ActiveGroupDto>>("GetActiveGroups");
+
+    public async Task CreateGroup(string groupName, string userName, string googleId)
+        => await _hubConnection.InvokeAsync("CreateGroup", groupName, userName, googleId);
+
+    public async Task JoinGroup(string groupName, string userName, string googleId)
+        => await _hubConnection.InvokeAsync("JoinGroup", groupName, userName, googleId);
+
+    public async Task LeaveGroup() => await _hubConnection.InvokeAsync("LeaveGroup");
+
+    public async Task DeleteGroup(string groupName) => await _hubConnection.InvokeAsync("DeleteGroup", groupName);
 
     // Global Console Logger Helper
     private void LogException(string context, Exception ex)

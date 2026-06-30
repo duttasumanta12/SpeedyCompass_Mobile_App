@@ -33,6 +33,8 @@ public class Rider
     public bool IsAdmin { get; set; } = false;
     public string RoleDisplay => IsAdmin ? "Admin" : "Rider";
     public Color RoleColor => IsAdmin ? Colors.DarkOrange : Colors.Gray;
+
+    public bool IsOnline { get; internal set; } = true;
 }
 
 // MVVM Model for the Map Pins
@@ -113,6 +115,9 @@ public partial class LobbyPage : ContentPage
     private int _autocompleteApiHits = 0;
     private CancellationTokenSource _debounceCts;
 
+    // NEW FLAG: Tracks if the user intentionally wants to delete/leave the group
+    private bool _isLeavingGroupPermanently = false;
+
     public LobbyPage(SignalRService signalRService, string groupName)
     {
         InitializeComponent();
@@ -145,26 +150,36 @@ public partial class LobbyPage : ContentPage
         _signalRService.NavigationCancelled += OnNavigationCancelled; // NEW
         _signalRService.AlertReceived += OnAlertReceived;
         _signalRService.DestinationSet += OnDestinationSet;
+        _signalRService.UserJoinedAlert += OnUserJoined;
+        _signalRService.UserLeftAlert += OnUserLeft;
+        _signalRService.GroupDeleted += OnGroupDeleted;
     }
 
     protected override async void OnAppearing()
     {
-
         base.OnAppearing();
         if (_hasJoined) return;
 
         try
         {
-            if (_amIAdmin) await _signalRService.CreateGroup(GroupNameLabel.Text, _myName);
-            else await _signalRService.JoinGroup(GroupNameLabel.Text, _myName);
+            // FIX 1: Because SignalR started on the MainPage, the "Connected" event already fired in the past!
+            // We manually trigger the UI update to clear the "Connecting..." label.
+            OnConnectionStatusChanged("Connected", Colors.MediumSeaGreen);
+
+            // FIX 2: Manually ask the server for the roster! 
+            // The RosterUpdated event may have broadcasted before this page finished loading,
+            // so we fetch it now to ensure it's perfectly in sync.
+            var roster = await _signalRService.GetGroupRoster(GroupNameLabel.Text);
+            if (roster != null)
+            {
+                OnRosterUpdated(roster);
+            }
 
             _hasJoined = true;
-
-            InitializeLocalTrackingAsync();
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Error", $"Could not join: {ex.Message}", "OK");
+            await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
             await Navigation.PopAsync();
         }
     }
@@ -410,6 +425,18 @@ public partial class LobbyPage : ContentPage
     {
         try
         {
+            // 1. Explicitly check for permissions first
+            var status = await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>();
+            if (status != PermissionStatus.Granted)
+            {
+                status = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
+                if (status != PermissionStatus.Granted)
+                {
+                    MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+                    return; // Stop initialization
+                }
+            }
+
             var locationRequest = new GeolocationRequest(GeolocationAccuracy.High, TimeSpan.FromSeconds(5));
             var currentLocation = await Geolocation.Default.GetLocationAsync(locationRequest);
 
@@ -418,6 +445,9 @@ public partial class LobbyPage : ContentPage
                 _lastKnownLocation = currentLocation;
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
+                    // Ensure the overlay is hidden if it was showing
+                    LocationDisabledOverlay.IsVisible = false;
+
                     // Collect all colors used by other users (excluding "You")
                     var usedColors = MapPins
                         .Where(pin => pin.Username != "You")
@@ -433,61 +463,67 @@ public partial class LobbyPage : ContentPage
                     } while (usedColors.Contains(uniqueColor));
 
                     // Assign the unique color to your pin
-                    _myPinVm = new RiderPin(MapPinClicked)
+                    if (_myPinVm == null)
                     {
-                        Username = "You",
-                        Speed = "0 mph",
-                        Location = currentLocation,
-                        PinColor = uniqueColor,
-                        ZIndex = 100F, // Ensure your pin is on top
-
-                    };
-                    MapPins.Add(_myPinVm);
-                    FitMapToBounds();
-
+                        _myPinVm = new RiderPin(MapPinClicked)
+                        {
+                            Username = "You",
+                            Speed = "0 mph",
+                            Location = currentLocation,
+                            PinColor = uniqueColor,
+                            ZIndex = 100F, // Ensure your pin is on top
+                            ImageSource = "clipart2240358"
+                        };
+                        MapPins.Add(_myPinVm);
+                        FitMapToBounds();
+                    }
                 });
-
-
 
 #if ANDROID
                 // Keep tracking alive in the background
                 var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
                 Android.App.Application.Context.StartForegroundService(intent);
 #endif
-
                 StartTrackingLoop();
             }
         }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"GPS Init Error: {ex.Message}"); }
+        catch (FeatureNotEnabledException) // Catch if GPS hardware is turned off
+        {
+            MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+        }
+        catch (PermissionException) // Catch if permissions are revoked
+        {
+            MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"GPS Init Error: {ex.Message}");
+        }
     }
 
     private async void StartTrackingLoop()
     {
+        if (_isTracking) return; // Prevent multiple loops running concurrently
+
         _isTracking = true;
         while (_isTracking)
         {
             try
             {
-                // --> NEW: Only fetch real GPS if we aren't running the simulation loop
                 if (!_isSimulating)
                 {
                     var location = await Geolocation.Default.GetLocationAsync(new GeolocationRequest(GeolocationAccuracy.Best, TimeSpan.FromSeconds(5)));
                     if (location != null)
                     {
+                        // Ensure overlay is hidden if location successfully fetched
+                        MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = false);
+
                         double speedMph = (location.Speed ?? 0) * 2.23694;
                         double distanceThreshold = 5 + speedMph;
 
                         double distanceMoved = _lastKnownLocation == null
-                        ? double.MaxValue
-                        : Location.CalculateDistance(_lastKnownLocation, location, DistanceUnits.Kilometers) * 1000;
-
-                        // 1.Calculate heading BEFORE updating the UI
-                        if (distanceMoved >= distanceThreshold && _lastKnownLocation != null)
-                        {
-                            _currentHeading = (location.Course.HasValue && location.Course.Value > 0)
-                                ? location.Course.Value
-                                : CalculateBearing(_lastKnownLocation, location);
-                        }
+                            ? double.MaxValue
+                            : Location.CalculateDistance(_lastKnownLocation, location, DistanceUnits.Kilometers) * 1000;
 
                         MainThread.BeginInvokeOnMainThread(() =>
                         {
@@ -495,23 +531,53 @@ public partial class LobbyPage : ContentPage
                             {
                                 _myPinVm.Location = location;
                                 _myPinVm.Speed = $"{Math.Round(speedMph)} mph";
-
-                                // 2. Pass the heading to the ViewModel so the CustomMapHandler can rotate the camera natively!
-                                _myPinVm.Heading = _currentHeading;
                             }
                         });
 
                         if (distanceMoved >= distanceThreshold)
                         {
+                            if (_lastKnownLocation != null)
+                            {
+                                _currentHeading = (location.Course.HasValue && location.Course.Value > 0)
+                                    ? location.Course.Value
+                                    : CalculateBearing(_lastKnownLocation, location);
+
+                                MainThread.BeginInvokeOnMainThread(async () =>
+                                {
+                                    if (_routeIsActive)
+                                    {
+                                        await LiveMap.RotateTo(360 - _currentHeading, 500, Microsoft.Maui.Easing.SinInOut);
+                                        LiveMap.Scale = 1.4;
+                                    }
+                                    else
+                                    {
+                                        await LiveMap.RotateTo(0, 500, Microsoft.Maui.Easing.SinInOut);
+                                        LiveMap.Scale = 1.0;
+                                    }
+                                });
+                            }
                             _lastKnownLocation = location;
-                            await _signalRService.UpdateLocation(GroupNameLabel.Text, location.Latitude, location.Longitude, _currentHeading);
+                            await _signalRService.UpdateLocation(GroupNameLabel.Text, location.Latitude, location.Longitude, location.Course ?? _currentHeading);
                         }
                     }
                 }
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}"); }
+            catch (FeatureNotEnabledException) // Catch if GPS hardware is turned off MID-RIDE
+            {
+                MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+                _isTracking = false; // Kill the tracking loop, wait for user to retry
+            }
+            catch (PermissionException) // Catch if permission is revoked MID-RIDE
+            {
+                MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+                _isTracking = false; // Kill the tracking loop, wait for user to retry
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}");
+            }
 
-            await Task.Delay(2000);
+            if (_isTracking) await Task.Delay(2000);
         }
     }
 
@@ -618,28 +684,58 @@ public partial class LobbyPage : ContentPage
             foreach (var rider in roster)
             {
                 if (rider.Name == _myName) rider.Name += " (You)";
+                if (!rider.IsOnline) rider.Name += " (Offline)";
+
                 Riders.Add(rider);
             }
         });
     }
 
-    protected override void OnDisappearing()
+    protected async override void OnDisappearing()
     {
         base.OnDisappearing();
+
+        // Stop local tracking loops
         _isTracking = false;
+        _isSimulating = false;
 
 #if ANDROID
         var intent = new Android.Content.Intent(Android.App.Application.Context, typeof(SpeedyCompass.Platforms.Android.AndroidLocationService));
         Android.App.Application.Context.StopService(intent);
 #endif
 
+        // Unsubscribe from events
         _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
         _signalRService.RosterUpdated -= OnRosterUpdated;
         _signalRService.NavigationStarted -= OnNavigationStarted;
         _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
-        _signalRService.NavigationCancelled += OnNavigationCancelled; // NEW
-        _signalRService.AlertReceived += OnAlertReceived;
-        _signalRService.DestinationSet += OnDestinationSet;
+        _signalRService.NavigationCancelled -= OnNavigationCancelled;
+        _signalRService.UserJoinedAlert -= OnUserJoined;
+        _signalRService.UserLeftAlert -= OnUserLeft;
+        _signalRService.GroupDeleted -= OnGroupDeleted;
+
+        // FIX 3: Differentiate between hitting the "Back" button vs explicitly Leaving
+        if (!_isLeavingGroupPermanently)
+        {
+            // If the user just hit the Android Back arrow or iOS swipe back, 
+            // tell the Hub they stepped away into the MainPage, but DO NOT delete the group!
+            _ = _signalRService.LeaveLobby();
+        }
+
+        // Execute Backend Teardown Logic
+        if (_amIAdmin && _routeIsActive)
+        {
+            // If Admin leaves during a route, CANCEL the route for everyone
+            await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
+        }
+        else
+        {
+            // If normal user leaves, they disconnect from the active route by leaving the group
+            _ = TextToSpeech.Default.SpeakAsync("You have left the active route.");
+        }
+
+        // Actually leave the SignalR group backend
+        //await _signalRService.LeaveGroup();
     }
     private void MapPinClicked(RiderPin pin)
     {
@@ -955,11 +1051,38 @@ public partial class LobbyPage : ContentPage
     }
     private bool _panelVisible = true;
 
-    private void OnMinimizePanelClicked(object sender, EventArgs e)
+    private async void OnMinimizePanelClicked(object sender, EventArgs e)
     {
-        _panelVisible = !_panelVisible;
-        ActionButtonsPanel.IsVisible = _panelVisible;
-        MinimizePanelButton.Text = _panelVisible ? "−" : "+";
+        // Disable button briefly to prevent animation glitches from spam-clicking
+        MinimizePanelButton.IsEnabled = false;
+
+        if (_panelVisible)
+        {
+            // CLOSE ANIMATION: Fade out and slide down
+            await Task.WhenAll(
+                ActionButtonsPanel.FadeTo(0, 250, Microsoft.Maui.Easing.CubicIn),
+                ActionButtonsPanel.TranslateTo(0, 50, 250, Microsoft.Maui.Easing.CubicIn)
+            );
+
+            ActionButtonsPanel.IsVisible = false;
+            MinimizePanelButton.Text = "+";
+            _panelVisible = false;
+        }
+        else
+        {
+            // OPEN ANIMATION: Make visible, preset bottom translation, then fade & slide up
+            ActionButtonsPanel.IsVisible = true;
+
+            await Task.WhenAll(
+                ActionButtonsPanel.FadeTo(1, 250, Microsoft.Maui.Easing.CubicOut),
+                ActionButtonsPanel.TranslateTo(0, 0, 250, Microsoft.Maui.Easing.CubicOut)
+            );
+
+            MinimizePanelButton.Text = "−";
+            _panelVisible = true;
+        }
+
+        MinimizePanelButton.IsEnabled = true;
     }
     // 4. Add the handler for when a destination is broadcasted:
     private void OnDestinationSet(double destLat, double destLng, string destName)
@@ -985,6 +1108,48 @@ public partial class LobbyPage : ContentPage
 
         // Now we officially start the navigation loop for the whole group!
         await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _activeDestination.Latitude, _activeDestination.Longitude, destName);
+    }
+    // 3. Add the event logic:
+    private void OnUserJoined(string username)
+    {
+        _ = TextToSpeech.Default.SpeakAsync($"{username} has joined the group.");
+    }
+
+    private void OnUserLeft(string username)
+    {
+        _ = TextToSpeech.Default.SpeakAsync($"{username} has left the group.");
+    }
+
+    private async void OnGroupDeleted()
+    {
+        MainThread.BeginInvokeOnMainThread(async () =>
+        {
+            await DisplayAlert("Group Closed", "The Admin has deleted the group.", "OK");
+            await Navigation.PopAsync();
+        });
+    }
+    // --- LEAVE GROUP LOGIC ---
+    private async void OnLeaveGroupClicked(object sender, EventArgs e)
+    {
+        bool confirm = await DisplayAlert("Leave Group", "Are you sure you want to permanently leave the group?", "Yes", "Cancel");
+        if (confirm)
+        {
+            _isLeavingGroupPermanently = true; // Mark as permanent!
+            await _signalRService.LeaveGroup();
+            await Navigation.PopAsync();
+        }
+    }
+    // --- OVERLAY BUTTON HANDLERS ---
+    private void OnOpenSettingsClicked(object sender, EventArgs e)
+    {
+        // Opens the OS-level settings app so the user can flip the GPS/Permissions switch
+        AppInfo.Current.ShowSettingsUI();
+    }
+
+    private void OnRetryLocationClicked(object sender, EventArgs e)
+    {
+        // Re-run the initialization logic. If GPS is now on, the overlay will disappear!
+        InitializeLocalTrackingAsync();
     }
 
     private void AddRandomMapPins(int count = 5)

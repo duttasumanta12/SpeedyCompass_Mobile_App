@@ -10,23 +10,12 @@
     <!-- Remove x:DataType from root, set BindingContext in code-behind instead -->
     <Grid RowDefinitions="Auto, *">
         <!-- 1. Custom Tab Bar -->
-        <Grid Grid.Row="0" ColumnDefinitions="*,*" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
-            <Button x:Name="TabRoster" 
-                    Text="Roster" 
-                    Clicked="OnTabClicked" 
-                    CornerRadius="10" 
-                    BackgroundColor="DodgerBlue" 
-                    TextColor="White"
-                    FontAttributes="Bold"/>
+        <Grid Grid.Row="0" ColumnDefinitions="*,*, Auto" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
+            <Button x:Name="TabRoster" Text="Roster" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold"/>
+            <Button x:Name="TabMap" Grid.Column="1" Text="Live Map" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}" FontAttributes="Bold"/>
 
-            <Button x:Name="TabMap" 
-                    Grid.Column="1" 
-                    Text="Live Map" 
-                    Clicked="OnTabClicked" 
-                    CornerRadius="10" 
-                    BackgroundColor="Transparent" 
-                    TextColor="{AppThemeBinding Light=Black, Dark=White}"
-                    FontAttributes="Bold"/>
+            <!-- NEW: Leave Group Button -->
+            <Button Grid.Column="2" Text="🚪 Leave" BackgroundColor="Transparent" TextColor="Red" Clicked="OnLeaveGroupClicked" FontAttributes="Bold" Margin="5,0,0,0"/>
         </Grid>
 
         <!-- 2. TAB 1: The Roster View -->
@@ -103,18 +92,29 @@
                                 
                                 
             />
-            
-            
 
-            <StackLayout x:Name="ActionButtonsPanel" Grid.Row="1" Grid.RowSpan="0" Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Start" Margin="0,550,0,0" IsVisible="False" Spacing="15" ZIndex="10">
-                <Button Text="🛑" BackgroundColor="Wheat" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnEmergencyStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                <Button Text="⛽" BackgroundColor="DarkOrange" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRefuelStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                <Button Text="☕" BackgroundColor="DodgerBlue" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRestStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                <Button x:Name="StartNavButton" Text="GMAP" BackgroundColor="MediumSeaGreen" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnLaunchNativeNavClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                <Button x:Name="OverviewButton" Text="🤝" BackgroundColor="FloralWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                <Button x:Name="ResumeNavButton" Text="📍" BackgroundColor="AntiqueWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnResumeNavClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                <Button Text="🗣️" BackgroundColor="GhostWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-            </StackLayout>
+
+
+            <!-- Wrap the ActionButtons in a ScrollView to prevent screen overflow. 
+             Anchor it to the bottom-right, leaving 80px space on the right so it NEVER overlaps the Minimize button. -->
+            <ScrollView x:Name="ActionButtonsPanel" 
+                    Grid.Row="1" 
+                    Orientation="Horizontal" 
+                    HorizontalOptions="End" 
+                    VerticalOptions="End" 
+                    Margin="10,0,80,120" 
+                    IsVisible="False" 
+                    ZIndex="10">
+                <StackLayout Orientation="Horizontal" Spacing="15" Padding="5,5,15,5">
+                    <Button Text="🛑" BackgroundColor="Wheat" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnEmergencyStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                    <Button Text="⛽" BackgroundColor="DarkOrange" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRefuelStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                    <Button Text="☕" BackgroundColor="DodgerBlue" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRestStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                    <Button x:Name="StartNavButton" Text="GMAP" BackgroundColor="MediumSeaGreen" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnLaunchNativeNavClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                    <Button x:Name="OverviewButton" Text="🤝" BackgroundColor="FloralWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                    <Button x:Name="ResumeNavButton" Text="📍" BackgroundColor="AntiqueWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnResumeNavClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                    <Button Text="🗣️" BackgroundColor="GhostWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+                </StackLayout>
+            </ScrollView>
 
             <!-- FULL SCREEN SENSORY ALERT OVERLAY -->
             <Grid x:Name="SensoryAlertOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="Red" Opacity="0" IsVisible="False" InputTransparent="True" ZIndex="999">
@@ -231,6 +231,31 @@
                     FontSize="18"
                     FontAttributes="Bold"
                     Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=10}" />
+        </Grid>
+        <!-- FULL SCREEN LOCATION DISABLED OVERLAY -->
+        <Grid x:Name="LocationDisabledOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#E6000000" IsVisible="False" InputTransparent="False" ZIndex="1000">
+            <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20" Padding="30">
+                <Label Text="📍" FontSize="80" HorizontalTextAlignment="Center"/>
+                <Label Text="Location Services Disabled" TextColor="White" FontSize="24" FontAttributes="Bold" HorizontalTextAlignment="Center"/>
+                <Label Text="SpeedyCompass requires your location to track your ride. Please enable GPS and location permissions to continue." TextColor="LightGray" FontSize="16" HorizontalTextAlignment="Center"/>
+
+                <Button Text="Open Settings" 
+                        BackgroundColor="DodgerBlue" 
+                        TextColor="White" 
+                        CornerRadius="8" 
+                        HeightRequest="50" 
+                        FontAttributes="Bold" 
+                        Clicked="OnOpenSettingsClicked" 
+                        Margin="0,20,0,0"/>
+
+                <Button Text="I've Enabled It (Retry)" 
+                        BackgroundColor="MediumSeaGreen" 
+                        TextColor="White" 
+                        CornerRadius="8" 
+                        HeightRequest="50" 
+                        FontAttributes="Bold" 
+                        Clicked="OnRetryLocationClicked"/>
+            </StackLayout>
         </Grid>
     </Grid>
 </ContentPage>
