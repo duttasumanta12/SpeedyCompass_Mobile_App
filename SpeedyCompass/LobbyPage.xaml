@@ -10,7 +10,7 @@
     <!-- Remove x:DataType from root, set BindingContext in code-behind instead -->
     <Grid RowDefinitions="Auto, *">
         <!-- 1. Custom Tab Bar -->
-        <Grid Grid.Row="0" ColumnDefinitions="*,*, Auto" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
+        <Grid Grid.Row="0" ZIndex="100" ColumnDefinitions="*,*, Auto" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
             <Button x:Name="TabRoster" Text="Roster" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold"/>
             <Button x:Name="TabMap" Grid.Column="1" Text="Live Map" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}" FontAttributes="Bold"/>
 
@@ -231,6 +231,20 @@
                     FontSize="18"
                     FontAttributes="Bold"
                     Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=10}" />
+        </Grid>
+        <!-- PICTURE-IN-PICTURE (PiP) SQUARE DASHBOARD OVERLAY -->
+        <Grid x:Name="PipOverlayGrid" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#121212" IsVisible="False" ZIndex="1500" Padding="15">
+            <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
+                <!-- Status Indicator -->
+                <StackLayout Orientation="Horizontal" Spacing="5" HorizontalOptions="Center">
+                    <BoxView Color="MediumSeaGreen" WidthRequest="12" HeightRequest="12" CornerRadius="6" VerticalOptions="Center"/>
+                    <Label Text="Route Active" TextColor="White" FontSize="14" FontAttributes="Bold" VerticalOptions="Center"/>
+                </StackLayout>
+
+                <!-- Speed & Riders -->
+                <Label x:Name="PipSpeedLabel" Text="0 mph" TextColor="DodgerBlue" FontSize="36" FontAttributes="Bold" HorizontalOptions="Center"/>
+                <Label x:Name="PipRiderCountLabel" Text="Connecting..." TextColor="LightGray" FontSize="14" HorizontalOptions="Center"/>
+            </StackLayout>
         </Grid>
         <!-- FULL SCREEN LOCATION DISABLED OVERLAY -->
         <Grid x:Name="LocationDisabledOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#E6000000" IsVisible="False" InputTransparent="False" ZIndex="1000">
