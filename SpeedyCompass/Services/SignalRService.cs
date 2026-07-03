@@ -35,6 +35,10 @@ public class SignalRService
     public event Action<string> UserJoinedAlert;
     public event Action<string> UserLeftAlert;
     public event Action GroupDeleted;
+    // --- NEW PTT EVENTS ---
+    public event Action<string> PttLocked;
+    public event Action<string> PttDenied;
+    public event Action PttReleased;
 
     public SignalRService()
     {
@@ -175,6 +179,11 @@ public class SignalRService
         {
             ConnectionStatusChanged?.Invoke("Connected", Colors.Green);
         };
+
+        // NEW PTT LISTENERS
+        _hubConnection.On<string>("PttLocked", (speakerName) => PttLocked?.Invoke(speakerName));
+        _hubConnection.On<string>("PttDenied", (activeSpeaker) => PttDenied?.Invoke(activeSpeaker));
+        _hubConnection.On("PttReleased", () => PttReleased?.Invoke());
     }
 
     // Explicit Hub Commands with Global Exception Handling
@@ -192,6 +201,18 @@ public class SignalRService
                 LogException(nameof(StartAsync), ex);
             }
         }
+    }
+    // --- NEW PTT METHODS ---
+    public async Task RequestPtt(string groupName, string userName)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("RequestPtt", groupName, userName);
+    }
+
+    public async Task ReleasePtt(string groupName, string userName)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("ReleasePtt", groupName, userName);
     }
     // --- NEW: AUTHENTICATION WRAPPERS ---
     public async Task<string?> AuthenticateUser(string googleId)

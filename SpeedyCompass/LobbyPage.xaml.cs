@@ -119,6 +119,12 @@ public partial class LobbyPage : ContentPage
     private bool _isLeavingGroupPermanently = false;
     // FIX: Flag to prevent the suggestion list from reopening
     private bool _isSelectingLocation = false;
+    // --- NEW: PTT State ---
+    private readonly HardwareButtonService _hwButtonService;
+    private string _currentSpeaker = string.Empty;
+    // THE FIX: Use a Reliable Token instead of IDispatcherTimer
+    private CancellationTokenSource _pttCts;
+    private int _pttTimeRemaining;
 
     public LobbyPage(SignalRService signalRService, string groupName)
     {
@@ -169,7 +175,135 @@ public partial class LobbyPage : ContentPage
         _signalRService.UserJoinedAlert += OnUserJoined;
         _signalRService.UserLeftAlert += OnUserLeft;
         _signalRService.GroupDeleted += OnGroupDeleted;
+        // Subscribe to SignalR PTT Events
+        _signalRService.PttLocked += OnPttLocked;
+        _signalRService.PttDenied += OnPttDenied;
+        _signalRService.PttReleased += OnPttReleased;
+
+        // Fetch Hardware Button Service and subscribe
+        _hwButtonService = IPlatformApplication.Current?.Services.GetService<HardwareButtonService>();
+        if (_hwButtonService != null)
+        {
+            _hwButtonService.PttPressed += OnHardwarePttPressed;
+            _hwButtonService.PttReleased += OnHardwarePttReleased;
+        }
+        
     }
+    // --- THE FIX: RELIABLE 30-SEC TIMEOUT LOOP ---
+    private async Task RunPttTimeoutAsync(CancellationToken token)
+    {
+        _pttTimeRemaining = 30; // Max 30 seconds per request
+
+        try
+        {
+            while (_pttTimeRemaining > 0 && !token.IsCancellationRequested)
+            {
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    PttCountdownLabel.Text = $"Auto-closing in {_pttTimeRemaining}s...";
+                });
+
+                await Task.Delay(1000, token);
+                _pttTimeRemaining--;
+            }
+
+            if (_pttTimeRemaining <= 0 && !token.IsCancellationRequested)
+            {
+                // Timeout reached!
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    PttCountdownLabel.Text = "Maximum time reached!";
+                    _ = TextToSpeech.Default.SpeakAsync("Microphone closed.");
+                });
+
+                if (_currentSpeaker == _myName)
+                {
+                    await _signalRService.ReleasePtt(GroupNameLabel.Text, _myName);
+                }
+            }
+        }
+        catch (TaskCanceledException) { /* Ignored on early release */ }
+    }
+    // --- NEW: PTT HARDWARE TRIGGERS ---
+    private async void OnHardwarePttPressed(object sender, EventArgs e)
+    {
+        // Ignore if we are already the speaker
+        if (_currentSpeaker == _myName) return;
+
+        // Ask the server for the mic lock!
+        await _signalRService.RequestPtt(GroupNameLabel.Text, _myName);
+    }
+
+    private async void OnHardwarePttReleased(object sender, EventArgs e)
+    {
+        // If we let go of the button, and we hold the lock, release it!
+        if (_currentSpeaker == _myName)
+        {
+            await _signalRService.ReleasePtt(GroupNameLabel.Text, _myName);
+        }
+    }
+
+    // --- NEW: PTT SERVER RESPONSES ---
+    private void OnPttLocked(string speakerName)
+    {
+        _currentSpeaker = speakerName;
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            PttOverlay.IsVisible = true;
+
+            if (speakerName == _myName)
+            {
+                // WE got the lock!
+                PttStatusLabel.Text = "MIC OPEN";
+                PttStatusLabel.TextColor = Colors.MediumSeaGreen;
+                PttSpeakerLabel.Text = "You can now speak to the group.";
+
+                // Start the highly reliable 15-Second Timer Loop
+                _pttCts?.Cancel();
+                _pttCts = new CancellationTokenSource();
+                PttCountdownLabel.IsVisible = true;
+                _ = RunPttTimeoutAsync(_pttCts.Token);
+
+                // Tactile feedback (buzz) and Voice
+                Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
+                _ = TextToSpeech.Default.SpeakAsync("You can now speak.");
+            }
+            else
+            {
+                // SOMEONE ELSE got the lock!
+                _pttCts?.Cancel(); // Ensure our timer isn't running
+                PttCountdownLabel.IsVisible = false;
+
+                PttStatusLabel.Text = "RECEIVING";
+                PttStatusLabel.TextColor = Colors.DodgerBlue;
+                PttSpeakerLabel.Text = $"{speakerName} is speaking...";
+            }
+        });
+    }
+
+    private void OnPttDenied(string activeSpeaker)
+    {
+        // We tried to talk, but someone else is already talking!
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            _ = TextToSpeech.Default.SpeakAsync("Channel busy.");
+            Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500)); // Longer warning buzz
+        });
+    }
+
+    private void OnPttReleased()
+    {
+        _currentSpeaker = string.Empty;
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            _pttCts?.Cancel(); // ALWAYS kill the timer on release!
+            PttOverlay.IsVisible = false;
+            PttCountdownLabel.IsVisible = false;
+        });
+    }
+
     // --- NEW: UI UPDATE FROM BACKGROUND SERVICE ---
     private void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
@@ -781,6 +915,15 @@ public partial class LobbyPage : ContentPage
             _signalRService.UserJoinedAlert -= OnUserJoined;
             _signalRService.UserLeftAlert -= OnUserLeft;
             _signalRService.GroupDeleted -= OnGroupDeleted;
+            _signalRService.PttLocked -= OnPttLocked;
+            _signalRService.PttDenied -= OnPttDenied;
+            _signalRService.PttReleased -= OnPttReleased;
+
+            if (_hwButtonService != null)
+            {
+                _hwButtonService.PttPressed -= OnHardwarePttPressed;
+                _hwButtonService.PttReleased -= OnHardwarePttReleased;
+            }
 
             // 2. Stop all location tracking (Using our clean cross-platform interface)
             _isTracking = false;

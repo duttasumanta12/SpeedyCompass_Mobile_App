@@ -246,6 +246,21 @@
                 <Label x:Name="PipRiderCountLabel" Text="Connecting..." TextColor="LightGray" FontSize="14" HorizontalOptions="Center"/>
             </StackLayout>
         </Grid>
+        <!-- PUSH-TO-TALK (PTT) OVERLAY -->
+        <Grid x:Name="PttOverlay" Grid.RowSpan="3" BackgroundColor="#CC000000" IsVisible="False" ZIndex="2000" Padding="20">
+            <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="15">
+                <Image x:Name="PttIcon" Source="mic_icon.png" WidthRequest="60" HeightRequest="60" HorizontalOptions="Center" />
+
+                <Label x:Name="PttStatusLabel" Text="Mic Open" TextColor="MediumSeaGreen" FontSize="24" FontAttributes="Bold" HorizontalOptions="Center"/>
+
+                <!-- Explicit Text Notification -->
+                <Label x:Name="PttSpeakerLabel" Text="You can now speak to the group." TextColor="White" FontSize="16" HorizontalOptions="Center"/>
+
+                <!-- 30-Second Countdown Timer -->
+                <Label x:Name="PttCountdownLabel" Text="Closing in 30s..." TextColor="LightCoral" FontSize="14" FontAttributes="Bold" HorizontalOptions="Center" IsVisible="False"/>
+            </StackLayout>
+        </Grid>
+
         <!-- FULL SCREEN LOCATION DISABLED OVERLAY -->
         <Grid x:Name="LocationDisabledOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#E6000000" IsVisible="False" InputTransparent="False" ZIndex="1000">
             <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20" Padding="30">

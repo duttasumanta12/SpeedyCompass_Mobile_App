@@ -6,12 +6,12 @@ public class CompassHub : Hub
 {
     private readonly CompassStateManager _state;
 
-    // Dependency Injection grabs our Singleton automatically
     public CompassHub(CompassStateManager state)
     {
         _state = state;
     }
 
+    // FIX: Changed from private to public so the Lobby can sync manually!
     public List<RiderInfo> GetGroupRoster(string groupName)
     {
         var roster = new List<RiderInfo>();
@@ -22,7 +22,6 @@ public class CompassHub : Hub
             var ridersInGroup = _state.ConnectedRiders.Where(r => r.GroupName == groupName).ToList();
             foreach (var rider in ridersInGroup)
             {
-                // We determine if a user is "Online" if they have an active ConnectionId
                 roster.Add(new RiderInfo
                 {
                     Name = rider.UserName,
@@ -53,9 +52,7 @@ public class CompassHub : Hub
         if (owner != null)
         {
             if (string.IsNullOrEmpty(currentGoogleId) || owner.GoogleId != currentGoogleId)
-            {
                 throw new HubException($"The username '{desiredUsername}' is already taken.");
-            }
         }
 
         string googleIdToUse = string.IsNullOrEmpty(currentGoogleId) ? Guid.NewGuid().ToString() : currentGoogleId;
@@ -73,7 +70,6 @@ public class CompassHub : Hub
         }
 
         if (!_state.TakenUsernames.Contains(desiredUsername)) _state.TakenUsernames.Add(desiredUsername);
-
         return googleIdToUse;
     }
 
@@ -107,7 +103,6 @@ public class CompassHub : Hub
 
         var session = new GroupSession { GroupName = groupName, AdminConnectionId = Context.ConnectionId, AdminGoogleId = googleId };
         _state.ActiveGroups.Add(session);
-
         _state.ConnectedRiders.Add(new RiderSession { ConnectionId = Context.ConnectionId, UserName = userName, GoogleId = googleId, GroupName = groupName });
 
         await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
@@ -128,71 +123,59 @@ public class CompassHub : Hub
             {
                 if (existingRider.GroupName != groupName)
                 {
-                    // Auto-heal state: Clean them up from their old abandoned group
                     if (!string.IsNullOrEmpty(existingRider.ConnectionId))
                         await Groups.RemoveFromGroupAsync(existingRider.ConnectionId, existingRider.GroupName);
 
                     _state.ConnectedRiders.Remove(existingRider);
-
-                    // Add them to the new group
                     _state.ConnectedRiders.Add(new RiderSession { ConnectionId = Context.ConnectionId, UserName = userName, GoogleId = googleId, GroupName = groupName });
                     await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
                 }
                 else
                 {
-                    // User is re-entering the SAME lobby; just update their connection ID to put them back online
                     existingRider.ConnectionId = Context.ConnectionId;
                     await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
-
                     if (session.AdminGoogleId == googleId) session.AdminConnectionId = Context.ConnectionId;
                 }
             }
             else
             {
                 if (GetGroupRoster(groupName).Count >= 5) throw new HubException("Group is full (Max 5 members).");
-
                 _state.ConnectedRiders.Add(new RiderSession { ConnectionId = Context.ConnectionId, UserName = userName, GoogleId = googleId, GroupName = groupName });
                 await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
             }
 
             await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("UserJoinedAlert", userName);
-
-            // Broadcast the fully healed roster
             await Clients.Group(groupName).SendAsync("RosterUpdated", GetGroupRoster(groupName));
 
             if (session.IsNavigating)
-            {
                 await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName);
-            }
             else if (!string.IsNullOrEmpty(session.DestName))
-            {
                 await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
-            }
         }
         else throw new HubException("Group not found.");
     }
 
     // --- LOBBY VS GROUP LIFECYCLE ---
-
-    // Called when user closes the app, minimizes, or loses WiFi
     public async Task LeaveLobby()
     {
         var rider = _state.ConnectedRiders.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
         if (rider != null)
         {
-            // Disconnect them from active view but DO NOT remove them from ConnectedRiders.
-            // This allows them to appear as "Offline" on the roster.
             rider.ConnectionId = string.Empty;
-
             await Clients.Group(rider.GroupName).SendAsync("UserOfflineAlert", rider.UserName);
-
-            // Force broadcast to update roster visuals to "Offline"
             await Clients.Group(rider.GroupName).SendAsync("RosterUpdated", GetGroupRoster(rider.GroupName));
 
             var session = _state.ActiveGroups.FirstOrDefault(g => g.GroupName == rider.GroupName);
-            if (session != null && session.AdminGoogleId == rider.GoogleId)
+            if (session != null)
             {
-                if (session.IsNavigating)
+                // NEW: Release PTT lock if the active speaker goes offline
+                if (session.ActiveSpeaker == rider.UserName)
+                {
+                    session.ActiveSpeaker = string.Empty;
+                    await Clients.Group(rider.GroupName).SendAsync("PttReleased");
+                }
+
+                if (session.AdminGoogleId == rider.GoogleId && session.IsNavigating)
                 {
                     session.IsNavigating = false;
                     await Clients.Group(rider.GroupName).SendAsync("NavigationCancelled");
@@ -201,7 +184,6 @@ public class CompassHub : Hub
         }
     }
 
-    // Called ONLY when user explicitly hits the "Leave Group" button in the UI
     public async Task LeaveGroup()
     {
         var rider = _state.ConnectedRiders.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
@@ -209,20 +191,16 @@ public class CompassHub : Hub
         {
             _state.ConnectedRiders.Remove(rider);
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, rider.GroupName);
-
             var session = _state.ActiveGroups.FirstOrDefault(g => g.GroupName == rider.GroupName);
 
-            // Check if the explicitly departing user is the group's admin
             if (session != null && session.AdminGoogleId == rider.GoogleId)
             {
-                // Admin has permanently left the group. Delete the group entirely.
                 await Clients.Group(rider.GroupName).SendAsync("GroupDeleted");
                 _state.ActiveGroups.Remove(session);
                 _state.ConnectedRiders.RemoveAll(r => r.GroupName == rider.GroupName);
             }
             else
             {
-                // Normal user leaving permanently
                 await Clients.Group(rider.GroupName).SendAsync("UserLeftAlert", rider.UserName);
                 await Clients.Group(rider.GroupName).SendAsync("RosterUpdated", GetGroupRoster(rider.GroupName));
             }
@@ -279,23 +257,49 @@ public class CompassHub : Hub
     public async Task SendGroupAlert(string groupName, string alertType, string senderName)
     {
         if (_state.ActiveGroups.Any(g => g.GroupName == groupName))
-        {
             await Clients.Group(groupName).SendAsync("ReceiveAlert", alertType, senderName);
-        }
     }
 
     public async Task UpdateMyLocation(string groupName, double lat, double lng, double heading)
     {
         var rider = _state.ConnectedRiders.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
         if (rider != null)
-        {
             await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveRiderLocation", rider.UserName, lat, lng, heading);
+    }
+
+    // --- NEW: PUSH TO TALK (PTT) LOGIC ---
+    public async Task RequestPtt(string groupName, string userName)
+    {
+        var session = _state.ActiveGroups.FirstOrDefault(g => g.GroupName == groupName);
+        if (session != null)
+        {
+            if (string.IsNullOrEmpty(session.ActiveSpeaker))
+            {
+                // Channel is free. Lock it and notify everyone.
+                session.ActiveSpeaker = userName;
+                await Clients.Group(groupName).SendAsync("PttLocked", userName);
+            }
+            else
+            {
+                // Channel is busy. Tell the requester they are denied.
+                await Clients.Caller.SendAsync("PttDenied", session.ActiveSpeaker);
+            }
+        }
+    }
+
+    public async Task ReleasePtt(string groupName, string userName)
+    {
+        var session = _state.ActiveGroups.FirstOrDefault(g => g.GroupName == groupName);
+        if (session != null && session.ActiveSpeaker == userName)
+        {
+            // Only the person holding the mic can release it
+            session.ActiveSpeaker = string.Empty;
+            await Clients.Group(groupName).SendAsync("PttReleased");
         }
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        // Treat unexpected disconnections (closing app, dropping wifi) as leaving the lobby, NOT leaving the group!
         await LeaveLobby();
         await base.OnDisconnectedAsync(exception);
     }
