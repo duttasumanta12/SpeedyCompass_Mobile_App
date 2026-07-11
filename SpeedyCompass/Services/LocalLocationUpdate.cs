@@ -12,6 +12,8 @@ public class LocalLocationUpdate
 
 public interface ILocationTracker
 {
+    // --- NEW FLAG FOR SIMULATION & WAKE LOCKS ---
+    bool IsSimulating { get; set; }
     void StartTracking(string groupName);
     void StopTracking();
 

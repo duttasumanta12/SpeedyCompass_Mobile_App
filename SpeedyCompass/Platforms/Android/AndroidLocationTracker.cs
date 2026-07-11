@@ -6,6 +6,7 @@ namespace SpeedyCompass.Platforms.Android;
 
 public class AndroidLocationTracker : ILocationTracker
 {
+    public bool IsSimulating { get; set; } = false; // NEW FLAG
     // Static event so the Background Service can push data up to the UI
     public static event EventHandler<LocalLocationUpdate> OnLocationUpdatedEvent;
 
@@ -21,7 +22,7 @@ public class AndroidLocationTracker : ILocationTracker
         var intent = new Intent(context, typeof(AndroidLocationService));
         intent.PutExtra("GroupName", groupName);
 
-        context.StartForegroundService(intent);
+        context.StartService(intent);
     }
 
     public void StopTracking()

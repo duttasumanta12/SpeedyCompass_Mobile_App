@@ -9,18 +9,24 @@ using Microsoft.Maui.Controls.Hosting;
 
 namespace SpeedyCompass.Platforms.Android;
 
-[Service(Name = "com.yourcompany.speedycompass.AndroidLocationService", ForegroundServiceType = ForegroundService.TypeLocation)]
+[Service(Name = "com.speedycompass.speedycompass.AndroidLocationService", ForegroundServiceType = ForegroundService.TypeLocation)]
 public class AndroidLocationService : Service, ILocationListener
 {
     private LocationManager _locationManager;
     private SignalRService _signalRService;
     private string _groupName;
+    private PowerManager.WakeLock _wakeLock; // NEW: Holds the CPU awake
 
     public override IBinder OnBind(Intent intent) => null;
 
     public override StartCommandResult OnStartCommand(Intent intent, StartCommandFlags flags, int startId)
     {
         CreateNotificationChannel();
+
+        // --- NEW: ACQUIRE WAKE LOCK TO KEEP SIGNALR & SIMULATION ALIVE ---
+        var powerManager = (PowerManager)GetSystemService(PowerService);
+        _wakeLock = powerManager.NewWakeLock(WakeLockFlags.Partial, "SpeedyCompass::NavigationWakeLock");
+        _wakeLock.Acquire();
 
         _groupName = intent?.GetStringExtra("GroupName");
 
@@ -41,8 +47,8 @@ public class AndroidLocationService : Service, ILocationListener
 
         if (_locationManager.IsProviderEnabled(LocationManager.GpsProvider))
         {
-            // Request updates: Minimum 2000ms delay, AND Minimum 5 meters moved! (Saves massive battery)
-            _locationManager.RequestLocationUpdates(LocationManager.GpsProvider, 2000, 5f, this);
+            // THE FIX: Increased to 10 seconds (10000ms) and 10 meters to save heavy CPU/Battery load!
+            _locationManager.RequestLocationUpdates(LocationManager.GpsProvider, 10000, 10f, this);
         }
 
         return StartCommandResult.Sticky;
@@ -50,17 +56,32 @@ public class AndroidLocationService : Service, ILocationListener
 
     public async void OnLocationChanged(global::Android.Locations.Location location)
     {
-        var mauiLocation = new Microsoft.Maui.Devices.Sensors.Location(location.Latitude, location.Longitude);
-        double speedMph = location.HasSpeed ? location.Speed * 2.23694 : 0;
-        double heading = location.HasBearing ? location.Bearing : 0;
-
-        // 1. Send to Local UI (If the screen is on and looking at the map)
-        AndroidLocationTracker.NotifyLocation(mauiLocation, speedMph, heading);
-
-        // 2. Broadcast to Group (Works perfectly even if screen is locked!)
-        if (_signalRService != null && !string.IsNullOrEmpty(_groupName))
+        try
         {
-            await _signalRService.UpdateLocation(_groupName, mauiLocation.Latitude, mauiLocation.Longitude, heading);
+            // THE FIX: Check if we are simulating. If so, ignore the physical hardware GPS ticks!
+            // This allows the Foreground Service to KEEP RUNNING to keep the app alive when the screen locks.
+            var tracker = IPlatformApplication.Current?.Services.GetService<ILocationTracker>();
+            if (tracker != null && tracker.IsSimulating)
+            {
+                return;
+            }
+
+            var mauiLocation = new Microsoft.Maui.Devices.Sensors.Location(location.Latitude, location.Longitude);
+            double speedMph = location.HasSpeed ? location.Speed * 2.23694 : 0;
+            double heading = location.HasBearing ? location.Bearing : 0;
+
+            // 1. Send to Local UI (If the screen is on and looking at the map)
+            AndroidLocationTracker.NotifyLocation(mauiLocation, speedMph, heading);
+
+            // 2. Broadcast to Group (Works perfectly even if screen is locked!)
+            if (_signalRService != null && !string.IsNullOrEmpty(_groupName))
+            {
+                await _signalRService.UpdateLocation(_groupName, mauiLocation.Latitude, mauiLocation.Longitude, heading);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Background GPS] Error: {ex.Message}");
         }
     }
 
@@ -68,6 +89,12 @@ public class AndroidLocationService : Service, ILocationListener
     {
         base.OnDestroy();
         _locationManager?.RemoveUpdates(this);
+
+        // --- NEW: Release the WakeLock to allow the phone to sleep again ---
+        if (_wakeLock != null && _wakeLock.IsHeld)
+        {
+            _wakeLock.Release();
+        }
     }
 
     // Required Interface methods
@@ -84,4 +111,4 @@ public class AndroidLocationService : Service, ILocationListener
             manager?.CreateNotificationChannel(channel);
         }
     }
-}
+}   

@@ -187,7 +187,7 @@ public partial class LobbyPage : ContentPage
             _hwButtonService.PttPressed += OnHardwarePttPressed;
             _hwButtonService.PttReleased += OnHardwarePttReleased;
         }
-        
+
     }
     // --- THE FIX: RELIABLE 30-SEC TIMEOUT LOOP ---
     private async Task RunPttTimeoutAsync(CancellationToken token)
@@ -549,7 +549,7 @@ public partial class LobbyPage : ContentPage
             OnTabClicked(TabMap, EventArgs.Empty);
 
             // FIX: Ensure StartNavButton hides, while Action panels show
-            StartNavButton.IsVisible = false;
+            StartNavButton.IsVisible = true;
             ActionButtonsPanel.IsVisible = true;
             MinimizePanelButton.IsVisible = true;
             AdminInstructionBanner.IsVisible = false;
@@ -653,6 +653,13 @@ public partial class LobbyPage : ContentPage
                     MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
                     return;
                 }
+            }
+
+            // --- THE FIX: We must explicitly ask for Microphone access! ---
+            var micStatus = await Permissions.CheckStatusAsync<Permissions.Microphone>();
+            if (micStatus != PermissionStatus.Granted)
+            {
+                await Permissions.RequestAsync<Permissions.Microphone>();
             }
 
             // 2. We only fetch ONE location here to center the map initially.
@@ -930,11 +937,11 @@ public partial class LobbyPage : ContentPage
             _isSimulating = false;
             _locationTracker?.StopTracking();
 
-            #if ANDROID
+#if ANDROID
             // 3. Clean up Android Picture-in-Picture mode
             MainActivity.OnPiPModeChangedEvent -= HandlePiPModeChanged;
             MainActivity.IsInNavigationMode = false;
-            #endif
+#endif
 
             // 4. Handle Server Teardown (Only if they didn't hit "Leave Group" explicitly)
             if (!_isLeavingGroupPermanently)
@@ -965,8 +972,9 @@ public partial class LobbyPage : ContentPage
         await Task.Delay(2000); // 2-second delay as requested
         _isSimulating = true;   // Flag to pause real GPS fetching
 
-        // FIX 2: Stop the hardware GPS tracker so it doesn't fight the simulation!
-        _locationTracker?.StopTracking();
+        // THE FIX: DO NOT stop the location tracker. The Foreground Service keeps the app alive 
+        // in the background when the screen is locked! Just tell it to ignore hardware GPS.
+        if (_locationTracker != null) _locationTracker.IsSimulating = true;
 
         foreach (var point in _currentRoutePoints)
         {
@@ -1228,12 +1236,39 @@ public partial class LobbyPage : ContentPage
         await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Rest", _myName);
     }
     // --- SENSORY ALERT PROCESSOR ---
+    private void SetActionButtonsEnabled(bool isEnabled)
+    {
+        if (ActionButtonsStack == null) return;
+
+        // 1. Loop through all children of the stack (Stop, Refuel, Rest, Overview, PTT)
+        foreach (var child in ActionButtonsStack.Children)
+        {
+            if (child is Button btn)
+            {
+                btn.IsEnabled = isEnabled;
+                // Provide subtle visual dimming when disabled
+                btn.Opacity = isEnabled ? 1.0 : 0.4;
+            }
+        }
+
+        // 2. Also disable the GMAP button so users don't jump out during active safety alerts
+        if (StartNavButton != null)
+        {
+            StartNavButton.IsEnabled = isEnabled;
+            StartNavButton.Opacity = isEnabled ? 1.0 : 0.4;
+        }
+    }
+
+
     private async void OnAlertReceived(string alertType, string senderName)
     {
         MainThread.BeginInvokeOnMainThread(async () =>
         {
             int durationSeconds = 5;
             string voiceMessage = "";
+
+            // 🛑 FREEZE ALL ACTIONS ON SCREEN AT START
+            SetActionButtonsEnabled(false);
 
             // Configure UI based on the alert type
             if (alertType == "Emergency")
@@ -1264,7 +1299,7 @@ public partial class LobbyPage : ContentPage
             AlertSenderLabel.Text = $"Triggered by: {senderName}";
             SensoryAlertOverlay.IsVisible = true;
 
-            // Trigger Voice Alert (acts as our complex beep/voice)
+            // Trigger Voice Alert
             _ = TextToSpeech.Default.SpeakAsync(voiceMessage);
 
             // Loop Vibration and Blinking Animation
@@ -1275,10 +1310,7 @@ public partial class LobbyPage : ContentPage
             {
                 while (!cts.IsCancellationRequested)
                 {
-                    // Vibrate the phone (requires Android.Permission.VIBRATE)
                     Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500));
-
-                    // Flash opacity for blinking screen effect
                     await SensoryAlertOverlay.FadeTo(0.8, 250);
                     await SensoryAlertOverlay.FadeTo(0.2, 250);
                 }
@@ -1289,6 +1321,9 @@ public partial class LobbyPage : ContentPage
             Vibration.Default.Cancel();
             SensoryAlertOverlay.IsVisible = false;
             SensoryAlertOverlay.Opacity = 0;
+
+            // 🔓 UNFREEZE ALL ACTIONS AT END
+            SetActionButtonsEnabled(true);
         });
     }
     private bool _panelVisible = true;

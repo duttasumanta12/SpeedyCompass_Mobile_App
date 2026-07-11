@@ -1,9 +1,22 @@
 ﻿using System.Collections.ObjectModel;
 using Microsoft.Maui.ApplicationModel;
-using SpeedyCompass.Models;
 using SpeedyCompass.Services;
 
 namespace SpeedyCompass;
+
+public class GroupItemViewModel
+{
+    public string GroupName { get; set; }
+    public int MemberCount { get; set; }
+    public bool IsMyAdmin { get; set; }
+    public string MemberCountDisplay => $"{MemberCount} / 5 Members";
+
+    // Admin can always attempt to re-enter their own group
+    public bool CanJoin => IsMyAdmin || MemberCount < 5;
+
+    // Dynamically change the button text
+    public string JoinButtonText => IsMyAdmin ? "Enter" : "Join";
+}
 
 public partial class MainPage : ContentPage
 {
@@ -44,11 +57,9 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Remove("username");
                 LoginView.IsVisible = true;
                 DashboardView.IsVisible = false;
-                //Preferences.Default.Set("GoogleId", Guid.NewGuid().ToString());
-                //OnAppearing();
             }
         }
-    }
+        }
 
     private void CheckLoginState()
     {
@@ -71,31 +82,16 @@ public partial class MainPage : ContentPage
             string newGoogleId = await _signalRService.RegisterOrUpdateUser(string.Empty, desiredName);
 
             Preferences.Default.Set("GoogleId", newGoogleId);
-            Preferences.Default.Set("username", desiredName);
-
-            CheckLoginState();
-            await LoadGroupsAsync();
-        }
-        catch (Exception)
-        {
-            // Fallback: If "John" is already taken by someone else on the server, append a random number
-            try
-            {
-                string fallbackName = "John" + new Random().Next(1000, 9999);
-                string newGoogleId = await _signalRService.RegisterOrUpdateUser(string.Empty, fallbackName);
-
-                Preferences.Default.Set("GoogleId", newGoogleId);
-                Preferences.Default.Set("username", fallbackName);
+                Preferences.Default.Set("username", desiredName);
 
                 CheckLoginState();
                 await LoadGroupsAsync();
-
-                await DisplayAlert("Notice", $"Your default username was taken. You have been assigned '{fallbackName}'. You can change this in the dashboard.", "OK");
-            }
-            catch (Exception fallbackEx)
-            {
+            
+        }
+        catch (Exception fallbackEx)
+        {
                 await DisplayAlert("Login Error", fallbackEx.Message, "OK");
-            }
+            
         }
     }
 

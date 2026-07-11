@@ -89,27 +89,41 @@
                                 IsShowingUser="True"
                                 IsTrafficEnabled="True"
                                 CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}"
-                                
-                                
             />
 
-
+            <!-- STANDALONE GMAP BUTTON: Float on the bottom-left of the Map frame -->
+            <Button x:Name="StartNavButton" 
+                    Grid.Row="1"
+                    Text="🗺️ GMAP"
+                    IsVisible="False"
+                    BackgroundColor="MediumSeaGreen" 
+                    TextColor="White" 
+                    WidthRequest="110" 
+                    HeightRequest="55" 
+                    CornerRadius="27" 
+                    FontSize="14" 
+                    FontAttributes="Bold"
+                    Clicked="OnLaunchNativeNavClicked"
+                    HorizontalOptions="End"
+                    VerticalOptions="End"
+                    Margin="0,0,20,185"
+                    ZIndex="10"
+                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
 
             <!-- Wrap the ActionButtons in a ScrollView to prevent screen overflow. 
-             Anchor it to the bottom-right, leaving 80px space on the right so it NEVER overlaps the Minimize button. -->
+            Anchor it to the bottom-right, leaving 80px space on the right so it NEVER overlaps the Minimize button. -->
             <ScrollView x:Name="ActionButtonsPanel" 
-                    Grid.Row="1" 
-                    Orientation="Horizontal" 
-                    HorizontalOptions="End" 
-                    VerticalOptions="End" 
-                    Margin="10,0,80,120" 
-                    IsVisible="False" 
-                    ZIndex="10">
-                <StackLayout Orientation="Horizontal" Spacing="15" Padding="5,5,15,5">
+                        Grid.Row="1" 
+                        Orientation="Horizontal" 
+                        HorizontalOptions="End" 
+                        VerticalOptions="End" 
+                        Margin="10,0,80,120" 
+                        IsVisible="False" 
+                        ZIndex="10">
+                <StackLayout x:Name="ActionButtonsStack" Orientation="Horizontal" Spacing="15" Padding="5,5,15,5">
                     <Button Text="🛑" BackgroundColor="Wheat" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnEmergencyStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
                     <Button Text="⛽" BackgroundColor="DarkOrange" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRefuelStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
                     <Button Text="☕" BackgroundColor="DodgerBlue" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnRestStopClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-                    <Button x:Name="StartNavButton" Text="GMAP" BackgroundColor="MediumSeaGreen" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnLaunchNativeNavClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
                     <Button x:Name="OverviewButton" Text="🤝" BackgroundColor="FloralWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
                     <Button x:Name="ResumeNavButton" Text="📍" BackgroundColor="AntiqueWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Clicked="OnResumeNavClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
                     <Button Text="🗣️" BackgroundColor="GhostWhite" TextColor="White" WidthRequest="55" HeightRequest="55" CornerRadius="27" FontSize="20" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
@@ -159,9 +173,9 @@
                                 <ViewCell>
                                     <StackLayout Padding="15,12">
                                         <Label Text="{Binding Description}"
-                               TextColor="{AppThemeBinding Light=#333333, Dark=#E0E0E0}"
-                               FontSize="15"
-                               LineBreakMode="TailTruncation"/>
+                                               TextColor="{AppThemeBinding Light=#333333, Dark=#E0E0E0}"
+                                               FontSize="15"
+                                               LineBreakMode="TailTruncation"/>
                                     </StackLayout>
                                 </ViewCell>
                             </DataTemplate>
@@ -199,8 +213,6 @@
                         FontAttributes="Bold"
                         VerticalOptions="Center"
                         Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
-
-
             </Grid>
 
             <Frame x:Name="AdminInstructionBanner" 

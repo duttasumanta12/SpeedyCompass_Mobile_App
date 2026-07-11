@@ -35,11 +35,13 @@ namespace SpeedyCompass
             // 1. Register the Services (Singletons live forever)
             builder.Services.AddSingleton<HttpClient>();
             builder.Services.AddSingleton<SignalRService>();
+
             // Register OS-Specific Location Tracker
             // NEW: Register the Hardware Button bridge
             builder.Services.AddSingleton<HardwareButtonService>();
 #if ANDROID
             builder.Services.AddSingleton<ILocationTracker, SpeedyCompass.Platforms.Android.AndroidLocationTracker>();
+            
 #endif
 
 #if DEBUG
