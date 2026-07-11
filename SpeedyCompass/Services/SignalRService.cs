@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
+using SpeedyCompass.Models;
 using System.Net.Http;
 using System.Net.Security;
 #if ANDROID
@@ -8,15 +9,6 @@ using static Android.Provider.Settings;
 #endif
 
 namespace SpeedyCompass.Services;
-
-// Add this DTO at the top of the namespace
-public class ActiveGroupDto
-{
-    public string GroupName { get; set; } = string.Empty;
-    public int MemberCount { get; set; }
-    public string AdminGoogleId { get; set; } = string.Empty;
-    public bool IsNavigating { get; set; }
-}
 
 public class SignalRService
 {
@@ -157,28 +149,48 @@ public class SignalRService
             DestinationSet?.Invoke(lat, lng, name);
         });
 
-        // 2. Map connection health events
+        // --- RECONNECTION LOGIC ---
         _hubConnection.Closed += async (error) =>
         {
             ConnectionStatusChanged?.Invoke("Disconnected", Colors.Red);
-            if (error != null)
+            if (error != null) LogException("Connection Closed", error);
+
+            // AGGRESSIVE FALLBACK: Keep trying if SignalR's internal 10-second retry fails
+            while (_hubConnection.State == HubConnectionState.Disconnected && !string.IsNullOrEmpty(_activeGroupName))
             {
-                LogException("Connection Closed", error);
+                try
+                {
+                    await Task.Delay(5000);
+                    await StartAsync();
+
+                    if (_hubConnection.State == HubConnectionState.Connected && !string.IsNullOrEmpty(_activeGoogleId))
+                    {
+                        await _hubConnection.InvokeAsync("RestoreConnectionState", _activeGoogleId, _activeUserName, _activeGroupName);
+                        ConnectionStatusChanged?.Invoke("Connected", Colors.Green);
+                    }
+                }
+                catch { /* Quietly loop until cell tower is found */ }
             }
         };
 
         _hubConnection.Reconnecting += async (error) =>
         {
             ConnectionStatusChanged?.Invoke("Reconnecting...", Colors.Orange);
-            if (error != null)
-            {
-                LogException("Reconnecting", error);
-            }
+            if (error != null) LogException("Reconnecting", error);
         };
 
         _hubConnection.Reconnected += async (connectionId) =>
         {
             ConnectionStatusChanged?.Invoke("Connected", Colors.Green);
+            try
+            {
+                // STANDARD RESTORE: If SignalR auto-reconnected quickly
+                if (!string.IsNullOrEmpty(_activeGoogleId) && !string.IsNullOrEmpty(_activeGroupName))
+                {
+                    await _hubConnection.InvokeAsync("RestoreConnectionState", _activeGoogleId, _activeUserName, _activeGroupName);
+                }
+            }
+            catch (Exception ex) { LogException("Reconnected State Sync", ex); }
         };
 
         // NEW PTT LISTENERS
