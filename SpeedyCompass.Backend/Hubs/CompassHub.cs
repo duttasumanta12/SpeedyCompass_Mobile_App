@@ -297,6 +297,60 @@ public class CompassHub : Hub
             await Clients.Group(groupName).SendAsync("PttReleased");
         }
     }
+    // --- CONNECTION RESTORATION LOGIC ---
+    public async Task RestoreConnectionState(string googleId, string userName, string groupName)
+    {
+        var newConnectionId = Context.ConnectionId;
+
+        // 1. Restore the global User Account connection
+        var account = _state.UserAccounts.FirstOrDefault(u => u.GoogleId == googleId);
+        if (account != null) account.ConnectionId = newConnectionId;
+
+        if (string.IsNullOrEmpty(groupName)) return;
+
+        // 2. Restore Group Admin rights (if they were the admin)
+        var session = _state.ActiveGroups.FirstOrDefault(g => g.GroupName == groupName);
+        if (session != null && session.AdminGoogleId == googleId)
+        {
+            session.AdminConnectionId = newConnectionId;
+        }
+
+        // 3. Restore the Rider Session
+        var rider = _state.ConnectedRiders.FirstOrDefault(r => r.GoogleId == googleId && r.GroupName == groupName);
+        if (rider != null)
+        {
+            // They dropped temporarily. Assign the new WebSocket ID.
+            rider.ConnectionId = newConnectionId;
+        }
+        else
+        {
+            // Edge Case: If the server restarted while they were in a tunnel, re-add them silently.
+            if (session == null) return; // Group was destroyed, nothing to restore
+
+            _state.ConnectedRiders.Add(new RiderSession
+            {
+                ConnectionId = newConnectionId,
+                UserName = userName,
+                GoogleId = googleId,
+                GroupName = groupName
+            });
+        }
+
+        // 4. Put the new connection back into the native SignalR multicast group
+        await Groups.AddToGroupAsync(newConnectionId, groupName);
+
+        // 5. Tell everyone else in the group that this user is back online!
+        await Clients.Group(groupName).SendAsync("RosterUpdated", GetGroupRoster(groupName));
+
+        // 6. Push the active map state BACK to the reconnected user so they aren't lost
+        if (session != null)
+        {
+            if (session.IsNavigating)
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName);
+            else if (!string.IsNullOrEmpty(session.DestName))
+                await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
+        }
+    }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {

@@ -117,10 +117,11 @@ public class SignalRService
             throw; // Re-throw so the app is aware the service failed to initialize
         }
     }
+    public event Action<string> UserOfflineAlert;
 
     private void RegisterHubListeners()
     {
-        // Inside RegisterHubListeners() add:
+        _hubConnection.On<string>("UserOfflineAlert", (userName) => UserOfflineAlert?.Invoke(userName));
         _hubConnection.On<string>("UserJoinedAlert", (userName) => UserJoinedAlert?.Invoke(userName));
         _hubConnection.On<string>("UserLeftAlert", (userName) => UserLeftAlert?.Invoke(userName));
         _hubConnection.On("GroupDeleted", () => GroupDeleted?.Invoke());
@@ -357,17 +358,36 @@ public class SignalRService
             LogException(nameof(SetGroupDestination), ex);
         }
     }
+    private string _activeGoogleId = string.Empty;
+    private string _activeUserName = string.Empty;
+    private string _activeGroupName = string.Empty;
     // Inside SignalRService, update Create and Join and add new wrappers:
     public async Task<List<ActiveGroupDto>> GetActiveGroups()
         => await _hubConnection.InvokeAsync<List<ActiveGroupDto>>("GetActiveGroups");
 
+    // 1. Update Create and Join to capture the state
     public async Task CreateGroup(string groupName, string userName, string googleId)
-        => await _hubConnection.InvokeAsync("CreateGroup", groupName, userName, googleId);
+    {
+        _activeGroupName = groupName;
+        _activeUserName = userName;
+        _activeGoogleId = googleId;
+        await _hubConnection.InvokeAsync("CreateGroup", groupName, userName, googleId);
+    }
 
     public async Task JoinGroup(string groupName, string userName, string googleId)
-        => await _hubConnection.InvokeAsync("JoinGroup", groupName, userName, googleId);
+    {
+        _activeGroupName = groupName;
+        _activeUserName = userName;
+        _activeGoogleId = googleId;
+        await _hubConnection.InvokeAsync("JoinGroup", groupName, userName, googleId);
+    }
 
-    public async Task LeaveGroup() => await _hubConnection.InvokeAsync("LeaveGroup");
+    public async Task LeaveGroup()
+    {
+        // Clear state so we don't try to reconnect to a group we left
+        _activeGroupName = string.Empty;
+        await _hubConnection.InvokeAsync("LeaveGroup");
+    }
 
     public async Task DeleteGroup(string groupName) => await _hubConnection.InvokeAsync("DeleteGroup", groupName);
 

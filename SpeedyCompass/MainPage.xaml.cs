@@ -90,8 +90,24 @@ public partial class MainPage : ContentPage
         }
         catch (Exception fallbackEx)
         {
-                await DisplayAlert("Login Error", fallbackEx.Message, "OK");
-            
+            // Fallback: If "John" is already taken by someone else on the server, append a random number
+            try
+            {
+                string fallbackName = "John" + new Random().Next(1000, 9999);
+                string newGoogleId = await _signalRService.RegisterOrUpdateUser(string.Empty, fallbackName);
+
+                Preferences.Default.Set("GoogleId", newGoogleId);
+                Preferences.Default.Set("username", fallbackName);
+
+                CheckLoginState();
+                await LoadGroupsAsync();
+
+                await DisplayAlert("Notice", $"Your default username was taken. You have been assigned '{fallbackName}'. You can change this in the dashboard.", "OK");
+            }
+            catch (Exception fallbackEx2)
+            {
+                await DisplayAlert("Login Error", fallbackEx2.Message, "OK");
+            }
         }
     }
 

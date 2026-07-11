@@ -400,6 +400,11 @@ public partial class LobbyPage : ContentPage
             StatusLabel.Text = status;
             StatusLabel.TextColor = color;
             StatusDot.BackgroundColor = color;
+            // FIX: Force the layout engine to recalculate and repaint this specific UI block
+            if (StatusLabel.Parent is View parentView)
+            {
+                parentView.InvalidateMeasure();
+            }
         });
     }
 
@@ -889,14 +894,29 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            Riders.Clear();
+            // FIX: Build a fresh collection in memory instead of using .Clear() and .Add()
+            var updatedRiders = new ObservableCollection<Rider>();
+
             foreach (var rider in roster)
             {
                 if (rider.Name == _myName) rider.Name += " (You)";
-                if (!rider.IsOnline) rider.Name += " (Offline)";
 
-                Riders.Add(rider);
+                if (!rider.IsOnline)
+                {
+                    rider.Name += " (Offline)";
+                    // Optional: You can also change the role color to dim it out
+                    // rider.r = Colors.DimGray; 
+                }
+
+                updatedRiders.Add(rider);
             }
+
+            // FIX: Reassigning ItemsSource completely breaks the render cache and forces an instant UI update
+            Riders = updatedRiders;
+            RidersCollectionView.ItemsSource = Riders;
+
+            // FIX: Ensure the PiP overlay numbers update dynamically as well!
+            PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
         });
     }
 
