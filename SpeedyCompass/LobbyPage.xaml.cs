@@ -336,7 +336,7 @@ public partial class LobbyPage : ContentPage
                 TabRoster.IsVisible = false;
                 TabMap.IsVisible = false;
                 DestinationSearchBar.IsVisible = false;
-                ActionButtonsPanel.IsVisible = false;
+                ActionDrawer.IsVisible = false;
 
                 // Keep the map rendering in the background if you want, or hide it to save GPU
                 MapView.IsVisible = false;
@@ -357,7 +357,7 @@ public partial class LobbyPage : ContentPage
                 DestinationSearchBar.IsVisible = true;
                 MapView.IsVisible = true;
 
-                if (_routeIsActive) ActionButtonsPanel.IsVisible = true;
+                if (_routeIsActive) ActionDrawer.IsVisible = true;
             }
         });
     }
@@ -523,7 +523,7 @@ public partial class LobbyPage : ContentPage
         ConfirmDestButton.IsVisible = true;
         DestinationSearchBar.IsReadOnly = false;
         StartNavButton.IsVisible = false;
-        ActionButtonsPanel.IsVisible = false;
+        ActionDrawer.IsVisible = false;
         MinimizePanelButton.IsVisible = false;
         AdminInstructionBanner.IsVisible = true;
         PendingDestinationFrame.IsVisible = false; // Hide Roster dashboard
@@ -555,7 +555,9 @@ public partial class LobbyPage : ContentPage
 
             // FIX: Ensure StartNavButton hides, while Action panels show
             StartNavButton.IsVisible = true;
-            ActionButtonsPanel.IsVisible = true;
+            //ActionDrawer.IsVisible = true;
+            ActionDrawer.TranslationY = 300;
+            FloatingControlsLayout.TranslationY = 0;
             MinimizePanelButton.IsVisible = true;
             AdminInstructionBanner.IsVisible = false;
 
@@ -771,7 +773,7 @@ public partial class LobbyPage : ContentPage
                                 });
                             }
                             _lastKnownLocation = location;
-                            await _signalRService.UpdateLocation(GroupNameLabel.Text, location.Latitude, location.Longitude, location.Course ?? _currentHeading);
+                            await _signalRService.UpdateLocation(GroupNameLabel.Text, _myPinVm.Username, location.Latitude, location.Longitude, location.Course ?? _currentHeading);
                         }
                     }
                 }
@@ -1020,7 +1022,7 @@ public partial class LobbyPage : ContentPage
             _lastKnownLocation = point;
 
             // Broadcast fake movement to the group!
-            await _signalRService.UpdateLocation(GroupNameLabel.Text, point.Latitude, point.Longitude, fakeHeading);
+            await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
 
             await Task.Delay(2000); // Move to the next point every 1 second
         }
@@ -1047,7 +1049,7 @@ public partial class LobbyPage : ContentPage
 
             // Hide active navigation UI
             StartNavButton.IsVisible = false;
-            ActionButtonsPanel.IsVisible = false;
+            ActionDrawer.IsVisible = false;
             MinimizePanelButton.IsVisible = false;
             PendingDestinationFrame.IsVisible = false;
 
@@ -1346,37 +1348,44 @@ public partial class LobbyPage : ContentPage
             SetActionButtonsEnabled(true);
         });
     }
-    private bool _panelVisible = true;
+    private bool _panelVisible = false;
     private ILocationTracker? _locationTracker;
 
+    // 2. Replace your existing OnMinimizePanelClicked with this updated drawer animation
     private async void OnMinimizePanelClicked(object sender, EventArgs e)
     {
-        // Disable button briefly to prevent animation glitches from spam-clicking
         MinimizePanelButton.IsEnabled = false;
+
+        // Calculate the height securely (fallback to 250 if the UI hasn't fully rendered it yet)
+        double drawerHeight = ActionDrawer.Height > 0 ? ActionDrawer.Height : 250;
+
+        // Add a 20px gap to ensure the toggle button sits cleanly ABOVE the drawer without overlapping
+        double pushUpAmount = drawerHeight + 20;
 
         if (_panelVisible)
         {
-            // CLOSE ANIMATION: Fade out and slide down
+            // CLOSE ANIMATION: Slide drawer down and drop buttons back
             await Task.WhenAll(
-                ActionButtonsPanel.FadeTo(0, 250, Microsoft.Maui.Easing.CubicIn),
-                ActionButtonsPanel.TranslateTo(0, 50, 250, Microsoft.Maui.Easing.CubicIn)
+                ActionDrawer.TranslateTo(0, drawerHeight, 250, Easing.CubicIn),
+                FloatingControlsLayout.TranslateTo(0, 0, 250, Easing.CubicIn)
             );
 
-            ActionButtonsPanel.IsVisible = false;
-            MinimizePanelButton.Text = "+";
+            ActionDrawer.IsVisible = false;
+            MinimizePanelButton.Text = "🔼";
             _panelVisible = false;
         }
         else
         {
-            // OPEN ANIMATION: Make visible, preset bottom translation, then fade & slide up
-            ActionButtonsPanel.IsVisible = true;
+            // OPEN ANIMATION: Prep drawer position, then slide drawer up AND push floating controls up
+            ActionDrawer.IsVisible = true;
+            if (ActionDrawer.TranslationY == 0) ActionDrawer.TranslationY = drawerHeight;
 
             await Task.WhenAll(
-                ActionButtonsPanel.FadeTo(1, 250, Microsoft.Maui.Easing.CubicOut),
-                ActionButtonsPanel.TranslateTo(0, 0, 250, Microsoft.Maui.Easing.CubicOut)
+                ActionDrawer.TranslateTo(0, 0, 250, Easing.CubicOut),
+                FloatingControlsLayout.TranslateTo(0, -pushUpAmount, 250, Easing.CubicOut)
             );
 
-            MinimizePanelButton.Text = "−";
+            MinimizePanelButton.Text = "🔽";
             _panelVisible = true;
         }
 
@@ -1475,6 +1484,21 @@ public partial class LobbyPage : ContentPage
             };
 
             MapPins.Add(pin);
+        }
+    }
+    private void OnRecenterMapClicked(object sender, EventArgs e)
+    {
+        if (_lastKnownLocation != null)
+        {
+            // Instantly snap map back to user location with a tight zoom
+            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromMiles(0.5)));
+
+            // Re-enable 3D auto-centering if it was broken by manual panning
+            if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
+
+            // If we are in Overview mode, switch it back natively
+            OverviewButton.IsVisible = true;
+            ResumeNavButton.IsVisible = false;
         }
     }
 }

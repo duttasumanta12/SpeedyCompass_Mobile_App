@@ -1,7 +1,10 @@
-﻿namespace SpeedyCompass.Backend.Hubs;
+﻿using MongoDB.Bson.Serialization.Attributes;
+
+namespace SpeedyCompass.Backend.Hubs;
 
 public class UserAccount
 {
+    [BsonId]
     public string GoogleId { get; set; } = string.Empty;
     public string Username { get; set; } = string.Empty;
 

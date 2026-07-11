@@ -331,11 +331,11 @@ public class SignalRService
         }
     }
 
-    public async Task UpdateLocation(string groupName, double lat, double lng, double heading)
+    public async Task UpdateLocation(string groupName, string userName, double lat, double lng, double heading)
     {
         try
         {
-            await _hubConnection.InvokeAsync("UpdateMyLocation", groupName, lat, lng, heading);
+            await _hubConnection.InvokeAsync("UpdateMyLocation", groupName, userName, lat, lng, heading);
         }
         catch (Exception ex)
         {

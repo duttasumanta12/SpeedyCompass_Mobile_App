@@ -1,7 +1,10 @@
-﻿namespace SpeedyCompass.Backend.Hubs;
+﻿using MongoDB.Bson.Serialization.Attributes;
+
+namespace SpeedyCompass.Backend.Hubs;
 
 public class GroupSession
 {
+    [BsonId]
     public string GroupName { get; set; } = string.Empty; // Added for List compatibility
     public string AdminConnectionId { get; set; } = string.Empty;
     public string AdminGoogleId { get; set; } = string.Empty;

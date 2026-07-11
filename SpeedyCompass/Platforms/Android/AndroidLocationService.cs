@@ -76,7 +76,7 @@ public class AndroidLocationService : Service, ILocationListener
             // 2. Broadcast to Group (Works perfectly even if screen is locked!)
             if (_signalRService != null && !string.IsNullOrEmpty(_groupName))
             {
-                await _signalRService.UpdateLocation(_groupName, mauiLocation.Latitude, mauiLocation.Longitude, heading);
+                await _signalRService.UpdateLocation(_groupName, Preferences.Default.Get("username", "Unknown"), mauiLocation.Latitude, mauiLocation.Longitude, heading);
             }
         }
         catch (Exception ex)
