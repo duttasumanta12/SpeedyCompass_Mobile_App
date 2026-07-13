@@ -1,9 +1,11 @@
 ﻿using Android.App;
+using Android.Content;
 using Android.Content.PM;
 using Android.Content.Res;
 using Android.Media;
 using Android.OS;
 using Android.Views;
+using Microsoft.Identity.Client;
 using System;
 using Stream = Android.Media.Stream;
 
@@ -113,5 +115,10 @@ public class MainActivity : MauiAppCompatActivity
     {
         base.OnPictureInPictureModeChanged(isInPictureInPictureMode, newConfig);
         OnPiPModeChangedEvent?.Invoke(isInPictureInPictureMode);
+    }
+    protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
+    {
+        base.OnActivityResult(requestCode, resultCode, data);
+        AuthenticationContinuationHelper.SetAuthenticationContinuationEventArgs(requestCode, resultCode, data);
     }
 }

@@ -34,6 +34,7 @@ namespace SpeedyCompass
 
             // 1. Register the Services (Singletons live forever)
             builder.Services.AddSingleton<HttpClient>();
+            builder.Services.AddSingleton<MsalAuthService>();
             builder.Services.AddSingleton<SignalRService>();
 
             // Register OS-Specific Location Tracker

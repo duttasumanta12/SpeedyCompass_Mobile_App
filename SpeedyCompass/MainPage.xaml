@@ -2,70 +2,68 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="SpeedyCompass.MainPage"
-             Title="SpeedyCompass Dashboard">
+             BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#121212}">
 
     <Grid>
-        <!-- 1. GOOGLE LOGIN VIEW (Visible when not logged in) -->
-        <Grid x:Name="LoginView" BackgroundColor="{AppThemeBinding Light=White, Dark=#121212}" IsVisible="True" Padding="30">
-            <StackLayout VerticalOptions="Center" Spacing="20">
-                <Image Source="compass_logo.png" WidthRequest="150" HeightRequest="150" HorizontalOptions="Center"/>
-                <Label Text="SpeedyCompass" FontSize="32" FontAttributes="Bold" HorizontalTextAlignment="Center"/>
-                <Label Text="Ride together, never get lost." FontSize="16" TextColor="Gray" HorizontalTextAlignment="Center" Margin="0,0,0,30"/>
+        <!-- LOGIN VIEW -->
+        <VerticalStackLayout x:Name="LoginView" 
+                             VerticalOptions="Center" 
+                             HorizontalOptions="Center" 
+                             Spacing="20" 
+                             Padding="30">
 
-                <Button Text="Sign in with Google" 
-                        BackgroundColor="White" 
-                        TextColor="Black" 
-                        BorderColor="LightGray" 
-                        BorderWidth="1"
-                        CornerRadius="8" 
-                        HeightRequest="50" 
-                        FontAttributes="Bold"
-                        Clicked="OnGoogleLoginClicked"
-                        Shadow="{Shadow Brush=Black, Offset='0,2', Opacity=0.1, Radius=4}"/>
-            </StackLayout>
-        </Grid>
+            <Label Text="SpeedyCompass" FontSize="36" FontAttributes="Bold" HorizontalOptions="Center" TextColor="DodgerBlue"/>
+            <Label Text="Ride together. Stay connected." FontSize="16" TextColor="Gray" HorizontalOptions="Center" Margin="0,0,0,20"/>
 
-        <!-- 2. MAIN DASHBOARD VIEW (Visible when logged in) -->
-        <Grid x:Name="DashboardView" IsVisible="False" RowDefinitions="Auto, Auto, *" Padding="20">
+            <!-- UPGRADED BUTTON: Triggers the Azure AD B2C Sign Up / Sign In Flow -->
+            <Button Text="Register / Login with Email" 
+                    BackgroundColor="DodgerBlue" 
+                    TextColor="White" 
+                    CornerRadius="10" 
+                    HeightRequest="55" 
+                    FontAttributes="Bold" 
+                    Clicked="OnAzureLoginClicked" 
+                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
+        </VerticalStackLayout>
 
-            <!-- User Profile Header -->
-            <Frame Grid.Row="0" CornerRadius="12" Padding="15" Margin="0,0,0,20" BackgroundColor="{AppThemeBinding Light=#F0F8FF, Dark=#1E2A38}" HasShadow="False" BorderColor="Transparent">
-                <StackLayout>
-                    <Label Text="Welcome back," FontSize="14" TextColor="Gray"/>
+        <!-- DASHBOARD VIEW -->
+        <Grid x:Name="DashboardView" IsVisible="False" RowDefinitions="Auto, Auto, *">
+
+            <!-- Header & Profile -->
+            <Frame Grid.Row="0" BackgroundColor="DodgerBlue" CornerRadius="0" HasShadow="True" Padding="20,40,20,20">
+                <StackLayout Spacing="10">
+                    <Label Text="Welcome to SpeedyCompass," TextColor="LightCyan" FontSize="14"/>
                     <Grid ColumnDefinitions="*, Auto">
-                        <Entry x:Name="UsernameEntry" Grid.Column="0" FontSize="22" FontAttributes="Bold" TextColor="DodgerBlue" BackgroundColor="Transparent" ClearButtonVisibility="WhileEditing"/>
-                        <Button Grid.Column="1" Text="Save" Clicked="OnSaveUsernameClicked" HeightRequest="35" CornerRadius="6" BackgroundColor="MediumSeaGreen" TextColor="White" Padding="10,0"/>
+                        <Entry x:Name="UsernameEntry" Grid.Column="0" TextColor="White" FontSize="24" FontAttributes="Bold" BackgroundColor="Transparent" ClearButtonVisibility="WhileEditing"/>
+                        <Button Grid.Column="1" Text="Save" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="8" Clicked="OnSaveUsernameClicked"/>
                     </Grid>
                 </StackLayout>
             </Frame>
 
-            <!-- Create Group Controls -->
-            <StackLayout Grid.Row="1" Spacing="10" Margin="0,0,0,20">
-                <Label Text="Create or Join a Group" FontAttributes="Bold" FontSize="18"/>
+            <!-- Create Group -->
+            <Frame Grid.Row="1" Margin="15,20,15,10" CornerRadius="12" HasShadow="True" Padding="15" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
                 <Grid ColumnDefinitions="*, Auto" ColumnSpacing="10">
-                    <Entry x:Name="GroupNameEntry" Placeholder="Enter Group Name" BackgroundColor="{AppThemeBinding Light=#F9F9F9, Dark=#2A2A2A}"/>
-                    <Button Grid.Column="1" Text="Create" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="8" Clicked="OnCreateGroupClicked"/>
+                    <Entry x:Name="GroupNameEntry" Placeholder="Enter a new Group ID..." VerticalOptions="Center"/>
+                    <Button Grid.Column="1" Text="Create Group" BackgroundColor="DarkOrange" TextColor="White" CornerRadius="8" FontAttributes="Bold" Clicked="OnCreateGroupClicked"/>
                 </Grid>
-            </StackLayout>
+            </Frame>
 
             <!-- Available Groups List -->
-            <RefreshView Grid.Row="2" x:Name="GroupsRefreshView" Refreshing="OnRefreshGroups">
+            <RefreshView x:Name="GroupsRefreshView" Grid.Row="2" Refreshing="OnRefreshGroups" Margin="15,10,15,0">
                 <CollectionView x:Name="GroupsCollectionView">
-                    <CollectionView.EmptyView>
-                        <Label Text="No active groups found. Pull to refresh." HorizontalTextAlignment="Center" TextColor="Gray" Margin="0,50,0,0"/>
-                    </CollectionView.EmptyView>
+                    <CollectionView.Header>
+                        <Label Text="Active Convoys" FontSize="18" FontAttributes="Bold" Margin="0,0,0,15" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                    </CollectionView.Header>
                     <CollectionView.ItemTemplate>
                         <DataTemplate>
-                            <Frame CornerRadius="8" HasShadow="True" Padding="15" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
-                                <Grid RowDefinitions="Auto, Auto" ColumnDefinitions="*, Auto">
-                                    <StackLayout Grid.Row="0" Grid.Column="0" Orientation="Horizontal" Spacing="8">
+                            <Frame CornerRadius="10" Margin="0,0,0,10" Padding="15" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
+                                <Grid ColumnDefinitions="*, Auto">
+                                    <StackLayout Grid.Column="0" VerticalOptions="Center">
                                         <Label Text="{Binding GroupName}" FontSize="18" FontAttributes="Bold"/>
-                                        <Label Text="👑" IsVisible="{Binding IsMyAdmin}" VerticalOptions="Center" ToolTipProperties.Text="You created this group"/>
+                                        <Label Text="{Binding MemberCountDisplay}" FontSize="12" TextColor="Gray"/>
                                     </StackLayout>
 
-                                    <Label Grid.Row="1" Grid.Column="0" Text="{Binding MemberCountDisplay}" FontSize="14" TextColor="Gray" Margin="0,5,0,0"/>
-
-                                    <StackLayout Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalOptions="Center">
+                                    <StackLayout Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalOptions="Center">
                                         <!-- Only Admin can delete -->
                                         <Button Text="✖" BackgroundColor="Red" TextColor="White" CornerRadius="20" WidthRequest="40" HeightRequest="40" IsVisible="{Binding IsMyAdmin}" Clicked="OnDeleteGroupClicked" CommandParameter="{Binding GroupName}"/>
                                         <!-- Dynamic Join/Enter button (Disabled if full) -->
@@ -77,7 +75,6 @@
                     </CollectionView.ItemTemplate>
                 </CollectionView>
             </RefreshView>
-
         </Grid>
     </Grid>
 </ContentPage>

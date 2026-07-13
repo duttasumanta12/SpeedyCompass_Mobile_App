@@ -21,14 +21,17 @@ public class GroupItemViewModel
 public partial class MainPage : ContentPage
 {
     private readonly SignalRService _signalRService;
+    private readonly MsalAuthService _authService;
+
     public ObservableCollection<GroupItemViewModel> AvailableGroups { get; set; } = new();
 
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
 
-    public MainPage(SignalRService signalRService)
+    public MainPage(SignalRService signalRService, MsalAuthService authService)
     {
         InitializeComponent();
         _signalRService = signalRService;
+        _authService = authService;
         GroupsCollectionView.ItemsSource = AvailableGroups;
     }
 
@@ -36,12 +39,10 @@ public partial class MainPage : ContentPage
     {
         base.OnAppearing();
 
-        // Start connection first so we can talk to the hub
         await _signalRService.StartAsync();
 
         if (!string.IsNullOrEmpty(CurrentGoogleId))
         {
-            // Validate our saved GoogleId with the Server
             string serverUsername = await _signalRService.AuthenticateUser(CurrentGoogleId);
 
             if (!string.IsNullOrEmpty(serverUsername))
@@ -52,14 +53,17 @@ public partial class MainPage : ContentPage
             }
             else
             {
-                // The server restarted and forgot our ID, or it's invalid. Reset local state.
                 Preferences.Default.Remove("GoogleId");
                 Preferences.Default.Remove("username");
                 LoginView.IsVisible = true;
                 DashboardView.IsVisible = false;
             }
         }
+        else
+        {
+            CheckLoginState();
         }
+    }
 
     private void CheckLoginState()
     {
@@ -71,43 +75,37 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async void OnGoogleLoginClicked(object sender, EventArgs e)
+    // UPDATED: Now handles standard Azure AD Registration/Login!
+    private async void OnAzureLoginClicked(object sender, EventArgs e)
     {
         try
         {
-            // Default Google first name
-            string desiredName = "John";
+            // 1. Launch the Azure AD B2C Login/Register Browser
+            var authResult = await _authService.LoginAsync();
 
-            // Ask server to generate GoogleId and reserve the username
-            string newGoogleId = await _signalRService.RegisterOrUpdateUser(string.Empty, desiredName);
+            if (authResult != null)
+            {
+                string azureId = authResult.UniqueId;
+                string desiredName = authResult.Account.Username ?? "Rider";
 
-            Preferences.Default.Set("GoogleId", newGoogleId);
+                // If they signed up with email, parse the prefix to make a clean default username
+                if (desiredName.Contains("@"))
+                {
+                    desiredName = desiredName.Split('@')[0];
+                }
+
+                string registeredId = await _signalRService.RegisterOrUpdateUser(azureId, desiredName);
+
+                Preferences.Default.Set("GoogleId", registeredId); // We keep the local key name "GoogleId" to avoid breaking existing DB logic
                 Preferences.Default.Set("username", desiredName);
 
                 CheckLoginState();
                 await LoadGroupsAsync();
-            
+            }
         }
-        catch (Exception fallbackEx)
+        catch (Exception ex)
         {
-            // Fallback: If "John" is already taken by someone else on the server, append a random number
-            try
-            {
-                string fallbackName = "John" + new Random().Next(1000, 9999);
-                string newGoogleId = await _signalRService.RegisterOrUpdateUser(string.Empty, fallbackName);
-
-                Preferences.Default.Set("GoogleId", newGoogleId);
-                Preferences.Default.Set("username", fallbackName);
-
-                CheckLoginState();
-                await LoadGroupsAsync();
-
-                await DisplayAlert("Notice", $"Your default username was taken. You have been assigned '{fallbackName}'. You can change this in the dashboard.", "OK");
-            }
-            catch (Exception fallbackEx2)
-            {
-                await DisplayAlert("Login Error", fallbackEx2.Message, "OK");
-            }
+            await DisplayAlert("Login Error", ex.Message, "OK");
         }
     }
 
@@ -119,15 +117,12 @@ public partial class MainPage : ContentPage
 
         try
         {
-            // Attempt to claim the new username on the server using our existing GoogleId
             await _signalRService.RegisterOrUpdateUser(CurrentGoogleId, UsernameEntry.Text.Trim());
-
             Preferences.Default.Set("username", UsernameEntry.Text.Trim());
             await DisplayAlert("Saved", "Username updated successfully.", "OK");
         }
         catch (Exception ex)
         {
-            // The server rejected it (likely because it's taken). Revert the Entry box.
             await DisplayAlert("Error", ex.Message, "OK");
             UsernameEntry.Text = originalUsername;
         }
@@ -178,13 +173,11 @@ public partial class MainPage : ContentPage
         {
             try
             {
-                // Check if the user is the admin of the group they are trying to enter
                 var groupInfo = AvailableGroups.FirstOrDefault(g => g.GroupName == groupName);
                 bool amIAdmin = groupInfo?.IsMyAdmin ?? false;
 
                 await _signalRService.JoinGroup(groupName, UsernameEntry.Text, CurrentGoogleId);
 
-                // Set the admin preference correctly so the Lobby grants them the right controls
                 Preferences.Default.Set("IsAdmin", amIAdmin);
                 await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));
             }
