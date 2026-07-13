@@ -230,9 +230,61 @@ public class CompassHub : Hub
         if (session != null) await Clients.Group(groupName).SendAsync("ReceiveAlert", alertType, senderName);
     }
 
+    // --- UPGRADED: TELEMETRY ENGINE ---
     public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading)
     {
+        // 1. Broadcast the movement visually to the map
         await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
+
+        // 2. Fetch memory state
+        _state.ConnectedRiders.TryGetValue(Context.ConnectionId, out var currentRider);
+        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+
+        if (session != null && currentRider != null)
+        {
+            currentRider.LastLat = lat;
+            currentRider.LastLng = lng;
+
+            // Simplified Math: Assume the Admin is the Lead Rider
+            string leadGoogleId = session.AdminGoogleId;
+
+            if (currentRider.GoogleId != leadGoogleId)
+            {
+                // This is a normal rider. Check if they are falling behind the Lead.
+                var leadRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == leadGoogleId);
+                if (leadRider != null && leadRider.LastLat != 0)
+                {
+                    double distance = CalculateDistanceMeters(lat, lng, leadRider.LastLat, leadRider.LastLng);
+                    if (distance > session.Settings.MaxLagDistanceMeters)
+                    {
+                        // Alert the Admin
+                        var adminConn = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == session.AdminGoogleId)?.ConnectionId;
+                        if (!string.IsNullOrEmpty(adminConn))
+                        {
+                            await Clients.Client(adminConn).SendAsync("ReceiveAlert", "Lagging", $"{userName} is {Math.Round(distance)} meters behind.");
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // This IS the Lead Rider moving. Check if the convoy has splintered (anyone too far back).
+                double maxDist = 0;
+                foreach (var r in _state.ConnectedRiders.Values.Where(x => x.GroupName == groupName && x.GoogleId != leadGoogleId))
+                {
+                    if (r.LastLat != 0)
+                    {
+                        double d = CalculateDistanceMeters(lat, lng, r.LastLat, r.LastLng);
+                        if (d > maxDist) maxDist = d;
+                    }
+                }
+
+                if (maxDist > session.Settings.SplinterWarningDistanceMeters)
+                {
+                    await Clients.Client(currentRider.ConnectionId).SendAsync("ReceiveAlert", "Splinter", "Convoy splintered! A rider has fallen too far behind.");
+                }
+            }
+        }
     }
 
     // --- NEW: PUSH TO TALK (PTT) LOGIC ---
@@ -288,10 +340,37 @@ public class CompassHub : Hub
                 await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
         }
     }
+    public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDist)
+    {
+        _state.ConnectedRiders.TryGetValue(Context.ConnectionId, out var caller);
+        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+
+        if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
+        {
+            var update = Builders<GroupSession>.Update
+                .Set(g => g.Settings.MaxLagDistanceMeters, maxLag)
+                .Set(g => g.Settings.SplinterWarningDistanceMeters, splinterDist);
+
+            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+        }
+    }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         await LeaveLobby();
         await base.OnDisconnectedAsync(exception);
+    }
+    private double CalculateDistanceMeters(double lat1, double lon1, double lat2, double lon2)
+    {
+        var earthRadiusMeters = 6371000;
+        var dLat = (lat2 - lat1) * Math.PI / 180.0;
+        var dLon = (lon2 - lon1) * Math.PI / 180.0;
+
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                Math.Cos(lat1 * Math.PI / 180.0) * Math.Cos(lat2 * Math.PI / 180.0) *
+                Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+
+        var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        return earthRadiusMeters * c;
     }
 }

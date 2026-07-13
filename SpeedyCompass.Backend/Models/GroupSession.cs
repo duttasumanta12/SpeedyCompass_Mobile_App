@@ -14,4 +14,14 @@ public class GroupSession
     public string DestName { get; set; } = string.Empty;
     // --- NEW: Tracks who holds the microphone ---
     public string ActiveSpeaker { get; set; } = string.Empty;
+    public GroupSettings Settings { get; set; } = new GroupSettings();
+}
+// --- NEW: THE SETTINGS SCHEMA ---
+public class GroupSettings
+{
+    public int MaxLagDistanceMeters { get; set; } = 500;
+    public int SplinterWarningDistanceMeters { get; set; } = 2000;
+    public int ArrivalGeofenceMeters { get; set; } = 1000;
+    public string LeadRiderGoogleId { get; set; } = string.Empty;
+    public string SweepRiderGoogleId { get; set; } = string.Empty;
 }

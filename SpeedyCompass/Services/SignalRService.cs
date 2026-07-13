@@ -240,6 +240,17 @@ public class SignalRService
             return null;
         }
     }
+    public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDistance)
+    {
+        try
+        {
+            await _hubConnection.InvokeAsync("UpdateGroupSettings", groupName, maxLag, splinterDistance);
+        }
+        catch (Exception ex)
+        {
+            LogException(nameof(UpdateGroupSettings), ex);
+        }
+    }
 
     public async Task<bool> CheckGroupExists(string groupName)
     {
