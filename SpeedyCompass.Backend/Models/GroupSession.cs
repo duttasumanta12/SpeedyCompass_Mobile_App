@@ -24,4 +24,6 @@ public class GroupSettings
     public int ArrivalGeofenceMeters { get; set; } = 1000;
     public string LeadRiderGoogleId { get; set; } = string.Empty;
     public string SweepRiderGoogleId { get; set; } = string.Empty;
+    // NEW: Configurable Max Group Size (Default to 15, max 20)
+    public int MaxGroupSize { get; set; } = 15;
 }

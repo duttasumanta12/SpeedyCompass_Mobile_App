@@ -26,17 +26,6 @@ public class RouteLatLng { [JsonPropertyName("latitude")] public double Latitude
 public class RoutesResponse { [JsonPropertyName("routes")] public List<RouteData> Routes { get; set; } }
 public class RouteData { [JsonPropertyName("distanceMeters")] public int DistanceMeters { get; set; } [JsonPropertyName("duration")] public string Duration { get; set; } [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; } }
 public class RoutePolyline { [JsonPropertyName("encodedPolyline")] public string EncodedPolyline { get; set; } }
-
-public class Rider
-{
-    public string Name { get; set; } = string.Empty;
-    public bool IsAdmin { get; set; } = false;
-    public string RoleDisplay => IsAdmin ? "Admin" : "Rider";
-    public Color RoleColor => IsAdmin ? Colors.DarkOrange : Colors.Gray;
-
-    public bool IsOnline { get; internal set; } = true;
-}
-
 // MVVM Model for the Map Pins
 public class MapPinViewModel : System.ComponentModel.INotifyPropertyChanged
 {
@@ -421,13 +410,12 @@ public partial class LobbyPage : ContentPage
     {
         int maxLag = (int)LagSlider.Value;
         int splinterDist = (int)SplinterSlider.Value;
+        int maxSize = (int)SizeSlider.Value;
 
-        // Push settings to Cosmos DB via SignalR
-        await _signalRService.UpdateGroupSettings(GroupNameLabel.Text, maxLag, splinterDist);
+        // Push all three settings to Cosmos DB via SignalR
+        await _signalRService.UpdateGroupSettings(GroupNameLabel.Text, maxLag, splinterDist, maxSize);
 
         AdminSettingsOverlay.IsVisible = false;
-
-        // Give the admin physical feedback that the save worked
         Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
     }
 
@@ -1536,6 +1524,45 @@ public partial class LobbyPage : ContentPage
 
             MapPins.Add(pin);
         }
+    }
+     private async void OnRiderTapped(object sender, TappedEventArgs e)
+    {
+        // 1. Ensure a rider was passed from the CommandParameter
+        if (e.Parameter is not Rider selectedRider) 
+            return;
+
+        // 2. Only Admins can assign roles.
+        if (!_amIAdmin) 
+        {
+            // Optional: Give feedback that they don't have permission
+            // await DisplayAlert("Access Denied", "Only the Admin can assign roles.", "OK");
+            return;
+        }
+
+        // 3. Don't let the Admin change their own core role
+        if (selectedRider.IsAdmin) 
+        {
+            await DisplayAlert("Role Assignment", "You cannot change your own Admin role.", "OK");
+            return;
+        }
+
+        // 4. Pop up the Role Selection Menu
+        string action = await DisplayActionSheet($"Assign role to {selectedRider.Name}", "Cancel", null, "Lead", "Tail", "Marshal", "Standard Rider");
+        
+        if (action != "Cancel" && !string.IsNullOrEmpty(action)) 
+        {
+            string backendRole = action == "Standard Rider" ? "Rider" : action;
+            //Riders.FirstOrDefault(r => r.GoogleId == selectedRider.GoogleId)?.Role = backendRole;
+            await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
+        }
+    }
+
+    // 3. NEW: Group Size Slider Handler
+    private void OnSizeSliderChanged(object sender, ValueChangedEventArgs e)
+    {
+        int roundedValue = (int)Math.Round(e.NewValue);
+        SizeSlider.Value = roundedValue;
+        SizeValueLabel.Text = $"{roundedValue} Riders";
     }
     private void OnRecenterMapClicked(object sender, EventArgs e)
     {

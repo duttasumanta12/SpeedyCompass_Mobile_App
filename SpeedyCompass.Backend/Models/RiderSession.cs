@@ -10,4 +10,6 @@ public class RiderSession
     public double LastLat { get; set; }
     public double LastLng { get; set; }
     public DateTime LastUpdate { get; set; }
+    // NEW: The user's assigned role in the convoy
+    public string Role { get; set; } = "Rider";
 }

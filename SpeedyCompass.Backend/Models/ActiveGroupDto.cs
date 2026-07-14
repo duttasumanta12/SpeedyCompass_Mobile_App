@@ -6,4 +6,6 @@ public class ActiveGroupDto
     public int MemberCount { get; set; }
     public string AdminGoogleId { get; set; } = string.Empty;
     public bool IsNavigating { get; set; }
+    // NEW: Expose the max size to the Dashboard
+    public int MaxGroupSize { get; set; }
 }

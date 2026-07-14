@@ -8,11 +8,12 @@ public class GroupItemViewModel
 {
     public string GroupName { get; set; }
     public int MemberCount { get; set; }
+    public int MaxGroupSize { get; set; } = 15; // Default
     public bool IsMyAdmin { get; set; }
-    public string MemberCountDisplay => $"{MemberCount} / 5 Members";
+    public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Members";
 
     // Admin can always attempt to re-enter their own group
-    public bool CanJoin => IsMyAdmin || MemberCount < 5;
+    public bool CanJoin => IsMyAdmin || MemberCount < MaxGroupSize;
 
     // Dynamically change the button text
     public string JoinButtonText => IsMyAdmin ? "Enter" : "Join";
@@ -146,6 +147,7 @@ public partial class MainPage : ContentPage
                 {
                     GroupName = g.GroupName,
                     MemberCount = g.MemberCount,
+                    MaxGroupSize = g.MaxGroupSize,
                     IsMyAdmin = g.AdminGoogleId == CurrentGoogleId
                 });
             }
