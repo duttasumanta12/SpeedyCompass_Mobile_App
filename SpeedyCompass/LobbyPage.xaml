@@ -68,16 +68,18 @@
             <CollectionView x:Name="RidersCollectionView" Grid.Row="4" SelectionMode="None">
                 <CollectionView.ItemTemplate>
                     <DataTemplate x:DataType="local:Rider">
-                        <Frame CornerRadius="8" HasShadow="False" Padding="15" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F9F9F9, Dark=#2C2C2C}" BorderColor="Transparent">
-
-                            <!-- NEW: Explicit tap gesture that passes the Rider object to the code-behind -->
-                            <Frame.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnRiderTapped" CommandParameter="{Binding .}"/>
-                            </Frame.GestureRecognizers>
-
+                        <!-- UPDATE: Changed BackgroundColor to bind to our dynamic CardBackgroundColor -->
+                        <Frame CornerRadius="8" HasShadow="False" Padding="15" Margin="0,0,0,10" 
+                               BackgroundColor="{Binding CardBackgroundColor}" 
+                               BorderColor="Transparent">
                             <Grid ColumnDefinitions="*, Auto">
-                                <Label Text="{Binding Name}" Grid.Column="0" VerticalOptions="Center" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                                <Frame Grid.Column="1" BackgroundColor="{Binding RoleColor}" CornerRadius="6" Padding="8,4" HasShadow="False">
+                                <StackLayout Grid.Column="0" VerticalOptions="Center">
+                                    <Label Text="{Binding Name}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                                    <!-- NEW: Shows 'Online' or 'Offline' text right under their name -->
+                                    <Label Text="{Binding StatusDisplay}" FontSize="12" TextColor="Gray" />
+                                </StackLayout>
+
+                                <Frame Grid.Column="1" BackgroundColor="{Binding RoleColor}" CornerRadius="6" Padding="8,4" HasShadow="False" VerticalOptions="Center">
                                     <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="12" FontAttributes="Bold"/>
                                 </Frame>
                             </Grid>

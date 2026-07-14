@@ -940,25 +940,34 @@ public partial class LobbyPage : ContentPage
         {
             // FIX: Build a fresh collection in memory instead of using .Clear() and .Add()
             var updatedRiders = new ObservableCollection<Rider>();
+            string myName = Preferences.Default.Get("username", "Rider");
 
-            foreach (var rider in roster)
+            foreach (var r in roster)
             {
-                if (rider.Name == _myName) rider.Name += " (You)";
+                string displayName = r.Name;
 
-                if (!rider.IsOnline)
+                if (displayName == myName)
+                    displayName += " (You)";
+
+                if (!r.IsOnline)
+                    displayName += " (Offline)";
+
+                updatedRiders.Add(new Rider
                 {
-                    rider.Name += " (Offline)";
-                    // Optional: You can also change the role color to dim it out
-                    // rider.r = Colors.DimGray; 
-                }
-
-                updatedRiders.Add(rider);
+                    Name = displayName,
+                    GoogleId = r.GoogleId,
+                    IsAdmin = r.IsAdmin,
+                    Role = r.Role,
+                    IsOnline = r.IsOnline
+                });
             }
 
             // FIX: Reassigning ItemsSource completely breaks the render cache and forces an instant UI update
             Riders = updatedRiders;
             RidersCollectionView.ItemsSource = Riders;
 
+            StatusLabel.Text = "Connected";
+            StatusDot.BackgroundColor = Colors.MediumSeaGreen;
             // FIX: Ensure the PiP overlay numbers update dynamically as well!
             PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
         });
@@ -1519,34 +1528,43 @@ public partial class LobbyPage : ContentPage
         PitstopSlider.Value = roundedValue;
         PitstopValueLabel.Text = roundedValue == 0 ? "Off" : $"{roundedValue} km";
     }
-     private async void OnRiderTapped(object sender, TappedEventArgs e)
+    private async void OnRiderTapped(object sender, TappedEventArgs e)
     {
-        // 1. Ensure a rider was passed from the CommandParameter
-        if (e.Parameter is not Rider selectedRider) 
+        if (!_amIAdmin || e.Parameter is not Rider selectedRider)
             return;
 
-        // 2. Only Admins can assign roles.
-        if (!_amIAdmin) 
+        if (selectedRider.IsAdmin)
         {
-            // Optional: Give feedback that they don't have permission
-            // await DisplayAlert("Access Denied", "Only the Admin can assign roles.", "OK");
+            await DisplayAlert("Profile", "You are the Admin.", "OK");
             return;
         }
 
-        // 3. Don't let the Admin change their own core role
-        if (selectedRider.IsAdmin) 
-        {
-            await DisplayAlert("Role Assignment", "You cannot change your own Admin role.", "OK");
-            return;
-        }
+        // ADDED: "View Emergency Info" to the action sheet
+        string action = await DisplayActionSheet($"Manage {selectedRider.Name}", "Cancel", null,
+            "View Emergency Info", "Lead", "Tail", "Marshal", "Standard Rider");
 
-        // 4. Pop up the Role Selection Menu
-        string action = await DisplayActionSheet($"Assign role to {selectedRider.Name}", "Cancel", null, "Lead", "Tail", "Marshal", "Standard Rider");
-        
-        if (action != "Cancel" && !string.IsNullOrEmpty(action)) 
+        if (action == "View Emergency Info")
+        {
+            try
+            {
+                var emergencyData = await _signalRService.GetRiderEmergencyInfo(selectedRider.GoogleId);
+                if (emergencyData != null)
+                {
+                    string info = $"Blood Group: {emergencyData.BloodGroup}\n" +
+                                  $"Contact: {emergencyData.EmergencyContact}\n" +
+                                  $"Vehicle: {emergencyData.VehicleNumber}";
+
+                    await DisplayAlert($"{selectedRider.Name}'s Info", info, "Close");
+                }
+            }
+            catch (Exception ex)
+            {
+                await DisplayAlert("Access Denied", ex.Message, "OK");
+            }
+        }
+        else if (action != "Cancel" && !string.IsNullOrEmpty(action))
         {
             string backendRole = action == "Standard Rider" ? "Rider" : action;
-            //Riders.FirstOrDefault(r => r.GoogleId == selectedRider.GoogleId)?.Role = backendRole;
             await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
         }
     }

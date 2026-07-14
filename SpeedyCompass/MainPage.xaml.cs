@@ -1,6 +1,7 @@
-﻿using System.Collections.ObjectModel;
-using Microsoft.Maui.ApplicationModel;
+﻿using Microsoft.Maui.ApplicationModel;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared.Models;
+using System.Collections.ObjectModel;
 
 namespace SpeedyCompass;
 
@@ -8,14 +9,10 @@ public class GroupItemViewModel
 {
     public string GroupName { get; set; }
     public int MemberCount { get; set; }
-    public int MaxGroupSize { get; set; } = 15; // Default
+    public int MaxGroupSize { get; set; }
     public bool IsMyAdmin { get; set; }
     public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Members";
-
-    // Admin can always attempt to re-enter their own group
     public bool CanJoin => IsMyAdmin || MemberCount < MaxGroupSize;
-
-    // Dynamically change the button text
     public string JoinButtonText => IsMyAdmin ? "Enter" : "Join";
 }
 
@@ -44,64 +41,67 @@ public partial class MainPage : ContentPage
 
         if (!string.IsNullOrEmpty(CurrentGoogleId))
         {
-            string serverUsername = await _signalRService.AuthenticateUser(CurrentGoogleId);
+            await ProcessLoginFlow(CurrentGoogleId);
+        }
+        else
+        {
+            LoginView.IsVisible = true;
+            DashboardView.IsVisible = false;
+        }
+    }
 
-            if (!string.IsNullOrEmpty(serverUsername))
+    private async Task ProcessLoginFlow(string googleId)
+    {
+        // Fetch full profile from backend
+        var profile = await _signalRService.AuthenticateUser(googleId);
+
+        if (profile != null)
+        {
+            Preferences.Default.Set("username", profile.Username);
+            WelcomeNameLabel.Text = profile.Username;
+
+            LoginView.IsVisible = false;
+            DashboardView.IsVisible = true;
+
+            // MANDATORY CHECK: Have they filled out the emergency profile?
+            if (!profile.HasConsented || string.IsNullOrEmpty(profile.EmergencyContact))
             {
-                Preferences.Default.Set("username", serverUsername);
-                CheckLoginState();
-                await LoadGroupsAsync();
+                OpenProfileModal(profile, isMandatory: true);
             }
             else
             {
-                Preferences.Default.Remove("GoogleId");
-                Preferences.Default.Remove("username");
-                LoginView.IsVisible = true;
-                DashboardView.IsVisible = false;
+                await LoadGroupsAsync();
             }
         }
         else
         {
-            CheckLoginState();
+            // Invalid session, dump to login
+            Preferences.Default.Remove("GoogleId");
+            Preferences.Default.Remove("username");
+            LoginView.IsVisible = true;
+            DashboardView.IsVisible = false;
         }
     }
 
-    private void CheckLoginState()
-    {
-        if (!string.IsNullOrEmpty(CurrentGoogleId))
-        {
-            LoginView.IsVisible = false;
-            DashboardView.IsVisible = true;
-            UsernameEntry.Text = Preferences.Default.Get("username", "Rider");
-        }
-    }
-
-    // UPDATED: Now handles standard Azure AD Registration/Login!
     private async void OnAzureLoginClicked(object sender, EventArgs e)
     {
         try
         {
-            // 1. Launch the Azure AD B2C Login/Register Browser
             var authResult = await _authService.LoginAsync();
-
             if (authResult != null)
             {
                 string azureId = authResult.UniqueId;
                 string desiredName = authResult.Account.Username ?? "Rider";
 
-                // If they signed up with email, parse the prefix to make a clean default username
-                if (desiredName.Contains("@"))
-                {
-                    desiredName = desiredName.Split('@')[0];
-                }
+                if (desiredName.Contains("@")) desiredName = desiredName.Split('@')[0];
 
-                string registeredId = await _signalRService.RegisterOrUpdateUser(azureId, desiredName);
+                // For a brand new user, we create a default DTO and save it so they exist in CosmosDB
+                var newProfile = new UserProfileDto { Username = desiredName, HasConsented = false };
+                await _signalRService.SaveUserProfile(azureId, newProfile);
 
-                Preferences.Default.Set("GoogleId", registeredId); // We keep the local key name "GoogleId" to avoid breaking existing DB logic
-                Preferences.Default.Set("username", desiredName);
+                Preferences.Default.Set("GoogleId", azureId);
 
-                CheckLoginState();
-                await LoadGroupsAsync();
+                await ProcessLoginFlow(azureId);
             }
         }
         catch (Exception ex)
@@ -110,25 +110,96 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async void OnSaveUsernameClicked(object sender, EventArgs e)
+    // --- PROFILE MODAL LOGIC ---
+    private void OnOpenProfileClicked(object sender, EventArgs e)
     {
-        if (string.IsNullOrWhiteSpace(UsernameEntry.Text)) return;
+        // Opening manually from the Dashboard -> Pre-fill with known preferences and allow canceling
+        var profile = new UserProfileDto
+        {
+            Username = Preferences.Default.Get("username", "Rider"),
+            EmergencyContact = Preferences.Default.Get("EmergencyContact", ""),
+            VehicleNumber = Preferences.Default.Get("VehicleNumber", ""),
+            BloodGroup = Preferences.Default.Get("BloodGroup", "Unknown"),
+            HasConsented = true
+        };
+        OpenProfileModal(profile, isMandatory: false);
+    }
 
-        string originalUsername = Preferences.Default.Get("username", string.Empty);
+    private void OpenProfileModal(UserProfileDto profile, bool isMandatory)
+    {
+        ProfileUsernameEntry.Text = profile.Username;
+        ProfileContactEntry.Text = profile.EmergencyContact;
+        ProfileVehicleEntry.Text = profile.VehicleNumber;
+        ProfileBloodGroupPicker.SelectedItem = string.IsNullOrEmpty(profile.BloodGroup) ? "Unknown" : profile.BloodGroup;
+        ConsentCheckbox.IsChecked = profile.HasConsented;
+
+        if (isMandatory)
+        {
+            ProfileModalTitle.Text = "Complete Setup";
+            ProfileModalSubtitle.Text = "We need this emergency info before you can ride.";
+            CancelProfileButton.IsVisible = false; // Force them to finish
+        }
+        else
+        {
+            ProfileModalTitle.Text = "Edit Profile";
+            ProfileModalSubtitle.Text = "Update your emergency info.";
+            CancelProfileButton.IsVisible = true;
+        }
+
+        ProfileModalOverlay.IsVisible = true;
+    }
+
+    private async void OnSaveProfileClicked(object sender, EventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(ProfileUsernameEntry.Text) || string.IsNullOrWhiteSpace(ProfileContactEntry.Text))
+        {
+            await DisplayAlert("Missing Info", "Username and Emergency Contact are required fields.", "OK");
+            return;
+        }
+
+        if (!ConsentCheckbox.IsChecked)
+        {
+            await DisplayAlert("Consent Required", "You must agree to the data storage policy to use the safety features.", "OK");
+            return;
+        }
+
+        var updatedProfile = new UserProfileDto
+        {
+            Username = ProfileUsernameEntry.Text.Trim(),
+            EmergencyContact = ProfileContactEntry.Text.Trim(),
+            VehicleNumber = ProfileVehicleEntry.Text?.Trim() ?? "",
+            BloodGroup = ProfileBloodGroupPicker.SelectedItem?.ToString() ?? "Unknown",
+            HasConsented = true
+        };
 
         try
         {
-            await _signalRService.RegisterOrUpdateUser(CurrentGoogleId, UsernameEntry.Text.Trim());
-            Preferences.Default.Set("username", UsernameEntry.Text.Trim());
-            await DisplayAlert("Saved", "Username updated successfully.", "OK");
+            bool success = await _signalRService.SaveUserProfile(CurrentGoogleId, updatedProfile);
+            if (success)
+            {
+                Preferences.Default.Set("username", updatedProfile.Username);
+                Preferences.Default.Set("EmergencyContact", updatedProfile.EmergencyContact);
+                Preferences.Default.Set("VehicleNumber", updatedProfile.VehicleNumber);
+                Preferences.Default.Set("BloodGroup", updatedProfile.BloodGroup);
+
+                WelcomeNameLabel.Text = updatedProfile.Username;
+                ProfileModalOverlay.IsVisible = false;
+
+                await LoadGroupsAsync(); // Load groups now that they are authorized
+            }
         }
         catch (Exception ex)
         {
             await DisplayAlert("Error", ex.Message, "OK");
-            UsernameEntry.Text = originalUsername;
         }
     }
 
+    private void OnCancelProfileClicked(object sender, EventArgs e)
+    {
+        ProfileModalOverlay.IsVisible = false;
+    }
+
+    // --- GROUP LOGIC ---
     private async void OnRefreshGroups(object sender, EventArgs e)
     {
         await LoadGroupsAsync();
@@ -162,7 +233,7 @@ public partial class MainPage : ContentPage
 
         try
         {
-            await _signalRService.CreateGroup(groupName, UsernameEntry.Text, CurrentGoogleId);
+            await _signalRService.CreateGroup(groupName, WelcomeNameLabel.Text, CurrentGoogleId);
             Preferences.Default.Set("IsAdmin", true);
             await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));
         }
@@ -178,7 +249,7 @@ public partial class MainPage : ContentPage
                 var groupInfo = AvailableGroups.FirstOrDefault(g => g.GroupName == groupName);
                 bool amIAdmin = groupInfo?.IsMyAdmin ?? false;
 
-                await _signalRService.JoinGroup(groupName, UsernameEntry.Text, CurrentGoogleId);
+                await _signalRService.JoinGroup(groupName, WelcomeNameLabel.Text, CurrentGoogleId);
 
                 Preferences.Default.Set("IsAdmin", amIAdmin);
                 await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));

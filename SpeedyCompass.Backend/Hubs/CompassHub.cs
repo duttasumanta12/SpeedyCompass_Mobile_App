@@ -53,10 +53,77 @@ public class CompassHub : Hub
         return roster;
     }
 
-    public async Task<string?> AuthenticateUser(string googleId)
+    // --- AUTHENTICATION & USER REGISTRY ---
+    public async Task<UserProfileDto?> AuthenticateUser(string googleId)
     {
         var account = await _state.UserAccounts.Find(u => u.GoogleId == googleId).FirstOrDefaultAsync();
-        return account?.Username ?? string.Empty;
+        if (account == null) return null;
+
+        // DECRYPT before sending back to the owning user
+        return new UserProfileDto
+        {
+            Username = account.Username,
+            EmergencyContact = EncryptionHelper.Decrypt(account.EmergencyContact),
+            VehicleNumber = EncryptionHelper.Decrypt(account.VehicleNumber),
+            BloodGroup = EncryptionHelper.Decrypt(account.BloodGroup),
+            HasConsented = account.HasConsented
+        };
+    }
+    public async Task<bool> SaveUserProfile(string googleId, UserProfileDto profile)
+    {
+        if (string.IsNullOrEmpty(googleId) || string.IsNullOrWhiteSpace(profile.Username))
+            throw new HubException("Invalid profile data.");
+
+        var owner = await _state.UserAccounts.Find(u => u.Username.ToLower() == profile.Username.ToLower()).FirstOrDefaultAsync();
+        if (owner != null && owner.GoogleId != googleId)
+        {
+            throw new HubException($"The username '{profile.Username}' is already taken.");
+        }
+
+        // ENCRYPT the PII fields before they touch the database
+        var update = Builders<UserAccount>.Update
+            .Set(u => u.Username, profile.Username.Trim())
+            .Set(u => u.EmergencyContact, EncryptionHelper.Encrypt(profile.EmergencyContact?.Trim() ?? ""))
+            .Set(u => u.VehicleNumber, EncryptionHelper.Encrypt(profile.VehicleNumber?.Trim() ?? ""))
+            .Set(u => u.BloodGroup, EncryptionHelper.Encrypt(profile.BloodGroup ?? ""))
+            .Set(u => u.HasConsented, profile.HasConsented);
+
+        await _state.UserAccounts.UpdateOneAsync(
+            u => u.GoogleId == googleId,
+            update,
+            new UpdateOptions { IsUpsert = true }
+        );
+
+        return true;
+    }
+
+    // NEW: Secure Admin Endpoint for Emergency Access
+    public async Task<UserProfileDto?> GetRiderEmergencyInfo(string targetGoogleId)
+    {
+        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
+        if (caller == null) return null;
+
+        // 1. Verify the target is actually in the caller's group
+        var targetSession = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == targetGoogleId);
+        if (targetSession == null || targetSession.GroupName != caller.GroupName)
+            throw new HubException("Target rider is not in your group.");
+
+        // 2. Verify the caller is the strict Admin of that group
+        var groupSession = await _state.ActiveGroups.Find(g => g.GroupName == caller.GroupName).FirstOrDefaultAsync();
+        if (groupSession == null || groupSession.AdminGoogleId != caller.GoogleId)
+            throw new HubException("Access Denied: Only the Group Admin can view emergency information.");
+
+        // 3. Fetch and decrypt the profile
+        var account = await _state.UserAccounts.Find(u => u.GoogleId == targetGoogleId).FirstOrDefaultAsync();
+        if (account == null) return null;
+
+        return new UserProfileDto
+        {
+            Username = account.Username,
+            EmergencyContact = EncryptionHelper.Decrypt(account.EmergencyContact),
+            VehicleNumber = EncryptionHelper.Decrypt(account.VehicleNumber),
+            BloodGroup = EncryptionHelper.Decrypt(account.BloodGroup)
+        };
     }
 
     public async Task<string> RegisterOrUpdateUser(string currentGoogleId, string desiredUsername)

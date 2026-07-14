@@ -27,5 +27,24 @@ namespace SpeedyCompass.Models
             }
         }
         public bool IsOnline { get; internal set; } = true;
+        // NEW: Dynamic background color based on Online Status and Device Theme
+        public Color CardBackgroundColor
+        {
+            get
+            {
+                bool isDark = Application.Current?.RequestedTheme == AppTheme.Dark;
+
+                if (IsOnline)
+                {
+                    // Standard colors for active riders
+                    return isDark ? Color.FromArgb("#2C2C2C") : Color.FromArgb("#F9F9F9");
+                }
+                else
+                {
+                    // Faded red/danger tint for offline riders
+                    return isDark ? Color.FromArgb("#4A2A2A") : Color.FromArgb("#FFEEEE");
+                }
+            }
+        }
     }
 }

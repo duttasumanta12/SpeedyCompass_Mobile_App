@@ -6,38 +6,26 @@
 
     <Grid>
         <!-- LOGIN VIEW -->
-        <VerticalStackLayout x:Name="LoginView" 
-                             VerticalOptions="Center" 
-                             HorizontalOptions="Center" 
-                             Spacing="20" 
-                             Padding="30">
-
+        <VerticalStackLayout x:Name="LoginView" VerticalOptions="Center" HorizontalOptions="Center" Spacing="20" Padding="30">
             <Label Text="SpeedyCompass" FontSize="36" FontAttributes="Bold" HorizontalOptions="Center" TextColor="DodgerBlue"/>
             <Label Text="Ride together. Stay connected." FontSize="16" TextColor="Gray" HorizontalOptions="Center" Margin="0,0,0,20"/>
-
-            <!-- UPGRADED BUTTON: Triggers the Azure AD B2C Sign Up / Sign In Flow -->
-            <Button Text="Register / Login with Email" 
-                    BackgroundColor="DodgerBlue" 
-                    TextColor="White" 
-                    CornerRadius="10" 
-                    HeightRequest="55" 
-                    FontAttributes="Bold" 
-                    Clicked="OnAzureLoginClicked" 
-                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
+            <Button Text="Register / Login with Email" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="10" HeightRequest="55" FontAttributes="Bold" Clicked="OnAzureLoginClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
         </VerticalStackLayout>
 
         <!-- DASHBOARD VIEW -->
         <Grid x:Name="DashboardView" IsVisible="False" RowDefinitions="Auto, Auto, *">
 
-            <!-- Header & Profile -->
+            <!-- HEADER (UPDATED) -->
             <Frame Grid.Row="0" BackgroundColor="DodgerBlue" CornerRadius="0" HasShadow="True" Padding="20,40,20,20">
-                <StackLayout Spacing="10">
-                    <Label Text="Welcome to SpeedyCompass," TextColor="LightCyan" FontSize="14"/>
-                    <Grid ColumnDefinitions="*, Auto">
-                        <Entry x:Name="UsernameEntry" Grid.Column="0" TextColor="White" FontSize="24" FontAttributes="Bold" BackgroundColor="Transparent" ClearButtonVisibility="WhileEditing"/>
-                        <Button Grid.Column="1" Text="Save" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="8" Clicked="OnSaveUsernameClicked"/>
-                    </Grid>
-                </StackLayout>
+                <Grid ColumnDefinitions="*, Auto">
+                    <StackLayout Grid.Column="0" Spacing="2" VerticalOptions="Center">
+                        <Label Text="Welcome back," TextColor="LightCyan" FontSize="14"/>
+                        <Label x:Name="WelcomeNameLabel" Text="Rider" TextColor="White" FontSize="26" FontAttributes="Bold" LineBreakMode="TailTruncation"/>
+                    </StackLayout>
+
+                    <!-- New Profile Edit Button -->
+                    <Button Grid.Column="1" Text="👤 Profile" BackgroundColor="#33FFFFFF" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="45" Clicked="OnOpenProfileClicked" VerticalOptions="Center"/>
+                </Grid>
             </Frame>
 
             <!-- Create Group -->
@@ -64,9 +52,7 @@
                                     </StackLayout>
 
                                     <StackLayout Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="10" VerticalOptions="Center">
-                                        <!-- Only Admin can delete -->
                                         <Button Text="✖" BackgroundColor="Red" TextColor="White" CornerRadius="20" WidthRequest="40" HeightRequest="40" IsVisible="{Binding IsMyAdmin}" Clicked="OnDeleteGroupClicked" CommandParameter="{Binding GroupName}"/>
-                                        <!-- Dynamic Join/Enter button (Disabled if full) -->
                                         <Button Text="{Binding JoinButtonText}" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="8" Clicked="OnJoinGroupClicked" CommandParameter="{Binding GroupName}" IsEnabled="{Binding CanJoin}"/>
                                     </StackLayout>
                                 </Grid>
@@ -76,5 +62,75 @@
                 </CollectionView>
             </RefreshView>
         </Grid>
+
+        <!-- FULL SCREEN RIDER PROFILE MODAL -->
+        <Grid x:Name="ProfileModalOverlay" BackgroundColor="#CC000000" IsVisible="False" InputTransparent="False" ZIndex="2000" Padding="20">
+            <Frame VerticalOptions="Center" CornerRadius="20" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" BorderColor="Transparent" Padding="25">
+                <ScrollView>
+                    <StackLayout Spacing="15">
+                        <Label x:Name="ProfileModalTitle" Text="Rider Profile" FontSize="24" FontAttributes="Bold" HorizontalOptions="Center"/>
+                        <Label x:Name="ProfileModalSubtitle" Text="Complete your emergency info before riding." FontSize="14" TextColor="Gray" HorizontalOptions="Center" HorizontalTextAlignment="Center" Margin="0,0,0,10"/>
+
+                        <!-- Username -->
+                        <StackLayout Spacing="5">
+                            <Label Text="Rider Name / Alias" FontAttributes="Bold" FontSize="14"/>
+                            <Frame CornerRadius="8" Padding="10,0" HasShadow="False" BorderColor="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" HeightRequest="45">
+                                <Entry x:Name="ProfileUsernameEntry" Placeholder="e.g. Maverick" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                            </Frame>
+                        </StackLayout>
+
+                        <!-- Blood Group -->
+                        <StackLayout Spacing="5">
+                            <Label Text="Blood Group" FontAttributes="Bold" FontSize="14"/>
+                            <Frame CornerRadius="8" Padding="10,0" HasShadow="False" BorderColor="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" HeightRequest="45">
+                                <Picker x:Name="ProfileBloodGroupPicker" Title="Select Blood Group" BackgroundColor="Transparent" VerticalOptions="Center">
+                                    <Picker.ItemsSource>
+                                        <x:Array Type="{x:Type x:String}">
+                                            <x:String>A+</x:String>
+                                            <x:String>A-</x:String>
+                                            <x:String>B+</x:String>
+                                            <x:String>B-</x:String>
+                                            <x:String>AB+</x:String>
+                                            <x:String>AB-</x:String>
+                                            <x:String>O+</x:String>
+                                            <x:String>O-</x:String>
+                                            <x:String>Unknown</x:String>
+                                        </x:Array>
+                                    </Picker.ItemsSource>
+                                </Picker>
+                            </Frame>
+                        </StackLayout>
+
+                        <!-- Emergency Contact -->
+                        <StackLayout Spacing="5">
+                            <Label Text="Emergency Contact Phone" FontAttributes="Bold" FontSize="14"/>
+                            <Frame CornerRadius="8" Padding="10,0" HasShadow="False" BorderColor="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" HeightRequest="45">
+                                <Entry x:Name="ProfileContactEntry" Placeholder="e.g. +1 555-0199" Keyboard="Telephone" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                            </Frame>
+                        </StackLayout>
+
+                        <!-- Vehicle Number -->
+                        <StackLayout Spacing="5">
+                            <Label Text="Vehicle License Plate (Optional)" FontAttributes="Bold" FontSize="14"/>
+                            <Frame CornerRadius="8" Padding="10,0" HasShadow="False" BorderColor="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" HeightRequest="45">
+                                <Entry x:Name="ProfileVehicleEntry" Placeholder="e.g. ABC-1234" TextTransform="Uppercase" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                            </Frame>
+                        </StackLayout>
+
+                        <!-- Data Privacy Consent Box -->
+                        <Frame BackgroundColor="#1A0099FF" BorderColor="DodgerBlue" CornerRadius="10" Padding="15" Margin="0,10,0,0">
+                            <Grid ColumnDefinitions="Auto, *">
+                                <CheckBox x:Name="ConsentCheckbox" Grid.Column="0" VerticalOptions="Start" Color="DodgerBlue"/>
+                                <Label Grid.Column="1" Text="I acknowledge and consent to SpeedyCompass securely storing this personal and medical information in the cloud solely for emergency broadcast purposes during a ride." FontSize="12" TextColor="Gray" VerticalOptions="Center"/>
+                            </Grid>
+                        </Frame>
+
+                        <Button Text="Save &amp; Continue" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="10" HeightRequest="50" Clicked="OnSaveProfileClicked" Margin="0,15,0,0"/>
+                        <Button x:Name="CancelProfileButton" Text="Cancel" BackgroundColor="Transparent" TextColor="Gray" FontAttributes="Bold" Clicked="OnCancelProfileClicked" IsVisible="True"/>
+                    </StackLayout>
+                </ScrollView>
+            </Frame>
+        </Grid>
+
     </Grid>
 </ContentPage>

@@ -40,8 +40,8 @@ public class SignalRService
             // Switch to HTTPS and standard ASP.NET Core HTTPS ports (e.g., 5001 or 7001)
             // Note: Check your backend's launchSettings.json to ensure the https port is correct
             string baseUrl = DeviceInfo.Platform == DevicePlatform.Android
-            ? //"https://10.0.2.2:7219" 
-            "https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
+            ?"https://10.0.2.2:7219" 
+             //"https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
                 : "https://localhost:5001"; // iOS Simulator and Windows/Mac use standard localhost
 
             // IMPORTANT: If testing on PHYSICAL devices on your local Wi-Fi, 
@@ -230,17 +230,22 @@ public class SignalRService
             await _hubConnection.InvokeAsync("ReleasePtt", groupName, userName);
     }
     // --- NEW: AUTHENTICATION WRAPPERS ---
-    public async Task<string?> AuthenticateUser(string googleId)
+    // UPDATED: Return the full profile DTO
+    public async Task<UserProfileDto?> AuthenticateUser(string googleId)
     {
-        try
-        {
-            return await _hubConnection.InvokeAsync<string?>("AuthenticateUser", googleId);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(AuthenticateUser), ex);
-            return null;
-        }
+        try { return await _hubConnection.InvokeAsync<UserProfileDto>("AuthenticateUser", googleId); }
+        catch (Exception ex) { LogException(nameof(AuthenticateUser), ex); return null; }
+    }
+    public async Task<bool> SaveUserProfile(string googleId, UserProfileDto profile)
+    {
+        try { return await _hubConnection.InvokeAsync<bool>("SaveUserProfile", googleId, profile); }
+        catch (Exception ex) { LogException(nameof(SaveUserProfile), ex); return false; }
+    }
+    // NEW: Fetch Emergency Info
+    public async Task<UserProfileDto?> GetRiderEmergencyInfo(string targetGoogleId)
+    {
+        try { return await _hubConnection.InvokeAsync<UserProfileDto>("GetRiderEmergencyInfo", targetGoogleId); }
+        catch (Exception ex) { LogException(nameof(GetRiderEmergencyInfo), ex); return null; }
     }
     // UPDATE: Add maxGroupSize to the parameter list
     public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDistance, int maxGroupSize)
