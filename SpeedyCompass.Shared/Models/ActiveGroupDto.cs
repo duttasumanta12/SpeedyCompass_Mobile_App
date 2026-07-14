@@ -1,4 +1,4 @@
-﻿namespace SpeedyCompass.Models;
+﻿namespace SpeedyCompass.Shared.Models;
 
 public class ActiveGroupDto
 {

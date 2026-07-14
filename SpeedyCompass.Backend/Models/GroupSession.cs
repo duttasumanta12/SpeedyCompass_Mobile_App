@@ -26,4 +26,6 @@ public class GroupSettings
     public string SweepRiderGoogleId { get; set; } = string.Empty;
     // NEW: Configurable Max Group Size (Default to 15, max 20)
     public int MaxGroupSize { get; set; } = 15;
+    // NEW: Configurable Pitstop Reminder Distance (Default 100km)
+    public int PitstopDistanceMeters { get; set; } = 100000;
 }

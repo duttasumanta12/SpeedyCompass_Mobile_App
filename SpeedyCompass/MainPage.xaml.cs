@@ -194,7 +194,7 @@ public partial class MainPage : ContentPage
             bool confirm = await DisplayAlert("Delete Group", $"Are you sure you want to delete {groupName}?", "Yes", "No");
             if (confirm)
             {
-                await _signalRService.DeleteGroup(groupName);
+                await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
                 await LoadGroupsAsync();
             }
         }

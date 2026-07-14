@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using SpeedyCompass.Models;
+using SpeedyCompass.Shared.Models;
 using System.Net.Http;
 using System.Net.Security;
 #if ANDROID
@@ -39,7 +40,8 @@ public class SignalRService
             // Switch to HTTPS and standard ASP.NET Core HTTPS ports (e.g., 5001 or 7001)
             // Note: Check your backend's launchSettings.json to ensure the https port is correct
             string baseUrl = DeviceInfo.Platform == DevicePlatform.Android
-            ? "https://10.0.2.2:7219" //"https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
+            ? //"https://10.0.2.2:7219" 
+            "https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
                 : "https://localhost:5001"; // iOS Simulator and Windows/Mac use standard localhost
 
             // IMPORTANT: If testing on PHYSICAL devices on your local Wi-Fi, 
@@ -252,16 +254,11 @@ public class SignalRService
         try { await _hubConnection.InvokeAsync("AssignRole", groupName, targetGoogleId, role); }
         catch (Exception ex) { LogException(nameof(AssignRole), ex); }
     }
-    public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDistance)
+    // UPDATE: Add pitstopDist to the parameter list
+    public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDistance, int maxGroupSize, int pitstopDist)
     {
-        try
-        {
-            await _hubConnection.InvokeAsync("UpdateGroupSettings", groupName, maxLag, splinterDistance);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(UpdateGroupSettings), ex);
-        }
+        try { await _hubConnection.InvokeAsync("UpdateGroupSettings", groupName, maxLag, splinterDistance, maxGroupSize, pitstopDist); }
+        catch (Exception ex) { LogException(nameof(UpdateGroupSettings), ex); }
     }
 
     public async Task<bool> CheckGroupExists(string groupName)
@@ -365,6 +362,16 @@ public class SignalRService
             LogException(nameof(UpdateLocation), ex);
         }
     }
+    // 4. NEW: Call the hub to fetch the settings
+    public async Task<GroupSettingsDto> GetGroupSettings(string groupName)
+    {
+        try { return await _hubConnection.InvokeAsync<GroupSettingsDto>("GetGroupSettings", groupName); }
+        catch (Exception ex)
+        {
+            LogException(nameof(GetGroupSettings), ex);
+            return null;
+        }
+    }
     public async Task SendGroupAlert(string groupName, string alertType, string senderName)
     {
         try
@@ -417,14 +424,19 @@ public class SignalRService
         await _hubConnection.InvokeAsync("JoinGroup", groupName, userName, googleId);
     }
 
-    public async Task LeaveGroup()
+    // UPDATE: Pass googleId to the backend
+    public async Task LeaveGroup(string googleId)
     {
-        // Clear state so we don't try to reconnect to a group we left
-        _activeGroupName = string.Empty;
-        await _hubConnection.InvokeAsync("LeaveGroup");
+        try { await _hubConnection.InvokeAsync("LeaveGroup", googleId); }
+        catch (Exception ex) { LogException(nameof(LeaveGroup), ex); }
     }
 
-    public async Task DeleteGroup(string groupName) => await _hubConnection.InvokeAsync("DeleteGroup", groupName);
+    // UPDATE: Pass googleId to the backend
+    public async Task DeleteGroup(string groupName, string googleId)
+    {
+        try { await _hubConnection.InvokeAsync("DeleteGroup", groupName, googleId); }
+        catch (Exception ex) { LogException(nameof(DeleteGroup), ex); }
+    }
 
     // Global Console Logger Helper
     private void LogException(string context, Exception ex)

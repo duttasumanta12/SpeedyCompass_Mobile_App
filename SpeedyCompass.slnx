@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="SpeedyCompass.Backend/SpeedyCompass.Backend.csproj" Id="2a7b5d1f-6f18-4d76-80ea-921d179ae4f1" />
+  <Project Path="SpeedyCompass.Shared/SpeedyCompass.Shared.csproj" Id="887ff5d9-1b64-459b-a939-c4f2b2a0be52" />
   <Project Path="SpeedyCompass/SpeedyCompass.csproj">
-    <Deploy Solution="Debug|*" />
+    <Deploy />
   </Project>
 </Solution>

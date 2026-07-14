@@ -106,4 +106,8 @@
 	  <Folder Include="ControlHandlers\" />
 	</ItemGroup>
 
+	<ItemGroup>
+	  <ProjectReference Include="..\SpeedyCompass.Shared\SpeedyCompass.Shared.csproj" />
+	</ItemGroup>
+
 </Project>
