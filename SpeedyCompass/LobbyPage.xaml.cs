@@ -305,13 +305,14 @@ public partial class LobbyPage : ContentPage
             {
                 _myPinVm.Location = e.Location;
                 _myPinVm.Speed = $"{Math.Round(e.SpeedMph)} mph";
+                _myPinVm.Heading = e.Heading;
             }
 
-            if (_routeIsActive)
-            {
-                await LiveMap.RotateTo(360 - e.Heading, 500, Easing.SinInOut);
-                LiveMap.Scale = 1.4;
-            }
+            //if (_routeIsActive)
+            //{
+            //    await LiveMap.RotateTo(360 - e.Heading, 500, Easing.SinInOut);
+            //    LiveMap.Scale = 1.4;
+            //}
         });
     }
 
@@ -597,7 +598,6 @@ public partial class LobbyPage : ContentPage
 
             // FIX: Ensure StartNavButton hides, while Action panels show
             StartNavButton.IsVisible = true;
-            //ActionDrawer.IsVisible = true;
             ActionDrawer.TranslationY = 300;
             FloatingControlsLayout.TranslationY = 0;
             MinimizePanelButton.IsVisible = true;
@@ -618,7 +618,7 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_currentRoutePoints != null && _currentRoutePoints.Any() && !_isSimulating)
             {
-                _ = SimulateMovementAlongRouteAsync();
+                //_ = SimulateMovementAlongRouteAsync();
             }
 #endif
         }
