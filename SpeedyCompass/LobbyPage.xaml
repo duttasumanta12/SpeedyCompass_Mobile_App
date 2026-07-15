@@ -68,18 +68,37 @@
             <CollectionView x:Name="RidersCollectionView" Grid.Row="4" SelectionMode="None">
                 <CollectionView.ItemTemplate>
                     <DataTemplate x:DataType="local:Rider">
-                        <!-- UPDATE: Changed BackgroundColor to bind to our dynamic CardBackgroundColor -->
-                        <Frame CornerRadius="8" HasShadow="False" Padding="15" Margin="0,0,0,10" 
-                               BackgroundColor="{Binding CardBackgroundColor}" 
-                               BorderColor="Transparent">
-                            <Grid ColumnDefinitions="*, Auto">
-                                <StackLayout Grid.Column="0" VerticalOptions="Center">
-                                    <Label Text="{Binding Name}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                                    <!-- NEW: Shows 'Online' or 'Offline' text right under their name -->
-                                    <Label Text="{Binding StatusDisplay}" FontSize="12" TextColor="Gray" />
-                                </StackLayout>
+                        <Frame CornerRadius="8" HasShadow="False" Padding="15" Margin="0,0,0,10" BackgroundColor="{Binding CardBackgroundColor}" BorderColor="Transparent">
 
-                                <Frame Grid.Column="1" BackgroundColor="{Binding RoleColor}" CornerRadius="6" Padding="8,4" HasShadow="False" VerticalOptions="Center">
+                            <!-- 2. THE FIX: Explicitly pass the current Rider object to the C# code -->
+                            <Frame.GestureRecognizers>
+                                <TapGestureRecognizer Tapped="OnRiderTapped" CommandParameter="{Binding .}" />
+                            </Frame.GestureRecognizers>
+
+                            <!-- Updated Grid to fit the new Status Dot -->
+                            <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="12">
+
+                                <!-- THE FIX: Replaced BoxView with a perfect Shape Ellipse -->
+                                <Ellipse Grid.Column="0" 
+                             WidthRequest="12" 
+                             HeightRequest="12" 
+                             VerticalOptions="Center"
+                             StrokeThickness="0">
+                                    <Ellipse.Triggers>
+                                        <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="True">
+                                            <Setter Property="Fill" Value="MediumSeaGreen" />
+                                        </DataTrigger>
+                                        <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="False">
+                                            <Setter Property="Fill" Value="Red" />
+                                        </DataTrigger>
+                                    </Ellipse.Triggers>
+                                </Ellipse>
+
+                                <!-- Rider Name -->
+                                <Label Text="{Binding Name}" Grid.Column="1" VerticalOptions="Center" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+
+                                <!-- Role Badge -->
+                                <Frame Grid.Column="2" BackgroundColor="{Binding RoleColor}" CornerRadius="6" Padding="8,4" HasShadow="False">
                                     <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="12" FontAttributes="Bold"/>
                                 </Frame>
                             </Grid>
@@ -122,6 +141,20 @@
                         Clicked="OnRecenterMapClicked"
                         HorizontalOptions="End"
                         Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+
+                <!-- NEW: MAP TELEMETRY BUTTON (So you can open it while navigating) -->
+                <Button x:Name="MapTelemetryButton" 
+                    Text="📊 Stats" 
+                    BackgroundColor="#2C3E50" 
+                    TextColor="White" 
+                    WidthRequest="90" 
+                    HeightRequest="55" 
+                    CornerRadius="27" 
+                    FontSize="14" 
+                    FontAttributes="Bold"
+                    Clicked="OnTelemetryOverlayClicked"
+                    HorizontalOptions="End"
+                    Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
 
                 <!-- STANDALONE GMAP BUTTON -->
                 <Button x:Name="StartNavButton" 
@@ -385,5 +418,43 @@
                 </StackLayout>
             </Frame>
         </Grid>
+
+        <!-- STREAMING_CHUNK: Telemetry Dashboard Overlay -->
+        <!-- ===================================================================== -->
+        <!-- NEW: LIVE TELEMETRY DASHBOARD OVERLAY (Scrollable & Pop-up) -->
+        <Grid x:Name="TelemetryDashboardOverlay" Grid.RowSpan="2" BackgroundColor="#CC000000" IsVisible="False" ZIndex="2600" Padding="20">
+            <Frame VerticalOptions="Center" CornerRadius="20" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" BorderColor="Transparent" Padding="20" MaximumHeightRequest="500">
+                <Grid RowDefinitions="Auto, *, Auto">
+                    <Label Text="Live Telemetry Engine" FontAttributes="Bold" FontSize="20" HorizontalOptions="Center" Margin="0,0,0,15" />
+
+                    <!-- Scrollable List of every rider -->
+                    <CollectionView Grid.Row="1" x:Name="TelemetryCollectionView">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate>
+                                <Frame CornerRadius="10" Padding="12" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#2A2A2A}" HasShadow="False" BorderColor="Transparent">
+                                    <Grid ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto">
+                                        <!-- Rider Name -->
+                                        <Label Grid.Row="0" Grid.Column="0" Text="{Binding Name}" FontAttributes="Bold" FontSize="16" TextColor="{AppThemeBinding Light=Black, Dark=White}" />
+
+                                        <!-- Live Speed -->
+                                        <Label Grid.Row="0" Grid.Column="1" Text="{Binding SpeedDisplay}" FontAttributes="Bold" TextColor="DodgerBlue" FontSize="16" />
+
+                                        <!-- Delta Status (Ahead/Behind distance) -->
+                                        <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding StatusDisplay}" TextColor="{Binding StatusColor}" FontSize="14" FontAttributes="Bold" Margin="0,4,0,0" />
+                                    </Grid>
+                                </Frame>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+
+                    <!-- Action Buttons -->
+                    <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="15" Margin="0,15,0,0">
+                        <Button Grid.Column="0" Text="Refresh Data" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="10" HeightRequest="50" FontAttributes="Bold" Clicked="OnRefreshTelemetryClicked" />
+                        <Button Grid.Column="1" Text="Close" BackgroundColor="Transparent" TextColor="Gray" FontAttributes="Bold" Clicked="OnCloseTelemetryClicked" />
+                    </Grid>
+                </Grid>
+            </Frame>
+        </Grid>
+        <!-- ===================================================================== -->
     </Grid>
 </ContentPage>

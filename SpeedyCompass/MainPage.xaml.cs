@@ -96,8 +96,8 @@ public partial class MainPage : ContentPage
                 if (desiredName.Contains("@")) desiredName = desiredName.Split('@')[0];
 
                 // For a brand new user, we create a default DTO and save it so they exist in CosmosDB
-                var newProfile = new UserProfileDto { Username = desiredName, HasConsented = false };
-                await _signalRService.SaveUserProfile(azureId, newProfile);
+                //var newProfile = new UserProfileDto { Username = desiredName, HasConsented = false };
+                //await _signalRService.SaveUserProfile(azureId, newProfile);
 
                 Preferences.Default.Set("GoogleId", azureId);
 

@@ -616,7 +616,7 @@ public partial class LobbyPage : ContentPage
             MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
 
 #if DEBUG
-            if (_currentRoutePoints != null && _currentRoutePoints.Any())
+            if (_currentRoutePoints != null && _currentRoutePoints.Any() && !_isSimulating)
             {
                 _ = SimulateMovementAlongRouteAsync();
             }
@@ -977,61 +977,49 @@ public partial class LobbyPage : ContentPage
     {
         base.OnDisappearing();
 
-        // THE MAGIC FIX: Determine if we are navigating away (Back button) vs minimizing the app
-        // If the page is no longer in the stack, it was popped via the Back button.
-        bool isPopping = Navigation?.NavigationStack?.Contains(this) == false;
 
-        if (isPopping)
+        // --- THE USER IS ACTUALLY LEAVING THIS PAGE (BACK BUTTON) ---
+
+        // 1. Unsubscribe from ALL events to prevent memory leaks
+        // Hook up SignalR events
+        _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        _signalRService.RosterUpdated -= OnRosterUpdated;
+        _signalRService.NavigationStarted -= OnNavigationStarted;
+        _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
+        _signalRService.NavigationCancelled -= OnNavigationCancelled; // NEW
+        _signalRService.AlertReceived -= OnAlertReceived;
+        _signalRService.DestinationSet -= OnDestinationSet;
+        _signalRService.UserJoinedAlert -= OnUserJoined;
+        _signalRService.UserLeftAlert -= OnUserLeft;
+        _signalRService.GroupDeleted -= OnGroupDeleted;
+        // Unsubscribe from SignalR PTT Events
+        _signalRService.PttLocked -= OnPttLocked;
+        _signalRService.PttDenied -= OnPttDenied;
+        _signalRService.PttReleased -= OnPttReleased;
+        if (_hwButtonService != null)
         {
-            // --- THE USER IS ACTUALLY LEAVING THIS PAGE (BACK BUTTON) ---
+            _hwButtonService.PttPressed -= OnHardwarePttPressed;
+            _hwButtonService.PttReleased -= OnHardwarePttReleased;
+        }
 
-            // 1. Unsubscribe from ALL events to prevent memory leaks
-            _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
-            _signalRService.RosterUpdated -= OnRosterUpdated;
-            _signalRService.NavigationStarted -= OnNavigationStarted;
-            _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
-            _signalRService.NavigationCancelled -= OnNavigationCancelled;
-            _signalRService.DestinationSet -= OnDestinationSet; // Re-added from previous context if you had it
-            _signalRService.UserJoinedAlert -= OnUserJoined;
-            _signalRService.UserLeftAlert -= OnUserLeft;
-            _signalRService.GroupDeleted -= OnGroupDeleted;
-            _signalRService.PttLocked -= OnPttLocked;
-            _signalRService.PttDenied -= OnPttDenied;
-            _signalRService.PttReleased -= OnPttReleased;
-
-            if (_hwButtonService != null)
-            {
-                _hwButtonService.PttPressed -= OnHardwarePttPressed;
-                _hwButtonService.PttReleased -= OnHardwarePttReleased;
-            }
-
-            // 2. Stop all location tracking (Using our clean cross-platform interface)
-            _isTracking = false;
-            _isSimulating = false;
-            _locationTracker?.StopTracking();
+        // 2. Stop all location tracking (Using our clean cross-platform interface)
+        _isTracking = false;
+        _isSimulating = false;
+        _locationTracker?.StopTracking();
 
 #if ANDROID
-            // 3. Clean up Android Picture-in-Picture mode
-            MainActivity.OnPiPModeChangedEvent -= HandlePiPModeChanged;
-            MainActivity.IsInNavigationMode = false;
+        // 3. Clean up Android Picture-in-Picture mode
+        MainActivity.OnPiPModeChangedEvent -= HandlePiPModeChanged;
+        MainActivity.IsInNavigationMode = false;
 #endif
 
-            // 4. Handle Server Teardown (Only if they didn't hit "Leave Group" explicitly)
-            if (!_isLeavingGroupPermanently)
-            {
-                // Tell the server we stepped back to the MainPage. 
-                // Note: The backend Hub's LeaveLobby() method automatically pauses 
-                // the route for everyone if an Admin leaves, so we don't need redundant code here!
-                _ = _signalRService.LeaveLobby();
-            }
-        }
-        else
+        // 4. Handle Server Teardown (Only if they didn't hit "Leave Group" explicitly)
+        if (!_isLeavingGroupPermanently)
         {
-            // --- THE USER LOCKED THE SCREEN OR MINIMIZED ---
-            // Do NOTHING! 
-            // - The OS LocationManager will keep firing in the background.
-            // - SignalR stays connected.
-            // - The UI will instantly update when the screen turns back on.
+            // Tell the server we stepped back to the MainPage. 
+            // Note: The backend Hub's LeaveLobby() method automatically pauses 
+            // the route for everyone if an Admin leaves, so we don't need redundant code here!
+            _ = _signalRService.LeaveLobby();
         }
     }
     private void MapPinClicked(RiderPin pin)
@@ -1530,16 +1518,18 @@ public partial class LobbyPage : ContentPage
     }
     private async void OnRiderTapped(object sender, TappedEventArgs e)
     {
-        if (!_amIAdmin || e.Parameter is not Rider selectedRider)
-            return;
-
-        if (selectedRider.IsAdmin)
+        if (!_amIAdmin)
         {
-            await DisplayAlert("Profile", "You are the Admin.", "OK");
+            await DisplayAlert("Permission Denied", "Only the Admin can assign roles or view emergency info.", "OK");
             return;
         }
 
-        // ADDED: "View Emergency Info" to the action sheet
+        if (e.Parameter is not Rider selectedRider)
+        {
+            await DisplayAlert("Error", "Could not identify the selected rider from the UI.", "OK");
+            return;
+        }
+
         string action = await DisplayActionSheet($"Manage {selectedRider.Name}", "Cancel", null,
             "View Emergency Info", "Lead", "Tail", "Marshal", "Standard Rider");
 
@@ -1565,6 +1555,18 @@ public partial class LobbyPage : ContentPage
         else if (action != "Cancel" && !string.IsNullOrEmpty(action))
         {
             string backendRole = action == "Standard Rider" ? "Rider" : action;
+
+            // NEW RULE: Admin cannot step down from being Lead unless someone else is already assigned as Lead
+            if (selectedRider.IsAdmin && backendRole != "Lead")
+            {
+                bool hasOtherLead = Riders.Any(r => r.GoogleId != selectedRider.GoogleId && r.Role == "Lead");
+                if (!hasOtherLead)
+                {
+                    await DisplayAlert("Action Denied", "At least another rider should be the Lead before you reassign yourself.", "OK");
+                    return;
+                }
+            }
+
             await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
         }
     }
@@ -1590,5 +1592,31 @@ public partial class LobbyPage : ContentPage
             OverviewButton.IsVisible = true;
             ResumeNavButton.IsVisible = false;
         }
+    }
+    // --- TELEMETRY DASHBOARD CLICK EVENTS ---
+    private async void OnTelemetryOverlayClicked(object sender, EventArgs e)
+    {
+        TelemetryDashboardOverlay.IsVisible = true;
+        await RefreshTelemetryData();
+    }
+
+    private async void OnRefreshTelemetryClicked(object sender, EventArgs e)
+    {
+        await RefreshTelemetryData();
+    }
+
+    private void OnCloseTelemetryClicked(object sender, EventArgs e)
+    {
+        TelemetryDashboardOverlay.IsVisible = false;
+    }
+
+    private async Task RefreshTelemetryData()
+    {
+        var data = await _signalRService.GetGroupTelemetry(GroupNameLabel.Text);
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            TelemetryCollectionView.ItemsSource = data;
+        });
     }
 }

@@ -215,6 +215,7 @@ public class CompassHub : Hub
             await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
     }
 
+    // --- LOBBY VS GROUP LIFECYCLE ---
     public async Task LeaveLobby()
     {
         var rider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
@@ -224,7 +225,7 @@ public class CompassHub : Hub
             await Clients.Group(rider.GroupName).SendAsync("UserOfflineAlert", rider.UserName);
             await Clients.Group(rider.GroupName).SendAsync("RosterUpdated", await GetGroupRoster(rider.GroupName));
 
-            // IDEA 1: Dead-zone Voice Announcement
+            // Dead-zone Voice Announcement
             await Clients.Group(rider.GroupName).SendAsync("ReceiveAlert", "VoicePrompt", $"Warning. {rider.UserName} has lost connection.");
 
             var session = await _state.ActiveGroups.Find(g => g.GroupName == rider.GroupName).FirstOrDefaultAsync();
@@ -236,11 +237,10 @@ public class CompassHub : Hub
                     await Clients.Group(rider.GroupName).SendAsync("PttReleased");
                 }
 
-                if (session.AdminGoogleId == rider.GoogleId && session.IsNavigating)
-                {
-                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, Builders<GroupSession>.Update.Set(g => g.IsNavigating, false));
-                    await Clients.Group(rider.GroupName).SendAsync("NavigationCancelled");
-                }
+                // THE FIX: We completely REMOVE the block that cancelled navigation 
+                // if the Admin disconnected. Now, the route is safely preserved in the 
+                // GroupSession database entity! The only way to stop the route is if 
+                // the Admin explicitly calls CancelNavigation().
             }
         }
     }
@@ -328,6 +328,18 @@ public class CompassHub : Hub
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.IsNavigating, false));
+
+            // --- NEW: Reset telemetry stats (speed, distance) for all riders in the group ---
+            var ridersInGroup = _state.ConnectedRiders.Values
+                .Where(r => r.GroupName == groupName)
+                .Select(r => r.GoogleId)
+                .ToList();
+
+            foreach (var googleId in ridersInGroup)
+            {
+                _telemetryStats.TryRemove(googleId, out _);
+            }
+
             await Clients.Group(groupName).SendAsync("NavigationCancelled");
         }
     }
@@ -348,7 +360,7 @@ public class CompassHub : Hub
 
         if (session != null && currentRider != null)
         {
-            // 1. Calculate Real-Time Speed & Distance (IDEA 4: Telemetry Math)
+            // 1. Calculate Real-Time Speed & Distance
             var telemetry = _telemetryStats.GetOrAdd(currentRider.GoogleId, new RiderTelemetry());
 
             if (currentRider.LastLat != 0)
@@ -356,22 +368,21 @@ public class CompassHub : Hub
                 double distanceMoved = CalculateDistanceMeters(currentRider.LastLat, currentRider.LastLng, lat, lng);
                 var timeDelta = (DateTime.UtcNow - telemetry.LastUpdate).TotalSeconds;
 
-                if (timeDelta > 0 && distanceMoved < 1000) // Sanity check for GPS jumps
-                {
+                if (timeDelta > 0 && distanceMoved < 1000)
                     telemetry.CurrentSpeedKmh = (distanceMoved / timeDelta) * 3.6;
-                }
 
-                // IDEA 4: Pitstop Tracker (Fires every 100km crossed)
                 double oldDistance = telemetry.TotalDistanceMeters;
                 telemetry.TotalDistanceMeters += distanceMoved;
-                int pitstopIntervalMeters = session.Settings.PitstopDistanceMeters;
-                // Only alert if the admin didn't set the slider to 0 (Off)
+
+                int pitstopIntervalMeters = (session.Settings.PitstopDistanceMeters > 0 ? session.Settings.PitstopDistanceMeters : 100000);
+
+                // Pitstop Warning (Personal)
                 if (pitstopIntervalMeters > 0 && (int)(oldDistance / pitstopIntervalMeters) < (int)(telemetry.TotalDistanceMeters / pitstopIntervalMeters))
                 {
-                    await Clients.Client(Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"You have traveled {(int)(telemetry.TotalDistanceMeters / 1000)} kilometers. Consider pulling over for a rest stop.");
+                    await Clients.Client(Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"You have traveled {(int)(telemetry.TotalDistanceMeters / 1000)} kilometers. Consider a rest stop.");
                 }
 
-                // IDEA 4: Speed Delta Warning (Only fire if going 30kmh over group average)
+                // Speed Delta Warning (Personal)
                 var activeRiders = _state.ConnectedRiders.Values.Where(r => r.GroupName == groupName).Select(r => r.GoogleId).ToList();
                 var groupSpeeds = _telemetryStats.Where(k => activeRiders.Contains(k.Key) && k.Value.CurrentSpeedKmh > 10).Select(k => k.Value.CurrentSpeedKmh).ToList();
 
@@ -384,7 +395,7 @@ public class CompassHub : Hub
                         if (!_alertCooldowns.TryGetValue(speedKey, out var lastSpd) || (DateTime.UtcNow - lastSpd).TotalMinutes >= 10)
                         {
                             _alertCooldowns[speedKey] = DateTime.UtcNow;
-                            await Clients.Client(Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "Warning: You are riding significantly faster than the group average. Please slow down.");
+                            await Clients.Client(Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "Warning: You are riding significantly faster than the group average.");
                         }
                     }
                 }
@@ -394,7 +405,7 @@ public class CompassHub : Hub
             currentRider.LastLat = lat;
             currentRider.LastLng = lng;
 
-            // 2. Proximity & Splinter Math
+            // 2. PROXIMITY MATH (Ahead vs Behind)
             string leadGoogleId = session.Settings.LeadRiderGoogleId;
             if (string.IsNullOrEmpty(leadGoogleId)) leadGoogleId = session.AdminGoogleId;
 
@@ -403,66 +414,176 @@ public class CompassHub : Hub
                 var leadRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == leadGoogleId);
                 if (leadRider != null && leadRider.LastLat != 0)
                 {
-                    double distance = CalculateDistanceMeters(lat, lng, leadRider.LastLat, leadRider.LastLng);
+                    double lagDistance = 0;
+                    bool isAhead = false;
+                    bool isBehind = false;
+
+                    // Only calculate Lag if it is turned ON (> 0)
+                    if (session.Settings.MaxLagDistanceMeters > 0)
+                    {
+                        if (session.IsNavigating)
+                        {
+                            double leadToDest = CalculateDistanceMeters(leadRider.LastLat, leadRider.LastLng, session.DestLat, session.DestLng);
+                            double riderToDest = CalculateDistanceMeters(lat, lng, session.DestLat, session.DestLng);
+                            double delta = riderToDest - leadToDest;
+
+                            if (delta > session.Settings.MaxLagDistanceMeters)
+                            {
+                                isBehind = true;
+                                lagDistance = delta;
+                            }
+                            else if (delta < -session.Settings.MaxLagDistanceMeters)
+                            {
+                                isAhead = true;
+                                lagDistance = Math.Abs(delta);
+                            }
+                        }
+                        else
+                        {
+                            double pureRadiusDist = CalculateDistanceMeters(lat, lng, leadRider.LastLat, leadRider.LastLng);
+                            if (pureRadiusDist > session.Settings.MaxLagDistanceMeters)
+                            {
+                                isBehind = true;
+                                lagDistance = pureRadiusDist;
+                            }
+                        }
+                    }
+
                     string lagKey = $"lag_{groupName}_{currentRider.GoogleId}";
 
-                    if (distance > session.Settings.MaxLagDistanceMeters)
+                    if (isBehind || isAhead)
                     {
                         if (!_alertCooldowns.TryGetValue(lagKey, out var lastAlert) || (DateTime.UtcNow - lastAlert).TotalMinutes >= 3)
                         {
                             _alertCooldowns[lagKey] = DateTime.UtcNow;
-                            var adminConn = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == session.AdminGoogleId)?.ConnectionId;
-                            if (!string.IsNullOrEmpty(adminConn))
+
+                            string distText = lagDistance > 1000 ? $"{Math.Round(lagDistance / 1000.0, 1)} kilometers" : $"{Math.Round(lagDistance)} meters";
+                            string statusText = isAhead ? "ahead of" : "behind";
+                            string broadcastMessage = session.IsNavigating
+                                ? $"{userName} is {distText} {statusText} the Lead."
+                                : $"{userName} is separated from the Lead by {distText}.";
+
+                            bool isLeadership = currentRider.GoogleId == session.AdminGoogleId ||
+                                                currentRider.Role == "Lead" ||
+                                                currentRider.Role == "Marshal" ||
+                                                currentRider.Role == "Tail";
+
+                            // Send to Leadership (Excluding the rider themselves)
+                            var leadershipConns = _state.ConnectedRiders.Values
+                                .Where(r => r.GroupName == groupName && !string.IsNullOrEmpty(r.ConnectionId) &&
+                                            r.GoogleId != currentRider.GoogleId &&
+                                           (r.GoogleId == session.AdminGoogleId || r.Role == "Lead" || r.Role == "Marshal" || r.Role == "Tail"))
+                                .Select(r => r.ConnectionId).ToList();
+
+                            foreach (var connId in leadershipConns)
                             {
-                                // Changed to VoicePrompt so it reads seamlessly
-                                await Clients.Client(adminConn).SendAsync("ReceiveAlert", "VoicePrompt", $"{userName} is {Math.Round(distance)} meters behind.");
+                                await Clients.Client(connId).SendAsync("ReceiveAlert", "VoicePrompt", broadcastMessage);
+                            }
+
+                            // Warn the standard rider directly
+                            if (!isLeadership)
+                            {
+                                string directMessage = isAhead
+                                    ? $"Warning: You are {distText} ahead of the Lead. Please fall back."
+                                    : $"Warning: You are {distText} behind the Lead.";
+                                await Clients.Client(currentRider.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", directMessage);
                             }
                         }
                     }
-                    else { _alertCooldowns.TryRemove(lagKey, out _); }
+                    else
+                    {
+                        _alertCooldowns.TryRemove(lagKey, out _);
+                    }
                 }
             }
             else
             {
-                // This is the Lead Rider
+                // This is the Lead Rider - Calculate Splinter (Overall Spread of the Group)
                 double maxDist = 0;
-                foreach (var r in _state.ConnectedRiders.Values.Where(x => x.GroupName == groupName && x.GoogleId != leadGoogleId))
+                foreach (var r in _state.ConnectedRiders.Values.Where(x => x.GroupName == groupName && x.GoogleId != leadGoogleId && x.LastLat != 0))
                 {
-                    if (r.LastLat != 0)
-                    {
-                        double d = CalculateDistanceMeters(lat, lng, r.LastLat, r.LastLng);
-                        if (d > maxDist) maxDist = d;
-                    }
+                    double d = CalculateDistanceMeters(lat, lng, r.LastLat, r.LastLng);
+                    if (d > maxDist) maxDist = d;
                 }
 
                 string splinterKey = $"splinter_{groupName}";
 
-                if (maxDist > session.Settings.SplinterWarningDistanceMeters)
+                // Only Splinter warn if enabled (> 0)
+                if (session.Settings.SplinterWarningDistanceMeters > 0 && maxDist > session.Settings.SplinterWarningDistanceMeters)
                 {
                     if (!_alertCooldowns.TryGetValue(splinterKey, out var lastAlert) || (DateTime.UtcNow - lastAlert).TotalMinutes >= 5)
                     {
                         _alertCooldowns[splinterKey] = DateTime.UtcNow;
-                        await Clients.Client(currentRider.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "Convoy splintered! A rider has fallen too far behind.");
+                        await Clients.Client(currentRider.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "Convoy splintered! The group is stretched too far.");
                     }
                 }
                 else { _alertCooldowns.TryRemove(splinterKey, out _); }
 
-                // IDEA 2: Arrival Detection
+                // Arrival Detection
                 if (session.IsNavigating)
                 {
                     double distToDest = CalculateDistanceMeters(lat, lng, session.DestLat, session.DestLng);
-                    if (distToDest < session.Settings.ArrivalGeofenceMeters)
+                    if (distToDest < (session.Settings.ArrivalGeofenceMeters > 0 ? session.Settings.ArrivalGeofenceMeters : 1000))
                     {
                         string arrivalKey = $"arrival_{groupName}";
                         if (!_alertCooldowns.ContainsKey(arrivalKey))
                         {
                             _alertCooldowns[arrivalKey] = DateTime.UtcNow;
-                            await Clients.Group(groupName).SendAsync("ReceiveAlert", "VoicePrompt", $"The Lead rider is arriving at {session.DestName}.");
+                            await Clients.Group(groupName).SendAsync("ReceiveAlert", "VoicePrompt", $"The Lead is arriving at the destination.");
                         }
                     }
                 }
             }
         }
+    }
+    // --- NEW: LIVE TELEMETRY DASHBOARD ENDPOINT ---
+    public async Task<List<TelemetryDto>> GetGroupTelemetry(string groupName)
+    {
+        var result = new List<TelemetryDto>();
+        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        if (session == null) return result;
+
+        string leadGoogleId = string.IsNullOrEmpty(session.Settings.LeadRiderGoogleId) ? session.AdminGoogleId : session.Settings.LeadRiderGoogleId;
+        var leadRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == leadGoogleId);
+
+        foreach (var rider in _state.ConnectedRiders.Values.Where(r => r.GroupName == groupName))
+        {
+            double speed = _telemetryStats.TryGetValue(rider.GoogleId, out var stats) ? stats.CurrentSpeedKmh : 0;
+            double lagDistance = 0;
+            string status = "In Formation";
+
+            if (leadRider != null && rider.GoogleId != leadGoogleId && rider.LastLat != 0 && leadRider.LastLat != 0)
+            {
+                if (session.IsNavigating)
+                {
+                    double leadToDest = CalculateDistanceMeters(leadRider.LastLat, leadRider.LastLng, session.DestLat, session.DestLng);
+                    double riderToDest = CalculateDistanceMeters(rider.LastLat, rider.LastLng, session.DestLat, session.DestLng);
+                    double delta = riderToDest - leadToDest;
+
+                    if (delta > 0)
+                    {
+                        lagDistance = delta;
+                        status = "Behind";
+                    }
+                    else if (delta < 0)
+                    {
+                        lagDistance = Math.Abs(delta);
+                        status = "Ahead";
+                    }
+                }
+                else
+                {
+                    lagDistance = CalculateDistanceMeters(rider.LastLat, rider.LastLng, leadRider.LastLat, leadRider.LastLng);
+                    status = lagDistance > 50 ? "Separated" : "Near Lead";
+                }
+            }
+            else if (rider.GoogleId == leadGoogleId) { status = "Lead Rider"; }
+            else if (rider.LastLat == 0) { status = "Awaiting GPS"; }
+
+            result.Add(new TelemetryDto { Name = rider.UserName, SpeedKmh = speed, DistanceMeters = lagDistance, Status = status });
+        }
+
+        return result.OrderBy(r => r.Status == "Behind").ThenByDescending(r => r.DistanceMeters).ToList();
     }
     // 2. NEW: Method to retrieve the current settings from the DB
     public async Task<GroupSettingsDto> GetGroupSettings(string groupName)
@@ -559,26 +680,52 @@ public class CompassHub : Hub
 
     public async Task AssignRole(string groupName, string targetGoogleId, string newRole)
     {
-        if (string.IsNullOrEmpty(targetGoogleId)) return;
-
         var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
         var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            if (_state.ConnectedRiders.TryGetValue(targetGoogleId, out var targetSession) && targetSession.GroupName == groupName)
+            // --- NEW: Enforce unique roles (Only ONE Lead, Tail, or Marshal per group) ---
+            if (newRole == "Lead" || newRole == "Tail" || newRole == "Marshal")
             {
-                targetSession.Role = newRole;
+                // Find anyone else who currently has this exact role and demote them
+                var existingHolders = _state.ConnectedRiders.Values
+                    .Where(r => r.GroupName == groupName && r.Role == newRole && r.GoogleId != targetGoogleId)
+                    .ToList();
 
+                foreach (var oldHolder in existingHolders)
+                {
+                    oldHolder.Role = "Rider";
+
+                    // Voice prompt to let the previous holder know they were demoted
+                    if (!string.IsNullOrEmpty(oldHolder.ConnectionId))
+                    {
+                        await Clients.Client(oldHolder.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"Your role has been reassigned. You are now a Standard Rider.");
+                    }
+                }
+            }
+
+            // Assign the new role to the target rider
+            var targetRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GroupName == groupName && r.GoogleId == targetGoogleId);
+            if (targetRider != null)
+            {
+                targetRider.Role = newRole;
+
+                // CRITICAL: If a new Lead is assigned, update the Database so the Telemetry Engine knows who to track!
                 if (newRole == "Lead")
-                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.Settings.LeadRiderGoogleId, targetGoogleId));
-                else if (newRole == "Tail")
-                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.Settings.SweepRiderGoogleId, targetGoogleId));
+                {
+                    var update = Builders<GroupSession>.Update.Set(g => g.Settings.LeadRiderGoogleId, targetGoogleId);
+                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+                }
 
+                // Voice prompt to let the newly promoted user know!
+                if (!string.IsNullOrEmpty(targetRider.ConnectionId) && targetRider.GoogleId != caller.GoogleId)
+                {
+                    await Clients.Client(targetRider.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"You have been designated as the {newRole}.");
+                }
+
+                // Broadcast the visually updated roster to everyone
                 await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
-
-                // IDEA 3: Role Assignment Voice Announcement
-                await Clients.Client(targetSession.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"You have been designated as the {newRole} rider.");
             }
         }
     }

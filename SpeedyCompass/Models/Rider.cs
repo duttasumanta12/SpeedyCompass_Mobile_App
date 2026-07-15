@@ -26,7 +26,7 @@ namespace SpeedyCompass.Models
                 };
             }
         }
-        public bool IsOnline { get; internal set; } = true;
+        public bool IsOnline { get; set; }
         // NEW: Dynamic background color based on Online Status and Device Theme
         public Color CardBackgroundColor
         {

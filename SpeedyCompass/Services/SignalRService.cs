@@ -40,8 +40,8 @@ public class SignalRService
             // Switch to HTTPS and standard ASP.NET Core HTTPS ports (e.g., 5001 or 7001)
             // Note: Check your backend's launchSettings.json to ensure the https port is correct
             string baseUrl = DeviceInfo.Platform == DevicePlatform.Android
-            ?"https://10.0.2.2:7219" 
-             //"https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
+            ? //"https://10.0.2.2:7219" 
+             "https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
                 : "https://localhost:5001"; // iOS Simulator and Windows/Mac use standard localhost
 
             // IMPORTANT: If testing on PHYSICAL devices on your local Wi-Fi, 
@@ -366,6 +366,21 @@ public class SignalRService
         {
             LogException(nameof(UpdateLocation), ex);
         }
+    }
+    public async Task<List<Models.TelemetryDto>> GetGroupTelemetry(string groupName)
+    {
+        if (_hubConnection != null && _hubConnection.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                return await _hubConnection.InvokeAsync<List<Models.TelemetryDto>>("GetGroupTelemetry", groupName);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error fetching telemetry: {ex.Message}");
+            }
+        }
+        return new List<Models.TelemetryDto>(); // Return empty list if disconnected
     }
     // 4. NEW: Call the hub to fetch the settings
     public async Task<GroupSettingsDto> GetGroupSettings(string groupName)
