@@ -381,6 +381,9 @@ public partial class LobbyPage : ContentPage
                 {
                     // Force the UI to show the pending destination box exactly as they left it
                     OnDestinationSet(details.DestLat, details.DestLng, details.DestName);
+                    _isSelectingLocation = true;
+                    DestinationSearchBar.Text = details.DestName;
+                    _isSelectingLocation = false;
                 }
 
                 if (details.IsNavigating)
@@ -469,7 +472,7 @@ public partial class LobbyPage : ContentPage
         });
     }
 
-    private void OnTabClicked(object sender, EventArgs e)
+    private async void OnTabClicked(object sender, EventArgs e)
     {
         if (sender == TabRoster)
         {
@@ -491,7 +494,16 @@ public partial class LobbyPage : ContentPage
             RosterView.IsVisible = false;
             MapView.IsVisible = true;
 
-            FitMapToBounds();
+            if (!string.IsNullOrEmpty(DestinationSearchBar.Text))
+            {
+                var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+                await CalculateAndDrawRoute(currentLoc, _activeDestination);
+                FitMapToBounds([currentLoc, _activeDestination]);
+            }
+            else
+            {
+                FitMapToBounds();
+            }
         }
     }
 
@@ -502,6 +514,9 @@ public partial class LobbyPage : ContentPage
 
         _pendingDestination = e.Location;
         UpdateDestinationPin(_pendingDestination, "Selected Destination");
+        var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+        await CalculateAndDrawRoute(currentLoc, _pendingDestination);
+        FitMapToBounds([currentLoc, _pendingDestination]);
 
         try
         {
@@ -1255,9 +1270,13 @@ public partial class LobbyPage : ContentPage
                     };
                     LiveMap.Pins.Add(pin);
 
+                    var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+                    await CalculateAndDrawRoute(currentLoc, _pendingDestination);
+                    FitMapToBounds([currentLoc, _pendingDestination]);
+
                     // 5. Move map camera view to focus on the destination
-                    var mapSpan = MapSpan.FromCenterAndRadius(_pendingDestination, Distance.FromMiles(1));
-                    LiveMap.MoveToRegion(mapSpan);
+                    //var mapSpan = MapSpan.FromCenterAndRadius(_pendingDestination, Distance.FromMiles(1));
+                    //LiveMap.MoveToRegion(mapSpan);
 
                     // 6. Enable the broadcast button
                     ConfirmDestButton.IsEnabled = true;
@@ -1272,7 +1291,38 @@ public partial class LobbyPage : ContentPage
 
             // Clear selection so the user can tap it again if needed
             SuggestionsListView.SelectedItem = null;
+            _isSelectingLocation = false;
         }
+    }
+    // NEW: Overloaded method that accepts specific coordinates (used for route preview)
+    private void FitMapToBounds(List<Location> points)
+    {
+        if (points == null || !points.Any()) return;
+
+        if (points.Count == 1)
+        {
+            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(points.First(), Distance.FromKilometers(1)));
+            return;
+        }
+
+        double minLat = double.MaxValue, minLng = double.MaxValue;
+        double maxLat = double.MinValue, maxLng = double.MinValue;
+
+        foreach (var loc in points)
+        {
+            if (loc.Latitude < minLat) minLat = loc.Latitude;
+            if (loc.Latitude > maxLat) maxLat = loc.Latitude;
+            if (loc.Longitude < minLng) minLng = loc.Longitude;
+            if (loc.Longitude > maxLng) maxLng = loc.Longitude;
+        }
+
+        double centerLat = (minLat + maxLat) / 2.0;
+        double centerLng = (minLng + maxLng) / 2.0;
+
+        double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
+        double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
+
+        LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
     }
 
     // Call this when navigation actually starts (e.g., inside OnConfirmDestinationClicked)
@@ -1476,11 +1526,12 @@ public partial class LobbyPage : ContentPage
         MinimizePanelButton.IsEnabled = true;
     }
     // 4. Add the handler for when a destination is broadcasted:
-    private void OnDestinationSet(double destLat, double destLng, string destName)
+    private async void OnDestinationSet(double destLat, double destLng, string destName)
     {
+        _activeDestination = new Location(destLat, destLng);
+
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            _activeDestination = new Location(destLat, destLng);
             PendingDestinationLabel.Text = destName;
             PendingDestinationFrame.IsVisible = true;
 
