@@ -17,7 +17,7 @@ public class SignalRService
 
     // Standard C# events that UI pages can subscribe to
     public event Action<List<Rider>> RosterUpdated;
-    public event Action<double, double, string> NavigationStarted;
+    public event Action<double, double, string, bool> NavigationStarted;
     public event Action NavigationCancelled; // NEW: Event for when navigation is stopped
     public event Action<string, Color> ConnectionStatusChanged;
     public event Action<string, double, double, double> RiderLocationUpdated;
@@ -125,9 +125,9 @@ public class SignalRService
             RosterUpdated?.Invoke(roster);
         });
 
-        _hubConnection.On<double, double, string>("NavigationStarted", (lat, lng, name) =>
+        _hubConnection.On<double, double, string, bool>("NavigationStarted", (lat, lng, name, isSyncRequired) =>
         {
-            NavigationStarted?.Invoke(lat, lng, name);
+            NavigationStarted?.Invoke(lat, lng, name, isSyncRequired);
         });
 
         // NEW: Listen for the navigation cancelled broadcast
@@ -290,6 +290,22 @@ public class SignalRService
             LogException(nameof(CreateGroup), ex);
             throw; // Let the UI handle alerting the user 
         }
+    }
+    // --- NEW: Fetch group details ---
+    public async Task<GroupDetailsDto> GetGroupDetails(string groupName)
+    {
+        if (_hubConnection != null && _hubConnection.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                return await _hubConnection.InvokeAsync<GroupDetailsDto>("GetGroupDetails", groupName);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error fetching group details: {ex.Message}");
+            }
+        }
+        return null;
     }
 
     public async Task JoinGroup(string groupName, string userName)

@@ -373,6 +373,23 @@ public partial class LobbyPage : ContentPage
                 OnRosterUpdated(roster);
             }
 
+            // --- THE NEW FIX: Pull the Group Details to restore Destination & Navigation State! ---
+            var details = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
+            if (details != null)
+            {
+                if (!string.IsNullOrEmpty(details.DestName))
+                {
+                    // Force the UI to show the pending destination box exactly as they left it
+                    OnDestinationSet(details.DestLat, details.DestLng, details.DestName);
+                }
+
+                if (details.IsNavigating)
+                {
+                    // Force the UI into active routing mode SILENTLY (isSync = true)
+                    OnNavigationStarted(details.DestLat, details.DestLng, details.DestName,true);
+                }
+            }
+
             _hasJoined = true;
 
             AdminSettingsBtn.IsVisible = _amIAdmin;
@@ -443,6 +460,7 @@ public partial class LobbyPage : ContentPage
             StatusLabel.Text = status;
             StatusLabel.TextColor = color;
             StatusDot.BackgroundColor = color;
+            MapTabStatusDot.Fill = color;
             // FIX: Force the layout engine to recalculate and repaint this specific UI block
             if (StatusLabel.Parent is View parentView)
             {
@@ -583,7 +601,7 @@ public partial class LobbyPage : ContentPage
         FitMapToBounds();
     }
 
-    private async void OnNavigationStarted(double destLat, double destLng, string destName)
+    private async void OnNavigationStarted(double destLat, double destLng, string destName, bool isSyncRequired = false)
     {
         _routeIsActive = true;
         _activeDestination = new Location(destLat, destLng);
@@ -595,6 +613,17 @@ public partial class LobbyPage : ContentPage
         {
             // 🚀 FORCE EVERYONE TO THE MAP TAB AUTOMATICALLY
             OnTabClicked(TabMap, EventArgs.Empty);
+
+            // --- THE FIX: STRICT UI STATE ENFORCEMENT ---
+            // 1. Hide ALL Setup & Destination Picker UI Elements
+            PendingDestinationFrame.IsVisible = false;
+            AdminInstructionBanner.IsVisible = false;
+
+            // Hide the Search block
+            DestinationSearchBar.IsReadOnly = true;
+            DestinationSearchBar.Text = destName;
+            ConfirmDestButton.IsVisible = false;
+            ResetDestButton.IsVisible = true;
 
             // FIX: Ensure StartNavButton hides, while Action panels show
             StartNavButton.IsVisible = true;
@@ -618,12 +647,15 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_currentRoutePoints != null && _currentRoutePoints.Any() && !_isSimulating)
             {
-                //_ = SimulateMovementAlongRouteAsync();
+                _ = SimulateMovementAlongRouteAsync();
             }
 #endif
         }
 
-        _ = TextToSpeech.Default.SpeakAsync($"Navigation started to {destName}. Ride safe!");
+        if (!isSyncRequired)
+        {
+            _ = TextToSpeech.Default.SpeakAsync($"Navigation started to {destName}. Ride safe!");
+        }
     }
 
     // --- ROUTE DRAWING ---
@@ -966,8 +998,8 @@ public partial class LobbyPage : ContentPage
             Riders = updatedRiders;
             RidersCollectionView.ItemsSource = Riders;
 
-            StatusLabel.Text = "Connected";
-            StatusDot.BackgroundColor = Colors.MediumSeaGreen;
+            //StatusLabel.Text = "Connected";
+            //StatusDot.BackgroundColor = Colors.MediumSeaGreen;
             // FIX: Ensure the PiP overlay numbers update dynamically as well!
             PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
         });
@@ -1108,6 +1140,7 @@ public partial class LobbyPage : ContentPage
     }
     private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
+        if (_routeIsActive) return;
         // FIX: Ignore the event if we are setting the text programmatically
         if (_isSelectingLocation) return;
 

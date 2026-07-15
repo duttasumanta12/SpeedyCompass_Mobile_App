@@ -157,6 +157,21 @@ public class CompassHub : Hub
         }
         return list;
     }
+    public async Task<GroupDetailsDto> GetGroupDetails(string groupName)
+    {
+        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        if (session != null)
+        {
+            return new GroupDetailsDto
+            {
+                IsNavigating = session.IsNavigating,
+                DestName = session.DestName ?? string.Empty,
+                DestLat = session.DestLat,
+                DestLng = session.DestLng
+            };
+        }
+        return null;
+    }
 
     public async Task CreateGroup(string groupName, string userName, string googleId)
     {
@@ -237,10 +252,25 @@ public class CompassHub : Hub
                     await Clients.Group(rider.GroupName).SendAsync("PttReleased");
                 }
 
-                // THE FIX: We completely REMOVE the block that cancelled navigation 
-                // if the Admin disconnected. Now, the route is safely preserved in the 
-                // GroupSession database entity! The only way to stop the route is if 
-                // the Admin explicitly calls CancelNavigation().
+                // --- NEW: AUTO-CLEANUP ROUTE IF GROUP IS EMPTY ---
+                // Check if there is ANYONE left in the group who still has an active connection
+                bool isAnyoneOnline = _state.ConnectedRiders.Values.Any(r => r.GroupName == rider.GroupName && !string.IsNullOrEmpty(r.ConnectionId));
+
+                if (!isAnyoneOnline)
+                {
+                    // Everyone is offline! Wipe the active navigation state so the next ride starts fresh.
+                    var update = Builders<GroupSession>.Update
+                        .Set(g => g.IsNavigating, false);
+
+                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, update);
+
+                    // Optional: Scrub stale telemetry data for this group's riders from memory
+                    var groupRiderIds = _state.ConnectedRiders.Values.Where(r => r.GroupName == rider.GroupName).Select(r => r.GoogleId).ToList();
+                    foreach (var id in groupRiderIds)
+                    {
+                        _telemetryStats.TryRemove(id, out _);
+                    }
+                }
             }
         }
     }
@@ -316,7 +346,7 @@ public class CompassHub : Hub
         {
             var update = Builders<GroupSession>.Update.Set(g => g.IsNavigating, true).Set(g => g.DestLat, destLat).Set(g => g.DestLng, destLng).Set(g => g.DestName, destName);
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
-            await Clients.Group(groupName).SendAsync("NavigationStarted", destLat, destLng, destName);
+            await Clients.Group(groupName).SendAsync("NavigationStarted", destLat, destLng, destName, false);
         }
     }
 
@@ -650,7 +680,7 @@ public class CompassHub : Hub
         if (session != null)
         {
             if (session.IsNavigating)
-                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName);
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
             else if (!string.IsNullOrEmpty(session.DestName))
                 await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
         }

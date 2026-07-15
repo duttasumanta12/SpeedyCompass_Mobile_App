@@ -13,7 +13,11 @@
         <!-- 1. Custom Tab Bar (UPDATED WITH SETTINGS BUTTON) -->
         <Grid Grid.Row="0" ZIndex="100" ColumnDefinitions="*,*, Auto, Auto" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
             <Button x:Name="TabRoster" Text="Roster" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold"/>
-            <Button x:Name="TabMap" Grid.Column="1" Text="Live Map" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}" FontAttributes="Bold"/>
+            <!-- NEW: Wrapped TabMap in a Grid to overlay the Status Indicator directly on the tab! -->
+            <Grid Grid.Column="1">
+                <Button x:Name="TabMap" Text="Live Map" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}" FontAttributes="Bold" HorizontalOptions="Fill" VerticalOptions="Fill"/>
+                <Ellipse x:Name="MapTabStatusDot" WidthRequest="12" HeightRequest="12" Fill="Orange" HorizontalOptions="End" VerticalOptions="Start" Margin="8,5"/>
+            </Grid>
 
             <!-- NEW: Admin Settings Button (Hidden by default for non-admins) -->
             <Button x:Name="AdminSettingsBtn" Grid.Column="2" Text="⚙️" BackgroundColor="Transparent" IsVisible="False" Clicked="OnAdminSettingsClicked" FontSize="20" Margin="5,0,0,0"/>
