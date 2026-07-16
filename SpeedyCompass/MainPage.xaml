@@ -131,6 +131,14 @@
                 </ScrollView>
             </Frame>
         </Grid>
+        <!-- 4. FULL SCREEN LOADING OVERLAY -->
+        <!-- Placed at the very end so it sits on top of ALL other Grids/Views -->
+        <Grid x:Name="LoadingOverlay" BackgroundColor="#CC000000" IsVisible="False" InputTransparent="False" ZIndex="9999">
+            <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20">
+                <ActivityIndicator IsRunning="{Binding Source={x:Reference LoadingOverlay}, Path=IsVisible}" Color="DodgerBlue" WidthRequest="60" HeightRequest="60" />
+                <Label x:Name="LoadingText" Text="Connecting..." TextColor="White" FontAttributes="Bold" FontSize="18" HorizontalOptions="Center" />
+            </StackLayout>
+        </Grid>
 
     </Grid>
 </ContentPage>

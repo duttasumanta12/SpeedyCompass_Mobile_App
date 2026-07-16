@@ -1,4 +1,5 @@
 ﻿using Microsoft.Identity.Client;
+using System.Collections;
 using System.Diagnostics;
 
 namespace SpeedyCompass.Services;
@@ -68,5 +69,13 @@ public class MsalAuthService
             await _pca.RemoveAsync(accounts.First());
             accounts = await _pca.GetAccountsAsync();
         }
+    }
+    public async Task<IEnumerable<IAccount>> GetAccounts()
+    {
+        return await _pca.GetAccountsAsync();
+    }
+    public async Task<AuthenticationResult> AcquireTokenSilentAsync(IAccount account)
+    {
+        return await _pca.AcquireTokenSilent(Scopes, account).ExecuteAsync();
     }
 }

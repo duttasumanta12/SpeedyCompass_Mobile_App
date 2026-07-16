@@ -497,12 +497,21 @@ public partial class LobbyPage : ContentPage
             if (!string.IsNullOrEmpty(DestinationSearchBar.Text))
             {
                 var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+                UpdateDestinationPin(_activeDestination, DestinationSearchBar.Text);
+
                 await CalculateAndDrawRoute(currentLoc, _activeDestination);
-                FitMapToBounds([currentLoc, _activeDestination]);
+
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    FitMapToBounds([currentLoc, _activeDestination]);
+                });
             }
             else
             {
-                FitMapToBounds();
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    FitMapToBounds();
+                });
             }
         }
     }
@@ -515,8 +524,11 @@ public partial class LobbyPage : ContentPage
         _pendingDestination = e.Location;
         UpdateDestinationPin(_pendingDestination, "Selected Destination");
         var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
-        await CalculateAndDrawRoute(currentLoc, _pendingDestination);
-        FitMapToBounds([currentLoc, _pendingDestination]);
+        MainThread.BeginInvokeOnMainThread(async () =>
+        {
+            await CalculateAndDrawRoute(currentLoc, _pendingDestination);
+            FitMapToBounds([currentLoc, _pendingDestination]);
+        });
 
         try
         {
@@ -656,8 +668,12 @@ public partial class LobbyPage : ContentPage
         var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         if (loc != null)
         {
-            await CalculateAndDrawRoute(loc, _activeDestination);
-            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
+            //await CalculateAndDrawRoute(loc, _activeDestination);
+            MainThread.BeginInvokeOnMainThread(async () =>
+            {
+                await CalculateAndDrawRoute(loc, _activeDestination);
+                FitMapToBounds();
+            });
 
 #if DEBUG
             if (_currentRoutePoints != null && _currentRoutePoints.Any() && !_isSimulating)
@@ -737,6 +753,7 @@ public partial class LobbyPage : ContentPage
     // --- REPLACED TRACKING LOGIC ---
     private async void InitializeLocalTrackingAsync()
     {
+        ShowLoading("Initializing...");
         try
         {
             // 1. Explicitly check for permissions first
@@ -803,6 +820,10 @@ public partial class LobbyPage : ContentPage
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"GPS Init Error: {ex.Message}");
+        }
+        finally
+        {
+            HideLoading();
         }
     }
 
@@ -1528,28 +1549,46 @@ public partial class LobbyPage : ContentPage
     // 4. Add the handler for when a destination is broadcasted:
     private async void OnDestinationSet(double destLat, double destLng, string destName)
     {
-        _activeDestination = new Location(destLat, destLng);
-
-        MainThread.BeginInvokeOnMainThread(() =>
+        ShowLoading("Drawing Route Preview..."); // LOCK UI
+        try
         {
-            PendingDestinationLabel.Text = destName;
-            PendingDestinationFrame.IsVisible = true;
 
-            if (_amIAdmin)
+
+            _activeDestination = new Location(destLat, destLng);
+
+            MainThread.BeginInvokeOnMainThread(() =>
             {
-                StartJourneyButton.IsVisible = true;
-                StartJourneyButton.IsEnabled = true;
-            }
-        });
+                PendingDestinationLabel.Text = destName;
+                PendingDestinationFrame.IsVisible = true;
+
+                if (_amIAdmin)
+                {
+                    StartJourneyButton.IsVisible = true;
+                    StartJourneyButton.IsEnabled = true;
+                }
+            });
+        }
+        finally
+        {
+            HideLoading();
+        }
     }
     // 5. Add the click handler for the Admin's "Start Journey" button:
     private async void OnStartJourneyClicked(object sender, EventArgs e)
     {
-        StartJourneyButton.IsEnabled = false; // Prevent double taps
-        string destName = PendingDestinationLabel.Text;
+        ShowLoading("Starting Navigation...");
+        try
+        {
+            StartJourneyButton.IsEnabled = false; // Prevent double taps
+            string destName = PendingDestinationLabel.Text;
 
-        // Now we officially start the navigation loop for the whole group!
-        await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _activeDestination.Latitude, _activeDestination.Longitude, destName);
+            // Now we officially start the navigation loop for the whole group!
+            await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _activeDestination.Latitude, _activeDestination.Longitude, destName);
+        }
+        finally
+        {
+            HideLoading();
+        }
     }
     // 3. Add the event logic:
     private void OnUserJoined(string username)
@@ -1701,6 +1740,23 @@ public partial class LobbyPage : ContentPage
         MainThread.BeginInvokeOnMainThread(() =>
         {
             TelemetryCollectionView.ItemsSource = data;
+        });
+    }
+    // --- LOADING OVERLAY HELPERS ---
+    private void ShowLoading(string message)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            LoadingText.Text = message;
+            LoadingOverlay.IsVisible = true;
+        });
+    }
+
+    private void HideLoading()
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            LoadingOverlay.IsVisible = false;
         });
     }
 }

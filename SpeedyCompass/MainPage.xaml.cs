@@ -1,4 +1,5 @@
-﻿using Microsoft.Maui.ApplicationModel;
+﻿using Microsoft.Identity.Client;
+using Microsoft.Maui.ApplicationModel;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Models;
 using System.Collections.ObjectModel;
@@ -34,19 +35,65 @@ public partial class MainPage : ContentPage
     }
 
     protected override async void OnAppearing()
-    {
-        base.OnAppearing();
-
-        await _signalRService.StartAsync();
-
-        if (!string.IsNullOrEmpty(CurrentGoogleId))
+    {   
+        // 🛡️ THE GUARD CLAUSE 🛡️
+        // If the Dashboard is already visible, it means we already successfully logged in
+        // and connected to SignalR during this app session. 
+        if (DashboardView.IsVisible)
         {
-            await ProcessLoginFlow(CurrentGoogleId);
+            // Just silently refresh the group list in the background and exit!
+            // No new tokens, no new SignalR connections.
+            await LoadGroupsAsync();
+            return;
         }
-        else
+
+        // If we reach here, it's a fresh boot. Attempt the silent token validation!
+        await AttemptSilentLoginAsync();
+    }
+    private async Task AttemptSilentLoginAsync()
+    {
+        try
         {
-            LoginView.IsVisible = true;
-            DashboardView.IsVisible = false;
+            // Fetch accounts from the MSAL cache (This is your local token cache!)
+            var accounts = await _authService.GetAccounts();
+            var firstAccount = accounts.FirstOrDefault();
+
+            if (firstAccount != null)
+            {
+                ShowLoading("Validating session...");
+
+                // AcquireTokenSilent automatically checks if the cached token is valid.
+                // If it's expired, MSAL automatically uses the refresh token to get a new one!
+                var authResult = await _authService.AcquireTokenSilentAsync(firstAccount);
+
+                // Save credentials securely
+                Preferences.Default.Set("username", authResult.Account.Username);
+                Preferences.Default.Set("GoogleId", authResult.UniqueId);
+
+                bool isConnected = false;
+                isConnected = await ConnectSignalR(3);
+
+                if(!isConnected)
+                {
+                    HideLoading();
+                    return; // Stop the flow completely
+                }
+
+                await ProcessLoginFlow(authResult.UniqueId); // Proceed with the login flow using the valid token
+            }
+        }
+        catch (MsalUiRequiredException)
+        {
+            // The token is completely expired, or the user changed their password.
+            // The cache is invalid. Do nothing and let them see the "Login" button.
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Silent Auth failed: {ex.Message}");
+        }
+        finally
+        {
+            HideLoading();
         }
     }
 
@@ -85,29 +132,73 @@ public partial class MainPage : ContentPage
 
     private async void OnAzureLoginClicked(object sender, EventArgs e)
     {
+        // 1. Lock UI and Authenticate via Azure B2C
+        ShowLoading("Authenticating...");
+
         try
         {
             var authResult = await _authService.LoginAsync();
-            if (authResult != null)
+            if (authResult == null)
             {
-                string azureId = authResult.UniqueId;
-                string desiredName = authResult.Account.Username ?? "Rider";
-
-                if (desiredName.Contains("@")) desiredName = desiredName.Split('@')[0];
-
-                // For a brand new user, we create a default DTO and save it so they exist in CosmosDB
-                //var newProfile = new UserProfileDto { Username = desiredName, HasConsented = false };
-                //await _signalRService.SaveUserProfile(azureId, newProfile);
-
-                Preferences.Default.Set("GoogleId", azureId);
-
-                await ProcessLoginFlow(azureId);
+                HideLoading();
+                return; // User canceled or login failed
             }
+
+            // Save credentials securely
+            Preferences.Default.Set("username", authResult.Account.Username);
+            Preferences.Default.Set("GoogleId", authResult.UniqueId);
+
+            // 2. ROBUST INITIAL CONNECTION WITH RETRY LOGIC
+            ShowLoading("Connecting to Server...");
+            int maxRetries = 3;
+            bool flowControl = await ConnectSignalR(maxRetries);
+            if (!flowControl)
+            {
+                return;
+            }
+
+            // 3. Fetch Active Groups using the now-open socket!
+            ShowLoading("Fetching Groups...");
+
+            await ProcessLoginFlow(authResult.UniqueId);
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Login Error", ex.Message, "OK");
+            await DisplayAlert("Error", $"Login Failed: {ex.Message}", "OK");
         }
+        finally
+        {
+            HideLoading();
+        }
+    }
+
+    private async Task<bool> ConnectSignalR(int maxRetries)
+    {
+        for (int i = 1; i <= maxRetries; i++)
+        {
+            try
+            {
+                if (i > 1) ShowLoading($"Connecting... (Attempt {i}/{maxRetries})");
+
+                await _signalRService.StartAsync();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"SignalR Start Failed (Attempt {i}): {ex.Message}");
+
+                if (i == maxRetries)
+                {
+                    HideLoading();
+                    await DisplayAlert("Connection Failed", "Could not reach the server. Please check your internet connection and try again.", "OK");
+                    return false; // Stop the flow completely
+                }
+
+                await Task.Delay(2000); // Wait 2 seconds before retrying
+            }
+        }
+
+        return true;
     }
 
     // --- PROFILE MODAL LOGIC ---
@@ -244,18 +335,54 @@ public partial class MainPage : ContentPage
     {
         if (sender is Button btn && btn.CommandParameter is string groupName)
         {
-            try
-            {
-                var groupInfo = AvailableGroups.FirstOrDefault(g => g.GroupName == groupName);
-                bool amIAdmin = groupInfo?.IsMyAdmin ?? false;
-
-                await _signalRService.JoinGroup(groupName, WelcomeNameLabel.Text, CurrentGoogleId);
-
-                Preferences.Default.Set("IsAdmin", amIAdmin);
-                await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));
-            }
-            catch (Exception ex) { await DisplayAlert("Error", ex.Message, "OK"); }
         }
+        else
+        {
+            return;
+        }
+        string userName = Preferences.Default.Get("username", "Rider");
+
+        if (string.IsNullOrEmpty(groupName))
+        {
+            await DisplayAlert("Error", "Please select or enter a group to join.", "OK");
+            return;
+        }
+
+        // Lock the UI
+        ShowLoading("Joining Convoy...");
+
+        try
+        {
+            // Note: We know SignalR is ALREADY connected here from OnAzureLoginClicked!
+            await _signalRService.JoinGroup(groupName, userName, CurrentGoogleId);
+
+            // Navigate to Lobby
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Connection Failed", ex.Message, "OK");
+        }
+        finally
+        {
+            HideLoading();
+        }
+    }
+
+    private void HideLoading()
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            LoadingOverlay.IsVisible = false;
+        });
+    }
+    private void ShowLoading(string message)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            LoadingText.Text = message;
+            LoadingOverlay.IsVisible = true;
+        });
     }
 
     private async void OnDeleteGroupClicked(object sender, EventArgs e)

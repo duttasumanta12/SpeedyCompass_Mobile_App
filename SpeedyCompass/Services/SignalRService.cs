@@ -308,19 +308,6 @@ public class SignalRService
         return null;
     }
 
-    public async Task JoinGroup(string groupName, string userName)
-    {
-        try
-        {
-            await _hubConnection.InvokeAsync("JoinGroup", groupName, userName);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(JoinGroup), ex);
-            throw; // Let the UI handle alerting the user 
-        }
-    }
-
     public async Task StartGroupNavigation(string groupName, double lat, double lng, string destName)
     {
         try
