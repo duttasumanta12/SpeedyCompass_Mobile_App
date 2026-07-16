@@ -7,9 +7,11 @@ namespace SpeedyCompass.Shared.Models
     // --- NEW: DTO for fetching current group status on reconnect ---
     public class GroupDetailsDto
     {
+        public string GroupName { get; set; }
         public bool IsNavigating { get; set; }
         public string DestName { get; set; }
         public double DestLat { get; set; }
         public double DestLng { get; set; }
+        public string AdminGoogleId { get; set; }
     }
 }

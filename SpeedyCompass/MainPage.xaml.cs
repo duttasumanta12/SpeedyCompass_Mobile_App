@@ -35,7 +35,9 @@ public partial class MainPage : ContentPage
     }
 
     protected override async void OnAppearing()
-    {   
+    {
+        base.OnAppearing();
+
         // 🛡️ THE GUARD CLAUSE 🛡️
         // If the Dashboard is already visible, it means we already successfully logged in
         // and connected to SignalR during this app session. 
@@ -117,6 +119,11 @@ public partial class MainPage : ContentPage
             }
             else
             {
+                Preferences.Default.Set("EmergencyContact", profile.EmergencyContact);
+                Preferences.Default.Set("VehicleNumber", profile.VehicleNumber);
+                Preferences.Default.Set("BloodGroup", profile.BloodGroup);
+                Preferences.Default.Set("HasConsented", profile.HasConsented);
+
                 await LoadGroupsAsync();
             }
         }
@@ -224,6 +231,9 @@ public partial class MainPage : ContentPage
         ProfileBloodGroupPicker.SelectedItem = string.IsNullOrEmpty(profile.BloodGroup) ? "Unknown" : profile.BloodGroup;
         ConsentCheckbox.IsChecked = profile.HasConsented;
 
+        // NEW: Load Screen On Preference
+        KeepScreenOnSwitch.IsToggled = Preferences.Default.Get("KeepScreenOn", false);
+
         if (isMandatory)
         {
             ProfileModalTitle.Text = "Complete Setup";
@@ -272,6 +282,10 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Set("EmergencyContact", updatedProfile.EmergencyContact);
                 Preferences.Default.Set("VehicleNumber", updatedProfile.VehicleNumber);
                 Preferences.Default.Set("BloodGroup", updatedProfile.BloodGroup);
+
+                // NEW: Save and Apply Screen On Preference immediately
+                Preferences.Default.Set("KeepScreenOn", KeepScreenOnSwitch.IsToggled);
+                DeviceDisplay.Current.KeepScreenOn = KeepScreenOnSwitch.IsToggled;
 
                 WelcomeNameLabel.Text = updatedProfile.Username;
                 ProfileModalOverlay.IsVisible = false;
@@ -325,8 +339,9 @@ public partial class MainPage : ContentPage
         try
         {
             await _signalRService.CreateGroup(groupName, WelcomeNameLabel.Text, CurrentGoogleId);
-            Preferences.Default.Set("IsAdmin", true);
-            await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));
+            var groupDetails = await _signalRService.GetGroupDetails(groupName);
+
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
         catch (Exception ex) { await DisplayAlert("Error", ex.Message, "OK"); }
     }
@@ -356,8 +371,10 @@ public partial class MainPage : ContentPage
             // Note: We know SignalR is ALREADY connected here from OnAzureLoginClicked!
             await _signalRService.JoinGroup(groupName, userName, CurrentGoogleId);
 
+            var groupDetails = await _signalRService.GetGroupDetails(groupName);
+
             // Navigate to Lobby
-            await Navigation.PushAsync(new LobbyPage(_signalRService, groupName));
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
         catch (Exception ex)
         {

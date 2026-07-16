@@ -167,7 +167,9 @@ public class CompassHub : Hub
                 IsNavigating = session.IsNavigating,
                 DestName = session.DestName ?? string.Empty,
                 DestLat = session.DestLat,
-                DestLng = session.DestLng
+                DestLng = session.DestLng,
+                AdminGoogleId = session.AdminGoogleId,
+                GroupName = groupName
             };
         }
         return null;

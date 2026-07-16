@@ -7,6 +7,7 @@ using Microsoft.Maui.Maps;
 using SpeedyCompass.Controls;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared.Models;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Text.Json;
@@ -70,6 +71,7 @@ public class MapPinTemplateSelector : DataTemplateSelector
 public partial class LobbyPage : ContentPage
 {
     private readonly SignalRService _signalRService;
+    private GroupDetailsDto groupDetails;
     private readonly string _googleApiKey;
     private static readonly HttpClient _httpClient = new();
 
@@ -116,14 +118,18 @@ public partial class LobbyPage : ContentPage
     private CancellationTokenSource _pttCts;
     private int _pttTimeRemaining;
 
-    public LobbyPage(SignalRService signalRService, string groupName)
+    public LobbyPage(SignalRService signalRService, GroupDetailsDto groupDetails)
     {
         InitializeComponent();
 
         // Ensure UI elements bind to this code-behind class
         BindingContext = this;
 
+        bool keepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
+        DeviceDisplay.Current.KeepScreenOn = keepScreenOn;
+
         _signalRService = signalRService;
+        this.groupDetails = groupDetails;
 
 #if ANDROID
         MainActivity.OnPiPModeChangedEvent += HandlePiPModeChanged;
@@ -142,9 +148,9 @@ public partial class LobbyPage : ContentPage
         var config = Application.Current?.MainPage?.Handler?.MauiContext?.Services?.GetService<IConfiguration>();
         _googleApiKey = "AIzaSyA8t2qkOm6A9K8ZM-uYyJp5gnLVZCEHWzk" ?? throw new Exception("API Key missing");
 
-        GroupNameLabel.Text = groupName;
+        GroupNameLabel.Text = this.groupDetails.GroupName;
         _myName = Preferences.Default.Get("username", "Unknown");
-        _amIAdmin = Preferences.Default.Get("IsAdmin", false);
+        _amIAdmin = this.groupDetails.AdminGoogleId == CurrentGoogleId;
 
         CurrentUserNameLabel.Text = _myName;
         CurrentUserRoleLabel.Text = _amIAdmin ? "Admin" : "Rider";
@@ -373,23 +379,21 @@ public partial class LobbyPage : ContentPage
                 OnRosterUpdated(roster);
             }
 
-            // --- THE NEW FIX: Pull the Group Details to restore Destination & Navigation State! ---
-            var details = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
-            if (details != null)
+            if (groupDetails != null)
             {
-                if (!string.IsNullOrEmpty(details.DestName))
+                if (!string.IsNullOrEmpty(groupDetails.DestName))
                 {
                     // Force the UI to show the pending destination box exactly as they left it
-                    OnDestinationSet(details.DestLat, details.DestLng, details.DestName);
+                    OnDestinationSet(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
                     _isSelectingLocation = true;
-                    DestinationSearchBar.Text = details.DestName;
+                    DestinationSearchBar.Text = groupDetails.DestName;
                     _isSelectingLocation = false;
                 }
 
-                if (details.IsNavigating)
+                if (groupDetails.IsNavigating)
                 {
                     // Force the UI into active routing mode SILENTLY (isSync = true)
-                    OnNavigationStarted(details.DestLat, details.DestLng, details.DestName,true);
+                    OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName,true);
                 }
             }
 
@@ -456,7 +460,7 @@ public partial class LobbyPage : ContentPage
         Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
     }
 
-    private void OnConnectionStatusChanged(string status, Color color)
+    private async void OnConnectionStatusChanged(string status, Color color)
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
@@ -469,7 +473,12 @@ public partial class LobbyPage : ContentPage
             {
                 parentView.InvalidateMeasure();
             }
+           
         });
+        if (color == Colors.MediumSeaGreen)
+        {
+            this.groupDetails = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
+        }
     }
 
     private async void OnTabClicked(object sender, EventArgs e)
@@ -775,6 +784,16 @@ public partial class LobbyPage : ContentPage
                 await Permissions.RequestAsync<Permissions.Microphone>();
             }
 
+            // --- NEW: Ask for Notification permission (Required for Android 13+ Foreground Service Banner) ---
+            if (DeviceInfo.Platform == DevicePlatform.Android && DeviceInfo.Version.Major >= 13)
+            {
+                var notifStatus = await Permissions.CheckStatusAsync<Permissions.PostNotifications>();
+                if (notifStatus != PermissionStatus.Granted)
+                {
+                    await Permissions.RequestAsync<Permissions.PostNotifications>();
+                }
+            }
+
             // 2. We only fetch ONE location here to center the map initially.
             // The Background Service handles all continuous tracking now!
             var locationRequest = new GeolocationRequest(GeolocationAccuracy.High, TimeSpan.FromSeconds(5));
@@ -1015,7 +1034,10 @@ public partial class LobbyPage : ContentPage
                 string displayName = r.Name;
 
                 if (displayName == myName)
+                {
                     displayName += " (You)";
+                    _amIAdmin = r.IsAdmin;
+                }
 
                 if (!r.IsOnline)
                     displayName += " (Offline)";

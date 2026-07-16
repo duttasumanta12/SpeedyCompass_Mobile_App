@@ -183,7 +183,7 @@ public class SignalRService
 
         _hubConnection.Reconnected += async (connectionId) =>
         {
-            ConnectionStatusChanged?.Invoke("Connected", Colors.Green);
+            ConnectionStatusChanged?.Invoke("Connected", Colors.MediumSeaGreen);
             try
             {
                 // STANDARD RESTORE: If SignalR auto-reconnected quickly
