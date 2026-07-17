@@ -1,11 +1,13 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using MongoDB.Driver;
+using SpeedyCompass.Shared;
+using SpeedyCompass.Shared.Constants;
+using SpeedyCompass.Shared.Models;
 using System;
-using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using SpeedyCompass.Shared.Models;
 
 namespace SpeedyCompass.Backend.Hubs;
 
@@ -151,7 +153,7 @@ public class CompassHub : Hub
                 GroupName = session.GroupName,
                 AdminGoogleId = session.AdminGoogleId,
                 MemberCount = _state.ConnectedRiders.Values.Count(r => r.GroupName == session.GroupName),
-                IsNavigating = session.IsNavigating,
+                IsNavigating = session.CurrentState == Shared.Constants.GroupState.Navigating,
                 MaxGroupSize = session.Settings.MaxGroupSize
             });
         }
@@ -164,7 +166,7 @@ public class CompassHub : Hub
         {
             return new GroupDetailsDto
             {
-                IsNavigating = session.IsNavigating,
+                CurrentState = session.CurrentState,
                 DestName = session.DestName ?? string.Empty,
                 DestLat = session.DestLat,
                 DestLng = session.DestLng,
@@ -222,7 +224,7 @@ public class CompassHub : Hub
         await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("UserJoinedAlert", userName);
         await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
 
-        if (session.IsNavigating)
+        if (session.CurrentState == Shared.Constants.GroupState.Navigating)
         {
             // IDEA 1: Roster Voice Announcement
             await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"{userName} has joined the convoy.");
@@ -262,7 +264,7 @@ public class CompassHub : Hub
                 {
                     // Everyone is offline! Wipe the active navigation state so the next ride starts fresh.
                     var update = Builders<GroupSession>.Update
-                        .Set(g => g.IsNavigating, false);
+                        .Set(g => g.CurrentState, GroupState.NotNavigating);
 
                     await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, update);
 
@@ -330,7 +332,11 @@ public class CompassHub : Hub
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            var update = Builders<GroupSession>.Update.Set(g => g.DestLat, destLat).Set(g => g.DestLng, destLng).Set(g => g.DestName, destName);
+            var update = Builders<GroupSession>.Update
+                .Set(g => g.CurrentState, GroupState.DestinationSet)
+                .Set(g => g.DestLat, destLat)
+                .Set(g => g.DestLng, destLng)
+                .Set(g => g.DestName, destName);
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
             await Clients.Group(groupName).SendAsync("DestinationSet", destLat, destLng, destName);
 
@@ -346,7 +352,7 @@ public class CompassHub : Hub
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            var update = Builders<GroupSession>.Update.Set(g => g.IsNavigating, true).Set(g => g.DestLat, destLat).Set(g => g.DestLng, destLng).Set(g => g.DestName, destName);
+            var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, Shared.Constants.GroupState.Navigating).Set(g => g.DestLat, destLat).Set(g => g.DestLng, destLng).Set(g => g.DestName, destName);
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
             await Clients.Group(groupName).SendAsync("NavigationStarted", destLat, destLng, destName, false);
         }
@@ -359,7 +365,7 @@ public class CompassHub : Hub
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.IsNavigating, false));
+            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.CurrentState, Shared.Constants.GroupState.NotNavigating));
 
             // --- NEW: Reset telemetry stats (speed, distance) for all riders in the group ---
             var ridersInGroup = _state.ConnectedRiders.Values
@@ -453,7 +459,7 @@ public class CompassHub : Hub
                     // Only calculate Lag if it is turned ON (> 0)
                     if (session.Settings.MaxLagDistanceMeters > 0)
                     {
-                        if (session.IsNavigating)
+                        if (session.CurrentState == Shared.Constants.GroupState.Navigating)
                         {
                             double leadToDest = CalculateDistanceMeters(leadRider.LastLat, leadRider.LastLng, session.DestLat, session.DestLng);
                             double riderToDest = CalculateDistanceMeters(lat, lng, session.DestLat, session.DestLng);
@@ -491,7 +497,7 @@ public class CompassHub : Hub
 
                             string distText = lagDistance > 1000 ? $"{Math.Round(lagDistance / 1000.0, 1)} kilometers" : $"{Math.Round(lagDistance)} meters";
                             string statusText = isAhead ? "ahead of" : "behind";
-                            string broadcastMessage = session.IsNavigating
+                            string broadcastMessage = session.CurrentState == Shared.Constants.GroupState.Navigating
                                 ? $"{userName} is {distText} {statusText} the Lead."
                                 : $"{userName} is separated from the Lead by {distText}.";
 
@@ -552,7 +558,7 @@ public class CompassHub : Hub
                 else { _alertCooldowns.TryRemove(splinterKey, out _); }
 
                 // Arrival Detection
-                if (session.IsNavigating)
+                if (session.CurrentState == Shared.Constants.GroupState.Navigating)
                 {
                     double distToDest = CalculateDistanceMeters(lat, lng, session.DestLat, session.DestLng);
                     if (distToDest < (session.Settings.ArrivalGeofenceMeters > 0 ? session.Settings.ArrivalGeofenceMeters : 1000))
@@ -586,7 +592,7 @@ public class CompassHub : Hub
 
             if (leadRider != null && rider.GoogleId != leadGoogleId && rider.LastLat != 0 && leadRider.LastLat != 0)
             {
-                if (session.IsNavigating)
+                if (session.CurrentState == Shared.Constants.GroupState.Navigating)
                 {
                     double leadToDest = CalculateDistanceMeters(leadRider.LastLat, leadRider.LastLng, session.DestLat, session.DestLng);
                     double riderToDest = CalculateDistanceMeters(rider.LastLat, rider.LastLng, session.DestLat, session.DestLng);
@@ -681,7 +687,7 @@ public class CompassHub : Hub
 
         if (session != null)
         {
-            if (session.IsNavigating)
+            if (session.CurrentState == Shared.Constants.GroupState.Navigating)
                 await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
             else if (!string.IsNullOrEmpty(session.DestName))
                 await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
@@ -761,7 +767,39 @@ public class CompassHub : Hub
             }
         }
     }
+    // --- NEW: PAUSE, RESUME, AND COMPLETE ---
 
+    public async Task PauseNavigation(string groupName, string reason, string adminName)
+    {
+        // Map the string reason from the frontend UI to the exact Backend Enum
+        var pauseState = GroupStateHelper.GetBreakState(reason);
+
+        var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, pauseState);
+        await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+
+        await Clients.Group(groupName).SendAsync("ReceiveNavigationPaused", reason, adminName);
+    }
+
+    public async Task ResumeNavigation(string groupName, string adminName)
+    {
+        var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, GroupState.Navigating);
+        await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+
+        await Clients.Group(groupName).SendAsync("ReceiveNavigationResumed", adminName);
+    }
+
+    public async Task CompleteNavigation(string groupName, string adminName)
+    {
+        var update = Builders<GroupSession>.Update
+            .Set(g => g.CurrentState, GroupState.Completed)
+            .Set(g => g.DestLat, 0)
+            .Set(g => g.DestLng, 0)
+            .Set(g => g.DestName, string.Empty);
+
+        await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+
+        await Clients.Group(groupName).SendAsync("ReceiveNavigationCompleted", adminName);
+    }
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         await LeaveLobby();

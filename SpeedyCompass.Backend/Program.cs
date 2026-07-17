@@ -80,7 +80,7 @@ app.MapGet("/api/groups", async (CompassStateManager state) =>
             GroupName = session.GroupName,
             AdminGoogleId = session.AdminGoogleId,
             MemberCount = state.ConnectedRiders.Values.Count(r => r.GroupName == session.GroupName),
-            IsNavigating = session.IsNavigating,
+            IsNavigating = session.CurrentState == SpeedyCompass.Shared.Constants.GroupState.Navigating,
             MaxGroupSize = session.Settings.MaxGroupSize
         });
     }

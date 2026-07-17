@@ -7,6 +7,8 @@ using Microsoft.Maui.Maps;
 using SpeedyCompass.Controls;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared;
+using SpeedyCompass.Shared.Constants;
 using SpeedyCompass.Shared.Models;
 using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
@@ -27,6 +29,7 @@ public class RouteLatLng { [JsonPropertyName("latitude")] public double Latitude
 public class RoutesResponse { [JsonPropertyName("routes")] public List<RouteData> Routes { get; set; } }
 public class RouteData { [JsonPropertyName("distanceMeters")] public int DistanceMeters { get; set; } [JsonPropertyName("duration")] public string Duration { get; set; } [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; } }
 public class RoutePolyline { [JsonPropertyName("encodedPolyline")] public string EncodedPolyline { get; set; } }
+
 // MVVM Model for the Map Pins
 public class MapPinViewModel : System.ComponentModel.INotifyPropertyChanged
 {
@@ -59,11 +62,8 @@ public class MapPinTemplateSelector : DataTemplateSelector
     {
         if (item is MapPinViewModel vm && vm.IsDestination)
         {
-            // Use standard Google Map Pin for destinations
             return DestinationTemplate;
         }
-
-        // Use custom speed bubble for real users
         return RiderTemplate;
     }
 }
@@ -80,16 +80,16 @@ public partial class LobbyPage : ContentPage
     private bool _hasJoined = false;
     private bool _amIAdmin = false;
     private string _myName = "";
+    private GroupState _currentState = GroupState.NotNavigating;
+    private DateTime _stateStartTime;
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
 
     // UI State Collections for XAML Binding
     public ObservableCollection<Rider> Riders { get; set; } = new();
-    public ObservableCollection<RiderPin> MapPins { get; }
-    = new ObservableCollection<RiderPin>();
+    public ObservableCollection<RiderPin> MapPins { get; } = new ObservableCollection<RiderPin>();
 
     // Tracking State
     private bool _isTracking = false;
-    private bool _routeIsActive = false;
     private Location _lastKnownLocation;
     private RiderPin _myPinVm;
 
@@ -105,26 +105,28 @@ public partial class LobbyPage : ContentPage
     private List<Location> _currentRoutePoints = new();
     private bool _isSimulating = false;
 
-    private double _currentHeading = 0; // Added to track our current rotation
+    private double _currentHeading = 0;
     private int _autocompleteApiHits = 0;
     private CancellationTokenSource _debounceCts;
 
-    // NEW FLAG: Tracks if the user intentionally wants to delete/leave the group
     private bool _isLeavingGroupPermanently = false;
-    // FIX: Flag to prevent the suggestion list from reopening
     private bool _isSelectingLocation = false;
-    // --- NEW: PTT State ---
+
+    // --- PTT State ---
     private readonly HardwareButtonService _hwButtonService;
     private string _currentSpeaker = string.Empty;
-    // THE FIX: Use a Reliable Token instead of IDispatcherTimer
     private CancellationTokenSource _pttCts;
     private int _pttTimeRemaining;
+
+    // --- GOOGLE MAPS STYLE DRAWER STATE ---
+    private double _drawerFullHeight;
+    private double _drawerPeekHeight = 160;
+    private double _currentDrawerTranslation = 0;
+    private ILocationTracker? _locationTracker;
 
     public LobbyPage(SignalRService signalRService, GroupDetailsDto groupDetails)
     {
         InitializeComponent();
-
-        // Ensure UI elements bind to this code-behind class
         BindingContext = this;
 
         bool keepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
@@ -137,8 +139,6 @@ public partial class LobbyPage : ContentPage
         MainActivity.OnPiPModeChangedEvent += HandlePiPModeChanged;
 #endif
 
-        // Fetch OS-Specific tracker from MAUI Services directly!
-        // This prevents constructor errors when navigating from MainPage.
 #if ANDROID
         _locationTracker = IPlatformApplication.Current?.Services.GetService<ILocationTracker>();
         if (_locationTracker != null)
@@ -167,47 +167,272 @@ public partial class LobbyPage : ContentPage
         _signalRService.RosterUpdated += OnRosterUpdated;
         _signalRService.NavigationStarted += OnNavigationStarted;
         _signalRService.RiderLocationUpdated += OnRiderLocationUpdated;
-        _signalRService.NavigationCancelled += OnNavigationCancelled; // NEW
+        _signalRService.NavigationCancelled += OnNavigationCancelled;
         _signalRService.AlertReceived += OnAlertReceived;
         _signalRService.DestinationSet += OnDestinationSet;
         _signalRService.UserJoinedAlert += OnUserJoined;
         _signalRService.UserLeftAlert += OnUserLeft;
         _signalRService.GroupDeleted += OnGroupDeleted;
-        // Subscribe to SignalR PTT Events
         _signalRService.PttLocked += OnPttLocked;
         _signalRService.PttDenied += OnPttDenied;
         _signalRService.PttReleased += OnPttReleased;
+        _signalRService.NavigationPaused += OnNavigationPaused;
+        _signalRService.NavigationResumed += OnNavigationResumed;
+        _signalRService.NavigationCompleted += OnNavigationCompleted;
 
-        // Fetch Hardware Button Service and subscribe
         _hwButtonService = IPlatformApplication.Current?.Services.GetService<HardwareButtonService>();
         if (_hwButtonService != null)
         {
             _hwButtonService.PttPressed += OnHardwarePttPressed;
             _hwButtonService.PttReleased += OnHardwarePttReleased;
         }
-
     }
-    // --- THE FIX: RELIABLE 30-SEC TIMEOUT LOOP ---
+
+    // --- DRAWER LIFECYCLE & PHYSICS ---
+    protected override void OnSizeAllocated(double width, double height)
+    {
+        base.OnSizeAllocated(width, height);
+        if (height > 0)
+        {
+            _drawerFullHeight = height * 0.85;
+            ActionDrawer.HeightRequest = _drawerFullHeight;
+
+            if (ActionDrawer.IsVisible && ActionDrawer.TranslationY == 0)
+            {
+                ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+            }
+        }
+    }
+
+    private void OnDrawerPanUpdated(object sender, PanUpdatedEventArgs e)
+    {
+        double maxTranslation = _drawerFullHeight - _drawerPeekHeight;
+
+        switch (e.StatusType)
+        {
+            case GestureStatus.Started:
+                _currentDrawerTranslation = ActionDrawer.TranslationY;
+                break;
+
+            case GestureStatus.Running:
+                double newTranslation = _currentDrawerTranslation + e.TotalY;
+                ActionDrawer.TranslationY = Math.Max(0, Math.Min(newTranslation, maxTranslation));
+                break;
+
+            case GestureStatus.Completed:
+                if (ActionDrawer.TranslationY < maxTranslation * 0.4)
+                {
+                    ActionDrawer.TranslateTo(0, 0, 250, Easing.CubicOut);
+                }
+                else
+                {
+                    ActionDrawer.TranslateTo(0, maxTranslation, 250, Easing.CubicOut);
+                }
+                break;
+        }
+    }
+
+    private void OnDrawerTabClicked(object sender, EventArgs e)
+    {
+        TabActionsBtn.BackgroundColor = Colors.Transparent;
+        TabActionsBtn.TextColor = Colors.Gray;
+        TabStatsBtn.BackgroundColor = Colors.Transparent;
+        TabStatsBtn.TextColor = Colors.Gray;
+        TabAdminBtn.BackgroundColor = Colors.Transparent;
+        TabAdminBtn.TextColor = Colors.Gray;
+
+        DrawerActionsTab.IsVisible = false;
+        DrawerStatsTab.IsVisible = false;
+        DrawerAdminTab.IsVisible = false;
+
+        if (sender == TabActionsBtn)
+        {
+            TabActionsBtn.BackgroundColor = Colors.DodgerBlue;
+            TabActionsBtn.TextColor = Colors.White;
+            DrawerActionsTab.IsVisible = true;
+        }
+        else if (sender == TabStatsBtn)
+        {
+            TabStatsBtn.BackgroundColor = Colors.DodgerBlue;
+            TabStatsBtn.TextColor = Colors.White;
+            DrawerStatsTab.IsVisible = true;
+            _ = RefreshTelemetryData();
+        }
+        else if (sender == TabAdminBtn)
+        {
+            TabAdminBtn.BackgroundColor = Colors.DodgerBlue;
+            TabAdminBtn.TextColor = Colors.White;
+            DrawerAdminTab.IsVisible = true;
+        }
+
+        double maxTranslation = _drawerFullHeight - _drawerPeekHeight;
+        if (ActionDrawer.TranslationY >= maxTranslation - 10)
+        {
+            ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
+        }
+    }
+
+    // --- PIP TOGGLE ---
+    private void HandlePiPModeChanged(bool isPipMode)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (isPipMode)
+            {
+                TabRoster.IsVisible = false;
+                TabMap.IsVisible = false;
+                DestinationSearchBar.IsVisible = false;
+                ActionDrawer.IsVisible = false;
+                FloatingMapControls.IsVisible = false;
+                MapView.IsVisible = false;
+
+                PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
+                PipSpeedLabel.Text = _myPinVm?.Speed ?? "0 mph";
+                PipOverlayGrid.IsVisible = true;
+            }
+            else
+            {
+                PipOverlayGrid.IsVisible = false;
+                TabRoster.IsVisible = true;
+                TabMap.IsVisible = true;
+                DestinationSearchBar.IsVisible = true;
+                MapView.IsVisible = true;
+
+                if (groupDetails?.CurrentState == GroupState.Navigating ||
+                    groupDetails?.CurrentState == GroupState.PausedBreak ||
+                    groupDetails?.CurrentState == GroupState.PausedHazard ||
+                    groupDetails?.CurrentState == GroupState.PausedMechanical)
+                {
+                    ActionDrawer.IsVisible = true;
+                    FloatingMapControls.IsVisible = true;
+                }
+            }
+        });
+    }
+
+    // --- STATE MACHINE ---
+    private async void ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "")
+    {
+        if (_currentState == newState) return;
+
+        _currentState = newState;
+        _stateStartTime = DateTime.Now;
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            switch (newState)
+            {
+                case GroupState.NotNavigating:
+                case GroupState.Completed:
+                    ActionDrawer.IsVisible = false;
+                    FloatingMapControls.IsVisible = false;
+                    PendingDestinationFrame.IsVisible = false;
+                    ConfirmDestButton.IsVisible = true;
+                    ResetDestButton.IsVisible = false;
+                    DestinationSearchBar.IsReadOnly = false;
+                    DestinationSearchBar.Text = string.Empty;
+
+                    _locationTracker?.StopTracking();
+                    _isSimulating = false;
+
+                    if (_activeRouteLine != null)
+                    {
+                        LiveMap.MapElements.Remove(_activeRouteLine);
+                        _activeRouteLine = null;
+                    }
+                    var oldDest = LiveMap.Pins.FirstOrDefault(p => p.Label != "You" && p.Type == PinType.Place);
+                    if (oldDest != null) LiveMap.Pins.Remove(oldDest);
+
+                    FitMapToBounds();
+
+#if ANDROID
+                    MainActivity.IsInNavigationMode = false;
+#endif
+                    if (newState == GroupState.Completed)
+                        _ = TextToSpeech.Default.SpeakAsync($"Navigation completed by {triggerUser}. Great ride!");
+                    break;
+
+                case GroupState.Navigating:
+                    OnTabClicked(TabMap, new TabClickedEventArgs() { FromNavigationStarted = true });
+                    PendingDestinationFrame.IsVisible = false;
+                    AdminInstructionBanner.IsVisible = false;
+                    DestinationSearchBar.IsReadOnly = true;
+                    ConfirmDestButton.IsVisible = false;
+                    ResetDestButton.IsVisible = true;
+
+                    ActionDrawer.IsVisible = true;
+                    FloatingMapControls.IsVisible = true;
+                    ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+
+                    // Admin Visibility Rules
+                    TabAdminBtn.IsVisible = _amIAdmin;
+                    if (_amIAdmin)
+                    {
+                        PauseNavBtn.IsVisible = true;
+                        ResumeNavBtn.IsVisible = false;
+                        CompleteNavBtn.IsVisible = true;
+                    }
+
+                    SetActionButtonsEnabled(true);
+                    _locationTracker?.StartTracking(GroupNameLabel.Text);
+
+#if ANDROID
+                    MainActivity.IsInNavigationMode = true;
+#endif
+                    if (string.IsNullOrEmpty(triggerUser))
+                        _ = TextToSpeech.Default.SpeakAsync("Navigation active. Ride safe!");
+                    break;
+
+                case GroupState.PausedBreak:
+                case GroupState.PausedHazard:
+                case GroupState.PausedMechanical:
+                    _locationTracker?.StopTracking();
+                    SetActionButtonsEnabled(false);
+
+                    if (_amIAdmin)
+                    {
+                        PauseNavBtn.IsVisible = false;
+                        ResumeNavBtn.IsVisible = true;
+                        CompleteNavBtn.IsVisible = true;
+                    }
+
+                    string context = newState == GroupState.PausedBreak ? "for a break" :
+                                     newState == GroupState.PausedHazard ? "due to a hazard" :
+                                     "for mechanical repairs";
+
+                    string spokenReason = string.IsNullOrEmpty(reason) ? context : reason;
+                    _ = TextToSpeech.Default.SpeakAsync($"Navigation paused by {triggerUser} {spokenReason}. Tracking suspended.");
+
+                    // Force open the Telemetry Dashboard tab
+                    ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
+                    OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
+
+                    break;
+            }
+        });
+    }
+
+    private void SetActionButtonsEnabled(bool isEnabled)
+    {
+        DrawerActionsTab.IsEnabled = isEnabled;
+        DrawerActionsTab.Opacity = isEnabled ? 1.0 : 0.4;
+    }
+
+    // --- PTT TIMEOUT & TRIGGERS ---
     private async Task RunPttTimeoutAsync(CancellationToken token)
     {
-        _pttTimeRemaining = 30; // Max 30 seconds per request
-
+        _pttTimeRemaining = 30;
         try
         {
             while (_pttTimeRemaining > 0 && !token.IsCancellationRequested)
             {
-                MainThread.BeginInvokeOnMainThread(() =>
-                {
-                    PttCountdownLabel.Text = $"Auto-closing in {_pttTimeRemaining}s...";
-                });
-
+                MainThread.BeginInvokeOnMainThread(() => PttCountdownLabel.Text = $"Auto-closing in {_pttTimeRemaining}s...");
                 await Task.Delay(1000, token);
                 _pttTimeRemaining--;
             }
 
             if (_pttTimeRemaining <= 0 && !token.IsCancellationRequested)
             {
-                // Timeout reached!
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
                     PttCountdownLabel.Text = "Maximum time reached!";
@@ -220,59 +445,47 @@ public partial class LobbyPage : ContentPage
                 }
             }
         }
-        catch (TaskCanceledException) { /* Ignored on early release */ }
+        catch (TaskCanceledException) { }
     }
-    // --- NEW: PTT HARDWARE TRIGGERS ---
+
     private async void OnHardwarePttPressed(object sender, EventArgs e)
     {
-        // Ignore if we are already the speaker
         if (_currentSpeaker == _myName) return;
-
-        // Ask the server for the mic lock!
         await _signalRService.RequestPtt(GroupNameLabel.Text, _myName);
     }
 
     private async void OnHardwarePttReleased(object sender, EventArgs e)
     {
-        // If we let go of the button, and we hold the lock, release it!
         if (_currentSpeaker == _myName)
         {
             await _signalRService.ReleasePtt(GroupNameLabel.Text, _myName);
         }
     }
 
-    // --- NEW: PTT SERVER RESPONSES ---
     private void OnPttLocked(string speakerName)
     {
         _currentSpeaker = speakerName;
-
         MainThread.BeginInvokeOnMainThread(() =>
         {
             PttOverlay.IsVisible = true;
-
             if (speakerName == _myName)
             {
-                // WE got the lock!
                 PttStatusLabel.Text = "MIC OPEN";
                 PttStatusLabel.TextColor = Colors.MediumSeaGreen;
                 PttSpeakerLabel.Text = "You can now speak to the group.";
 
-                // Start the highly reliable 15-Second Timer Loop
                 _pttCts?.Cancel();
                 _pttCts = new CancellationTokenSource();
                 PttCountdownLabel.IsVisible = true;
                 _ = RunPttTimeoutAsync(_pttCts.Token);
 
-                // Tactile feedback (buzz) and Voice
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
                 _ = TextToSpeech.Default.SpeakAsync("You can now speak.");
             }
             else
             {
-                // SOMEONE ELSE got the lock!
-                _pttCts?.Cancel(); // Ensure our timer isn't running
+                _pttCts?.Cancel();
                 PttCountdownLabel.IsVisible = false;
-
                 PttStatusLabel.Text = "RECEIVING";
                 PttStatusLabel.TextColor = Colors.DodgerBlue;
                 PttSpeakerLabel.Text = $"{speakerName} is speaking...";
@@ -282,81 +495,35 @@ public partial class LobbyPage : ContentPage
 
     private void OnPttDenied(string activeSpeaker)
     {
-        // We tried to talk, but someone else is already talking!
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _ = TextToSpeech.Default.SpeakAsync("Channel busy.");
-            Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500)); // Longer warning buzz
+            Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500));
         });
     }
 
     private void OnPttReleased()
     {
         _currentSpeaker = string.Empty;
-
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            _pttCts?.Cancel(); // ALWAYS kill the timer on release!
+            _pttCts?.Cancel();
             PttOverlay.IsVisible = false;
             PttCountdownLabel.IsVisible = false;
         });
     }
 
-    // --- NEW: UI UPDATE FROM BACKGROUND SERVICE ---
+    // --- BACKGROUND LOCATION OVERRIDES ---
     private void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
         MainThread.BeginInvokeOnMainThread(async () =>
         {
             LocationDisabledOverlay.IsVisible = false;
-
             if (_myPinVm != null)
             {
                 _myPinVm.Location = e.Location;
-                _myPinVm.Speed = $"{Math.Round(e.SpeedMph)} mph";
+                _myPinVm.Speed = $"{Math.Round(e.SpeedMph)} kmph";
                 _myPinVm.Heading = e.Heading;
-            }
-
-            //if (_routeIsActive)
-            //{
-            //    await LiveMap.RotateTo(360 - e.Heading, 500, Easing.SinInOut);
-            //    LiveMap.Scale = 1.4;
-            //}
-        });
-    }
-
-    // 3. Add the toggle logic:
-    private void HandlePiPModeChanged(bool isPipMode)
-    {
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            if (isPipMode)
-            {
-                // Entering PiP: Hide standard UI, show Minimal Telemetry
-                TabRoster.IsVisible = false;
-                TabMap.IsVisible = false;
-                DestinationSearchBar.IsVisible = false;
-                ActionDrawer.IsVisible = false;
-
-                // Keep the map rendering in the background if you want, or hide it to save GPU
-                MapView.IsVisible = false;
-
-                // Populate telemetry data
-                PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
-                PipSpeedLabel.Text = _myPinVm?.Speed ?? "0 mph";
-
-                PipOverlayGrid.IsVisible = true;
-            }
-            else
-            {
-                // Exiting PiP (App maximized): Restore standard UI
-                PipOverlayGrid.IsVisible = false;
-
-                TabRoster.IsVisible = true;
-                TabMap.IsVisible = true;
-                DestinationSearchBar.IsVisible = true;
-                MapView.IsVisible = true;
-
-                if (_routeIsActive) ActionDrawer.IsVisible = true;
             }
         });
     }
@@ -368,13 +535,8 @@ public partial class LobbyPage : ContentPage
 
         try
         {
-            // FIX 1: Because SignalR started on the MainPage, the "Connected" event already fired in the past!
-            // We manually trigger the UI update to clear the "Connecting..." label.
             OnConnectionStatusChanged("Connected", Colors.MediumSeaGreen);
 
-            // FIX 2: Manually ask the server for the roster! 
-            // The RosterUpdated event may have broadcasted before this page finished loading,
-            // so we fetch it now to ensure it's perfectly in sync.
             var roster = await _signalRService.GetGroupRoster(GroupNameLabel.Text);
             if (roster != null)
             {
@@ -383,26 +545,25 @@ public partial class LobbyPage : ContentPage
 
             if (groupDetails != null)
             {
-                if (!string.IsNullOrEmpty(groupDetails.DestName))
+                if (groupDetails.CurrentState == GroupState.DestinationSet)
                 {
-                    // Force the UI to show the pending destination box exactly as they left it
                     OnDestinationSet(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
                     _isSelectingLocation = true;
                     DestinationSearchBar.Text = groupDetails.DestName;
+                    AdminInstructionBanner.IsVisible = false;
+                    ConfirmDestButton.IsVisible = false;
+                    ResetDestButton.IsVisible = true;
                     _isSelectingLocation = false;
                 }
 
-                if (groupDetails.IsNavigating)
+                if (groupDetails.CurrentState == GroupState.Navigating)
                 {
-                    // Force the UI into active routing mode SILENTLY (isSync = true)
-                    OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName,true);
+                    OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName, true);
                 }
             }
 
             _hasJoined = true;
-
             AdminSettingsBtn.IsVisible = _amIAdmin;
-
             InitializeLocalTrackingAsync();
         }
         catch (Exception ex)
@@ -411,41 +572,32 @@ public partial class LobbyPage : ContentPage
             await Navigation.PopAsync();
         }
     }
-    // --- NEW: ADMIN SETTINGS UI EVENTS ---
-    // 5. UPDATE: Fetch the backend settings right before opening the modal
+
+    // --- ADMIN SETTINGS ---
     private async void OnAdminSettingsClicked(object sender, EventArgs e)
     {
-        // Fetch current settings from backend
         var currentSettings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
-
         if (currentSettings != null)
         {
-            // Updating the sliders will automatically trigger your existing 
-            // ValueChanged events (e.g. OnSizeSliderChanged) and update the text labels too!
             LagSlider.Value = currentSettings.MaxLagDistanceMeters;
             SplinterSlider.Value = currentSettings.SplinterWarningDistanceMeters;
             SizeSlider.Value = currentSettings.MaxGroupSize;
-            PitstopSlider.Value = currentSettings.PitstopDistanceMeters / 1000; // Convert meters back to km
+            PitstopSlider.Value = currentSettings.PitstopDistanceMeters / 1000;
         }
-
         AdminSettingsOverlay.IsVisible = true;
     }
-    private void OnCloseSettingsClicked(object sender, EventArgs e)
-    {
-        AdminSettingsOverlay.IsVisible = false;
-    }
+
+    private void OnCloseSettingsClicked(object sender, EventArgs e) => AdminSettingsOverlay.IsVisible = false;
     private void OnLagSliderChanged(object sender, ValueChangedEventArgs e)
     {
-        // Round to nearest 50 meters for clean UX
         double roundedValue = Math.Round(e.NewValue / 50.0) * 50;
-        LagSlider.Value = roundedValue; // Snap the slider
+        LagSlider.Value = roundedValue;
         LagValueLabel.Text = $"{roundedValue}m";
     }
     private void OnSplinterSliderChanged(object sender, ValueChangedEventArgs e)
     {
-        // Round to nearest 100 meters
         double roundedValue = Math.Round(e.NewValue / 100.0) * 100;
-        SplinterSlider.Value = roundedValue; // Snap the slider
+        SplinterSlider.Value = roundedValue;
         SplinterValueLabel.Text = $"{roundedValue}m";
     }
     private async void OnSaveSettingsClicked(object sender, EventArgs e)
@@ -453,11 +605,9 @@ public partial class LobbyPage : ContentPage
         int maxLag = (int)LagSlider.Value;
         int splinterDist = (int)SplinterSlider.Value;
         int maxSize = (int)SizeSlider.Value;
-        int pitstopDistMeters = (int)PitstopSlider.Value * 1000; // Convert km to meters for the backend
+        int pitstopDistMeters = (int)PitstopSlider.Value * 1000;
 
-        // Push all settings to Cosmos DB via SignalR
         await _signalRService.UpdateGroupSettings(GroupNameLabel.Text, maxLag, splinterDist, maxSize, pitstopDistMeters);
-
         AdminSettingsOverlay.IsVisible = false;
         Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
     }
@@ -470,16 +620,18 @@ public partial class LobbyPage : ContentPage
             StatusLabel.TextColor = color;
             StatusDot.BackgroundColor = color;
             MapTabStatusDot.Fill = color;
-            // FIX: Force the layout engine to recalculate and repaint this specific UI block
             if (StatusLabel.Parent is View parentView)
             {
                 parentView.InvalidateMeasure();
             }
-           
         });
         if (color == Colors.MediumSeaGreen)
         {
-            this.groupDetails = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
+            var fetchedDetails = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
+            if (fetchedDetails != null)
+            {
+                this.groupDetails = fetchedDetails;
+            }
         }
     }
 
@@ -511,41 +663,30 @@ public partial class LobbyPage : ContentPage
             {
                 var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
                 UpdateDestinationPin(_activeDestination, DestinationSearchBar.Text);
-
                 await CalculateAndDrawRoute(currentLoc, _activeDestination);
 
-                MainThread.BeginInvokeOnMainThread(() =>
-                {
-                    FitMapToBounds([currentLoc, _activeDestination]);
-                });
+                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _activeDestination]));
             }
             else
             {
-                MainThread.BeginInvokeOnMainThread(() =>
-                {
-                    FitMapToBounds();
-                });
+                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
             }
         }
     }
 
-    // --- SEARCH AND DESTINATION LOGIC ---
+    // --- SEARCH AND MAP ACTIONS ---
     private async void OnMapClicked(object sender, MapClickedEventArgs e)
     {
-        if (!_amIAdmin || _routeIsActive) return;
+        if (!_amIAdmin || groupDetails?.CurrentState == GroupState.Navigating) return;
 
         _pendingDestination = e.Location;
         UpdateDestinationPin(_pendingDestination, "Selected Destination");
         var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         await CalculateAndDrawRoute(currentLoc, _pendingDestination);
-        MainThread.BeginInvokeOnMainThread(async () =>
-        {
-            FitMapToBounds([currentLoc, _pendingDestination]);
-        });
+        MainThread.BeginInvokeOnMainThread(async () => FitMapToBounds([currentLoc, _pendingDestination]));
 
         try
         {
-            // Reverse Geocoding: Turn Map Coordinates into an Address
             var placemarks = await Geocoding.Default.GetPlacemarksAsync(e.Location.Latitude, e.Location.Longitude);
             var placemark = placemarks?.FirstOrDefault();
             if (placemark != null)
@@ -569,7 +710,6 @@ public partial class LobbyPage : ContentPage
 
         try
         {
-            // Forward Geocoding: Turn Address into Map Coordinates
             var locations = await Geocoding.Default.GetLocationsAsync(DestinationSearchBar.Text);
             var location = locations?.FirstOrDefault();
             if (location != null)
@@ -591,15 +731,12 @@ public partial class LobbyPage : ContentPage
 
     private void UpdateDestinationPin(Location location, string label)
     {
-        // Remove old destination VM if it exists
-        var oldDest = LiveMap.Pins.FirstOrDefault();
+        var oldDest = LiveMap.Pins.FirstOrDefault(p => p.Label != "You" && p.Type == PinType.Place);
         if (oldDest != null) LiveMap.Pins.Remove(oldDest);
 
-        // Add new destination VM (TemplateSelector will detect IsDestination = true)
-        LiveMap.Pins.Add(new Pin() { Label = label, Location = location });
+        LiveMap.Pins.Add(new Pin() { Label = label, Location = location, Type = PinType.Place });
     }
 
-    // --- NAVIGATION CONFIRMATION ---
     private async void OnConfirmDestinationClicked(object sender, EventArgs e)
     {
         if (_pendingDestination == null || _lastKnownLocation == null) return;
@@ -612,82 +749,42 @@ public partial class LobbyPage : ContentPage
         string destName = DestinationSearchBar.Text ?? "Destination";
         _activeDestination = _pendingDestination;
 
-        // Switch the Admin's view to the Roster tab automatically to see the "Start Journey" button
+        groupDetails.CurrentState = GroupState.DestinationSet;
+
         OnTabClicked(TabRoster, EventArgs.Empty);
 
-        // Broadcast the pending destination to everyone's Roster (does NOT start navigation yet)
         await _signalRService.SetGroupDestination(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
     }
+
     private async void OnResetDestinationClicked(object sender, EventArgs e)
     {
-        ResetDestButton.IsVisible = false;
-        ConfirmDestButton.IsVisible = true;
-        DestinationSearchBar.IsReadOnly = false;
-        StartNavButton.IsVisible = false;
-        ActionDrawer.IsVisible = false;
-        MinimizePanelButton.IsVisible = false;
-        AdminInstructionBanner.IsVisible = true;
-        PendingDestinationFrame.IsVisible = false; // Hide Roster dashboard
-        _routeIsActive = false;
-        _isSimulating = false;
-        _activeDestination = null;
-        DestinationSearchBar.Text = string.Empty;
-
-        if (_activeRouteLine != null)
+        if (groupDetails != null)
         {
-            LiveMap.MapElements.Remove(_activeRouteLine);
-            _activeRouteLine = null;
+            groupDetails.CurrentState = GroupState.NotNavigating;
+            //If not navigating but destination was set
+            PendingDestinationFrame.IsVisible = false;
+            ConfirmDestButton.IsVisible = true;
+            ResetDestButton.IsVisible = false;
+            DestinationSearchBar.IsReadOnly = false;
+            DestinationSearchBar.Text = string.Empty;
+            _activeDestination = null;
         }
-
+        ChangeGroupState(GroupState.NotNavigating);
         await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
-        FitMapToBounds();
     }
 
+    // --- HUB EVENT RESPONDERS ---
     private async void OnNavigationStarted(double destLat, double destLng, string destName, bool isSyncRequired = false)
     {
-        _routeIsActive = true;
         _activeDestination = new Location(destLat, destLng);
-
-        // Start the background GPS Tracker
-        _locationTracker?.StartTracking(GroupNameLabel.Text);
-
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            // 🚀 FORCE EVERYONE TO THE MAP TAB AUTOMATICALLY
-            OnTabClicked(TabMap, new TabClickedEventArgs { FromNavigationStarted = true });
-
-            // --- THE FIX: STRICT UI STATE ENFORCEMENT ---
-            // 1. Hide ALL Setup & Destination Picker UI Elements
-            PendingDestinationFrame.IsVisible = false;
-            AdminInstructionBanner.IsVisible = false;
-
-            // Hide the Search block
-            DestinationSearchBar.IsReadOnly = true;
-            DestinationSearchBar.Text = destName;
-            ConfirmDestButton.IsVisible = false;
-            ResetDestButton.IsVisible = true;
-
-            // FIX: Ensure StartNavButton hides, while Action panels show
-            StartNavButton.IsVisible = true;
-            ActionDrawer.TranslationY = 300;
-            FloatingControlsLayout.TranslationY = 0;
-            MinimizePanelButton.IsVisible = true;
-            AdminInstructionBanner.IsVisible = false;
-
-#if ANDROID
-            MainActivity.IsInNavigationMode = true;
-#endif
-            UpdateDestinationPin(_activeDestination, destName);
-        });
+        groupDetails.CurrentState = GroupState.Navigating;
+        ChangeGroupState(groupDetails.CurrentState, _myName);
 
         var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         if (loc != null)
         {
             await CalculateAndDrawRoute(loc, _activeDestination);
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                FitMapToBounds();
-            });
+            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
 
 #if DEBUG
             if (_currentRoutePoints != null && _currentRoutePoints.Any() && !_isSimulating)
@@ -696,14 +793,12 @@ public partial class LobbyPage : ContentPage
             }
 #endif
         }
-
         if (!isSyncRequired)
         {
             _ = TextToSpeech.Default.SpeakAsync($"Navigation started to {destName}. Ride safe!");
         }
     }
 
-    // --- ROUTE DRAWING ---
     private async Task CalculateAndDrawRoute(Location origin, Location dest)
     {
         try
@@ -728,18 +823,20 @@ public partial class LobbyPage : ContentPage
             var mainRoute = routeResult?.Routes?.FirstOrDefault();
             if (mainRoute != null)
             {
-                if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
-
-                _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 8 };
-
                 _currentRoutePoints = DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
-
                 if (_currentRoutePoints == null || _currentRoutePoints.Count == 0) return;
 
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
                     try
                     {
+                        var oldLines = LiveMap.MapElements.OfType<Polyline>().ToList();
+                        foreach (var line in oldLines)
+                        {
+                            LiveMap.MapElements.Remove(line);
+                        }
+
+                        _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 8 };
                         foreach (var coord in _currentRoutePoints)
                         {
                             _activeRouteLine.Geopath.Add(coord);
@@ -783,7 +880,6 @@ public partial class LobbyPage : ContentPage
         ShowLoading("Initializing...");
         try
         {
-            // 1. Explicitly check for permissions first
             var status = await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>();
             if (status != PermissionStatus.Granted)
             {
@@ -795,14 +891,12 @@ public partial class LobbyPage : ContentPage
                 }
             }
 
-            // --- THE FIX: We must explicitly ask for Microphone access! ---
             var micStatus = await Permissions.CheckStatusAsync<Permissions.Microphone>();
             if (micStatus != PermissionStatus.Granted)
             {
                 await Permissions.RequestAsync<Permissions.Microphone>();
             }
 
-            // --- NEW: Ask for Notification permission (Required for Android 13+ Foreground Service Banner) ---
             if (DeviceInfo.Platform == DevicePlatform.Android && DeviceInfo.Version.Major >= 13)
             {
                 var notifStatus = await Permissions.CheckStatusAsync<Permissions.PostNotifications>();
@@ -812,8 +906,6 @@ public partial class LobbyPage : ContentPage
                 }
             }
 
-            // 2. We only fetch ONE location here to center the map initially.
-            // The Background Service handles all continuous tracking now!
             var locationRequest = new GeolocationRequest(GeolocationAccuracy.High, TimeSpan.FromSeconds(5));
             var currentLocation = await Geolocation.Default.GetLocationAsync(locationRequest);
 
@@ -864,86 +956,6 @@ public partial class LobbyPage : ContentPage
         }
     }
 
-    private async void StartTrackingLoop()
-    {
-        if (_isTracking) return; // Prevent multiple loops running concurrently
-
-        _isTracking = true;
-        while (_isTracking)
-        {
-            try
-            {
-                if (!_isSimulating)
-                {
-                    var location = await Geolocation.Default.GetLocationAsync(new GeolocationRequest(GeolocationAccuracy.Best, TimeSpan.FromSeconds(5)));
-                    if (location != null)
-                    {
-                        // Ensure overlay is hidden if location successfully fetched
-                        MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = false);
-
-                        double speedMph = (location.Speed ?? 0) * 2.23694;
-                        double distanceThreshold = 5 + speedMph;
-
-                        double distanceMoved = _lastKnownLocation == null
-                            ? double.MaxValue
-                            : Location.CalculateDistance(_lastKnownLocation, location, DistanceUnits.Kilometers) * 1000;
-
-                        MainThread.BeginInvokeOnMainThread(() =>
-                        {
-                            if (_myPinVm != null)
-                            {
-                                _myPinVm.Location = location;
-                                _myPinVm.Speed = $"{Math.Round(speedMph)} mph";
-                            }
-                        });
-
-                        if (distanceMoved >= distanceThreshold)
-                        {
-                            if (_lastKnownLocation != null)
-                            {
-                                _currentHeading = (location.Course.HasValue && location.Course.Value > 0)
-                                    ? location.Course.Value
-                                    : CalculateBearing(_lastKnownLocation, location);
-
-                                MainThread.BeginInvokeOnMainThread(async () =>
-                                {
-                                    if (_routeIsActive)
-                                    {
-                                        await LiveMap.RotateTo(360 - _currentHeading, 500, Microsoft.Maui.Easing.SinInOut);
-                                        LiveMap.Scale = 1.4;
-                                    }
-                                    else
-                                    {
-                                        await LiveMap.RotateTo(0, 500, Microsoft.Maui.Easing.SinInOut);
-                                        LiveMap.Scale = 1.0;
-                                    }
-                                });
-                            }
-                            _lastKnownLocation = location;
-                            await _signalRService.UpdateLocation(GroupNameLabel.Text, _myPinVm.Username, location.Latitude, location.Longitude, location.Course ?? _currentHeading);
-                        }
-                    }
-                }
-            }
-            catch (FeatureNotEnabledException) // Catch if GPS hardware is turned off MID-RIDE
-            {
-                MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
-                _isTracking = false; // Kill the tracking loop, wait for user to retry
-            }
-            catch (PermissionException) // Catch if permission is revoked MID-RIDE
-            {
-                MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
-                _isTracking = false; // Kill the tracking loop, wait for user to retry
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Tracking Error: {ex.Message}");
-            }
-
-            if (_isTracking) await Task.Delay(2000);
-        }
-    }
-
     private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
     {
         MainThread.BeginInvokeOnMainThread(() =>
@@ -952,7 +964,6 @@ public partial class LobbyPage : ContentPage
 
             if (_riderViewModels.TryGetValue(riderId, out var existingVm))
             {
-                // Update remote user via DataBinding
                 existingVm.Location = newLoc;
                 existingVm.Speed = "Active";
             }
@@ -965,14 +976,12 @@ public partial class LobbyPage : ContentPage
                     Speed = "Active",
                     Location = newLoc,
                     PinColor = randomColor,
-                    ZIndex = 50F // Ensure remote users are below "You"
+                    ZIndex = 50F
                 };
 
                 _riderViewModels.TryAdd(riderId, newVm);
                 MapPins.Add(newVm);
             }
-
-            //FitMapToBounds();
         });
     }
 
@@ -983,7 +992,6 @@ public partial class LobbyPage : ContentPage
         double minLat = double.MaxValue, minLng = double.MaxValue;
         double maxLat = double.MinValue, maxLng = double.MinValue;
 
-        // Loop over the Data Models instead of the Map Elements directly
         foreach (var pin in MapPins)
         {
             if (pin.Location.Latitude < minLat) minLat = pin.Location.Latitude;
@@ -1000,7 +1008,7 @@ public partial class LobbyPage : ContentPage
 
         LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
     }
-    // --- BEARING / ROTATION HELPER ---
+
     private double CalculateBearing(Location start, Location end)
     {
         double lat1 = start.Latitude * (Math.PI / 180.0);
@@ -1043,7 +1051,6 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            // FIX: Build a fresh collection in memory instead of using .Clear() and .Add()
             var updatedRiders = new ObservableCollection<Rider>();
             string myName = Preferences.Default.Get("username", "Rider");
 
@@ -1070,13 +1077,9 @@ public partial class LobbyPage : ContentPage
                 });
             }
 
-            // FIX: Reassigning ItemsSource completely breaks the render cache and forces an instant UI update
             Riders = updatedRiders;
             RidersCollectionView.ItemsSource = Riders;
 
-            //StatusLabel.Text = "Connected";
-            //StatusDot.BackgroundColor = Colors.MediumSeaGreen;
-            // FIX: Ensure the PiP overlay numbers update dynamically as well!
             PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
         });
     }
@@ -1085,71 +1088,66 @@ public partial class LobbyPage : ContentPage
     {
         base.OnDisappearing();
 
-
-        // --- THE USER IS ACTUALLY LEAVING THIS PAGE (BACK BUTTON) ---
-
-        // 1. Unsubscribe from ALL events to prevent memory leaks
-        // Hook up SignalR events
         _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
         _signalRService.RosterUpdated -= OnRosterUpdated;
         _signalRService.NavigationStarted -= OnNavigationStarted;
         _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
-        _signalRService.NavigationCancelled -= OnNavigationCancelled; // NEW
+        _signalRService.NavigationCancelled -= OnNavigationCancelled;
         _signalRService.AlertReceived -= OnAlertReceived;
         _signalRService.DestinationSet -= OnDestinationSet;
         _signalRService.UserJoinedAlert -= OnUserJoined;
         _signalRService.UserLeftAlert -= OnUserLeft;
         _signalRService.GroupDeleted -= OnGroupDeleted;
-        // Unsubscribe from SignalR PTT Events
         _signalRService.PttLocked -= OnPttLocked;
         _signalRService.PttDenied -= OnPttDenied;
         _signalRService.PttReleased -= OnPttReleased;
+        _signalRService.NavigationPaused -= OnNavigationPaused;
+        _signalRService.NavigationResumed -= OnNavigationResumed;
+        _signalRService.NavigationCompleted -= OnNavigationCompleted;
+
         if (_hwButtonService != null)
         {
             _hwButtonService.PttPressed -= OnHardwarePttPressed;
             _hwButtonService.PttReleased -= OnHardwarePttReleased;
         }
 
-        // 2. Stop all location tracking (Using our clean cross-platform interface)
         _isTracking = false;
         _isSimulating = false;
         _locationTracker?.StopTracking();
 
 #if ANDROID
-        // 3. Clean up Android Picture-in-Picture mode
         MainActivity.OnPiPModeChangedEvent -= HandlePiPModeChanged;
         MainActivity.IsInNavigationMode = false;
 #endif
 
-        // 4. Handle Server Teardown (Only if they didn't hit "Leave Group" explicitly)
         if (!_isLeavingGroupPermanently)
         {
-            // Tell the server we stepped back to the MainPage. 
-            // Note: The backend Hub's LeaveLobby() method automatically pauses 
-            // the route for everyone if an Admin leaves, so we don't need redundant code here!
             _ = _signalRService.LeaveLobby();
         }
     }
+
     private void MapPinClicked(RiderPin pin)
     {
         // Handle pin click
     }
+
     private async Task SimulateMovementAlongRouteAsync()
     {
         if (_currentRoutePoints == null || _currentRoutePoints.Count == 0) return;
 
-        await Task.Delay(2000); // 2-second delay as requested
-        _isSimulating = true;   // Flag to pause real GPS fetching
+        await Task.Delay(2000);
+        _isSimulating = true;
 
-        // THE FIX: DO NOT stop the location tracker. The Foreground Service keeps the app alive 
-        // in the background when the screen is locked! Just tell it to ignore hardware GPS.
         if (_locationTracker != null) _locationTracker.IsSimulating = true;
 
         foreach (var point in _currentRoutePoints)
         {
-            if (!_routeIsActive || !_isSimulating) break; // Stop if user left the page
+            if (groupDetails.CurrentState != GroupState.Navigating || !_isSimulating)
+            {
+                _isSimulating = false;
+                break;
+            }
 
-            // 1. Calculate the simulated heading
             double fakeHeading = _lastKnownLocation != null
                 ? CalculateBearing(_lastKnownLocation, point)
                 : 0;
@@ -1160,87 +1158,54 @@ public partial class LobbyPage : ContentPage
                 {
                     _myPinVm.Location = point;
                     _myPinVm.Speed = "Simulated";
-                    // 2. Pass the heading to the ViewModel so the CustomMapHandler can rotate the camera natively!
                     _myPinVm.Heading = fakeHeading;
                 }
-                //FitMapToBounds(); // Optional: keeps camera following the action
             });
 
             _lastKnownLocation = point;
-
-            // Broadcast fake movement to the group!
             await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
 
-            await Task.Delay(2000); // Move to the next point every 1 second
+            await Task.Delay(2000);
         }
 
         _isSimulating = false;
     }
+
     private void OnNavigationCancelled()
     {
-        // FIX: Removed the 'if (_amIAdmin) return;' line!
-        // The Admin needs their UI to reset just like everyone else when the route is cancelled.
-
 #if ANDROID
-        // DISABLE PiP shrinking since the route ended
         MainActivity.IsInNavigationMode = false;
 #endif
 
-        // STOP THE BACKGROUND ENGINE SAFELY
         _locationTracker?.StopTracking();
 
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            _routeIsActive = false;
-            _isSimulating = false;
-
-            // Hide active navigation UI
-            StartNavButton.IsVisible = false;
-            ActionDrawer.IsVisible = false;
-            MinimizePanelButton.IsVisible = false;
-            PendingDestinationFrame.IsVisible = false;
-
-            // Clear Map Line
-            if (_activeRouteLine != null)
-            {
-                LiveMap.MapElements.Remove(_activeRouteLine);
-                _activeRouteLine = null;
-            }
-
-            // Clear Destination Pin
-            var oldDest = LiveMap.Pins.FirstOrDefault(p => p.Label != "You" && p.Type == PinType.Place);
-            if (oldDest != null) LiveMap.Pins.Remove(oldDest);
-
-            FitMapToBounds();
+            ChangeGroupState(GroupState.NotNavigating);
         });
     }
+
     private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
-        if (_routeIsActive) return;
-        // FIX: Ignore the event if we are setting the text programmatically
+        if (groupDetails?.CurrentState == GroupState.Navigating) return;
         if (_isSelectingLocation) return;
-
         if (e.OldTextValue == e.NewTextValue) return;
+
         string query = e.NewTextValue;
 
-        // Don't search until they've typed at least 3 characters
         if (string.IsNullOrWhiteSpace(query) || query.Length < 3)
         {
-            // Update: Toggle the Frame instead of the ListView
             SuggestionsFrame.IsVisible = false;
             return;
         }
 
-        // Cancel the previous debounce timer
         _debounceCts?.Cancel();
         _debounceCts = new CancellationTokenSource();
 
         try
         {
-            // Increase the API hit counter
             _autocompleteApiHits++;
 
-            // Call Google Places API (New) - Autocomplete endpoint
             var request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:autocomplete");
             request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
 
@@ -1255,7 +1220,6 @@ public partial class LobbyPage : ContentPage
 
             if (result != null && result.Suggestions != null && result.Suggestions.Any())
             {
-                // Map to our UI model so XAML binding still works perfectly
                 var displayList = result.Suggestions
                     .Where(s => s.PlacePrediction != null)
                     .Select(s => new UIPlaceSuggestion
@@ -1265,45 +1229,32 @@ public partial class LobbyPage : ContentPage
                     }).ToList();
 
                 SuggestionsListView.ItemsSource = displayList;
-
-                // Update: Toggle the Frame instead of the ListView
                 SuggestionsFrame.IsVisible = true;
             }
 
-            // Wait for a short duration to debounce rapid requests (e.g., 300ms)
             await Task.Delay(1000, _debounceCts.Token);
 
-            // Check if this is the latest request based on the counter
             if (_autocompleteApiHits != _autocompleteApiHits)
                 return;
-
-            // Here, you can safely use the result for the latest request
         }
         catch (Exception ex)
         {
             System.Diagnostics.Debug.WriteLine($"Search Error: {ex.Message}");
         }
     }
-    // UPDATED: Changed SelectionChangedEventArgs to SelectedItemChangedEventArgs for ListView compatibility
+
     private async void OnSuggestionSelected(object sender, SelectedItemChangedEventArgs e)
     {
-        // UPDATED: Use e.SelectedItem instead of e.CurrentSelection
         if (e.SelectedItem is UIPlaceSuggestion selectedPlace)
         {
-            // 1. Hide the suggestions dropdown frame and update the search bar text
             SuggestionsFrame.IsVisible = false;
-
-            // FIX: Temporarily block OnSearchTextChanged while we set the text!
             _isSelectingLocation = true;
             DestinationSearchBar.Text = selectedPlace.Description;
 
             try
             {
-                // 2. Fetch the exact coordinates using the Place API (New)
                 var request = new HttpRequestMessage(HttpMethod.Get, $"https://places.googleapis.com/v1/places/{selectedPlace.PlaceId}");
                 request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
-
-                // FieldMask is REQUIRED in the New API to tell Google exactly what data you want to retrieve
                 request.Headers.Add("X-Goog-FieldMask", "location");
 
                 var response = await _httpClient.SendAsync(request);
@@ -1319,10 +1270,8 @@ public partial class LobbyPage : ContentPage
 
                     _pendingDestination = new Location(lat, lng);
 
-                    // 3. Clear old preview pins
                     LiveMap.Pins.Clear();
 
-                    // 4. Add new pin to map
                     var pin = new Pin
                     {
                         Label = selectedPlace.Description,
@@ -1335,11 +1284,6 @@ public partial class LobbyPage : ContentPage
                     await CalculateAndDrawRoute(currentLoc, _pendingDestination);
                     FitMapToBounds([currentLoc, _pendingDestination]);
 
-                    // 5. Move map camera view to focus on the destination
-                    //var mapSpan = MapSpan.FromCenterAndRadius(_pendingDestination, Distance.FromMiles(1));
-                    //LiveMap.MoveToRegion(mapSpan);
-
-                    // 6. Enable the broadcast button
                     ConfirmDestButton.IsEnabled = true;
                     ConfirmDestButton.BackgroundColor = Colors.MediumSeaGreen;
                 }
@@ -1350,12 +1294,11 @@ public partial class LobbyPage : ContentPage
                 System.Diagnostics.Debug.WriteLine($"Details Error: {ex.Message}");
             }
 
-            // Clear selection so the user can tap it again if needed
             SuggestionsListView.SelectedItem = null;
             _isSelectingLocation = false;
         }
     }
-    // NEW: Overloaded method that accepts specific coordinates (used for route preview)
+
     private void FitMapToBounds(List<Location> points)
     {
         if (points == null || !points.Any()) return;
@@ -1386,46 +1329,34 @@ public partial class LobbyPage : ContentPage
         LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
     }
 
-    // Call this when navigation actually starts (e.g., inside OnConfirmDestinationClicked)
-    private void EnableNavigationUI()
+    // --- REPLACED MAP CAMERA MODES ---
+    private void OnRecenterMapClicked(object sender, EventArgs e)
     {
-        OverviewButton.IsVisible = true;
-        ResumeNavButton.IsVisible = false;
-        if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
+        if (_lastKnownLocation != null)
+        {
+            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromMiles(0.5)));
+            if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
+
+            OverviewButton.IsVisible = true;
+            MapFollowButton.IsVisible = false;
+        }
     }
 
     private async void OnOverviewClicked(object sender, EventArgs e)
     {
         if (_myPinVm == null) return;
 
-        // 1. Swap Buttons
         OverviewButton.IsVisible = false;
-        ResumeNavButton.IsVisible = true;
+        MapFollowButton.IsVisible = true;
 
-        // 2. Tell the Android handler to STOP forcing the camera to follow you
         _myPinVm.IsAutoCentering = false;
 
-        // 3. Reset the 3D tilt and rotation back to a flat, top-down view
         await LiveMap.RotateTo(0, 500, Microsoft.Maui.Easing.SinInOut);
         LiveMap.Scale = 1.0;
 
-        // 4. Zoom out to show everyone
         FitMapToBounds();
     }
 
-    private void OnResumeNavClicked(object sender, EventArgs e)
-    {
-        if (_myPinVm == null) return;
-
-        // 1. Swap Buttons
-        ResumeNavButton.IsVisible = false;
-        OverviewButton.IsVisible = true;
-
-        // 2. Tell the Android Handler to take control again!
-        // As soon as this is true, the very next GPS tick will automatically 
-        // swoop the camera back down into the 3D navigation view.
-        _myPinVm.IsAutoCentering = true;
-    }
     private async void OnEmergencyStopClicked(object sender, EventArgs e)
     {
         await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Emergency", _myName);
@@ -1440,54 +1371,22 @@ public partial class LobbyPage : ContentPage
     {
         await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Rest", _myName);
     }
-    // --- SENSORY ALERT PROCESSOR ---
-    private void SetActionButtonsEnabled(bool isEnabled)
-    {
-        if (ActionButtonsStack == null) return;
-
-        // 1. Loop through all children of the stack (Stop, Refuel, Rest, Overview, PTT)
-        foreach (var child in ActionButtonsStack.Children)
-        {
-            if (child is Button btn)
-            {
-                btn.IsEnabled = isEnabled;
-                // Provide subtle visual dimming when disabled
-                btn.Opacity = isEnabled ? 1.0 : 0.4;
-            }
-        }
-
-        // 2. Also disable the GMAP button so users don't jump out during active safety alerts
-        if (StartNavButton != null)
-        {
-            StartNavButton.IsEnabled = isEnabled;
-            StartNavButton.Opacity = isEnabled ? 1.0 : 0.4;
-        }
-    }
-
 
     private async void OnAlertReceived(string alertType, string senderName)
     {
         MainThread.BeginInvokeOnMainThread(async () =>
         {
-            // --- 1. TELEMETRY ALERTS (VOICE & HAPTIC ONLY) ---
-            // NEW: Added "VoicePrompt" to the silent background audio processor!
             if (alertType == "Lagging" || alertType == "Splinter" || alertType == "VoicePrompt")
             {
-                // Trigger a quick buzz so they know an audio prompt is starting
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
-
-                // Speak the exact text generated by the Cosmos DB server 
                 _ = TextToSpeech.Default.SpeakAsync(senderName);
-
-                return; // Exit here so we skip the full-screen visual overlay
+                return;
             }
             int durationSeconds = 5;
             string voiceMessage = "";
 
-            // 🛑 FREEZE ALL ACTIONS ON SCREEN AT START
             SetActionButtonsEnabled(false);
 
-            // Configure UI based on the alert type
             if (alertType == "Emergency")
             {
                 SensoryAlertOverlay.BackgroundColor = Colors.Red;
@@ -1516,10 +1415,8 @@ public partial class LobbyPage : ContentPage
             AlertSenderLabel.Text = $"Triggered by: {senderName}";
             SensoryAlertOverlay.IsVisible = true;
 
-            // Trigger Voice Alert
             _ = TextToSpeech.Default.SpeakAsync(voiceMessage);
 
-            // Loop Vibration and Blinking Animation
             var cts = new CancellationTokenSource();
             cts.CancelAfter(TimeSpan.FromSeconds(durationSeconds));
 
@@ -1528,101 +1425,28 @@ public partial class LobbyPage : ContentPage
                 while (!cts.IsCancellationRequested)
                 {
                     Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500));
-                    await SensoryAlertOverlay.FadeTo(0.8, 250);
-                    await SensoryAlertOverlay.FadeTo(0.2, 250);
+                    await SensoryAlertOverlay.FadeToAsync(0.8, 250);
+                    await SensoryAlertOverlay.FadeToAsync(0.2, 250);
                 }
             }
             catch (TaskCanceledException) { }
 
-            // Clean up when done
             Vibration.Default.Cancel();
             SensoryAlertOverlay.IsVisible = false;
             SensoryAlertOverlay.Opacity = 0;
 
-            // 🔓 UNFREEZE ALL ACTIONS AT END
             SetActionButtonsEnabled(true);
         });
     }
-    private bool _panelVisible = false;
-    private ILocationTracker? _locationTracker;
 
-    // 2. Replace your existing OnMinimizePanelClicked with this updated drawer animation
-    private async void OnMinimizePanelClicked(object sender, EventArgs e)
-    {
-        MinimizePanelButton.IsEnabled = false;
-
-        // Calculate the height securely (fallback to 250 if the UI hasn't fully rendered it yet)
-        double drawerHeight = ActionDrawer.Height > 0 ? ActionDrawer.Height : 250;
-
-        // Add a 20px gap to ensure the toggle button sits cleanly ABOVE the drawer without overlapping
-        double pushUpAmount = drawerHeight + 20;
-
-        if (_panelVisible)
-        {
-            // CLOSE ANIMATION: Slide drawer down and drop buttons back
-            await Task.WhenAll(
-                ActionDrawer.TranslateTo(0, drawerHeight, 250, Easing.CubicIn),
-                FloatingControlsLayout.TranslateTo(0, 0, 250, Easing.CubicIn)
-            );
-
-            ActionDrawer.IsVisible = false;
-            MinimizePanelButton.Text = "🔼";
-            _panelVisible = false;
-        }
-        else
-        {
-            // OPEN ANIMATION: Prep drawer position, then slide drawer up AND push floating controls up
-            ActionDrawer.IsVisible = true;
-            if (ActionDrawer.TranslationY == 0) ActionDrawer.TranslationY = drawerHeight;
-
-            await Task.WhenAll(
-                ActionDrawer.TranslateTo(0, 0, 250, Easing.CubicOut),
-                FloatingControlsLayout.TranslateTo(0, -pushUpAmount, 250, Easing.CubicOut)
-            );
-
-            MinimizePanelButton.Text = "🔽";
-            _panelVisible = true;
-        }
-
-        MinimizePanelButton.IsEnabled = true;
-    }
-    // 4. Add the handler for when a destination is broadcasted:
-    private async void OnDestinationSet(double destLat, double destLng, string destName)
-    {
-        ShowLoading("Drawing Route Preview..."); // LOCK UI
-        try
-        {
-
-
-            _activeDestination = new Location(destLat, destLng);
-
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                PendingDestinationLabel.Text = destName;
-                PendingDestinationFrame.IsVisible = true;
-
-                if (_amIAdmin)
-                {
-                    StartJourneyButton.IsVisible = true;
-                    StartJourneyButton.IsEnabled = true;
-                }
-            });
-        }
-        finally
-        {
-            HideLoading();
-        }
-    }
-    // 5. Add the click handler for the Admin's "Start Journey" button:
     private async void OnStartJourneyClicked(object sender, EventArgs e)
     {
         ShowLoading("Starting Navigation...");
         try
         {
-            StartJourneyButton.IsEnabled = false; // Prevent double taps
+            StartJourneyButton.IsEnabled = false;
             string destName = PendingDestinationLabel.Text;
 
-            // Now we officially start the navigation loop for the whole group!
             await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _activeDestination.Latitude, _activeDestination.Longitude, destName);
         }
         finally
@@ -1630,17 +1454,9 @@ public partial class LobbyPage : ContentPage
             HideLoading();
         }
     }
-    // 3. Add the event logic:
-    private void OnUserJoined(string username)
-    {
-        _ = TextToSpeech.Default.SpeakAsync($"{username} has joined the group.");
-    }
 
-    private void OnUserLeft(string username)
-    {
-        _ = TextToSpeech.Default.SpeakAsync($"{username} has left the group.");
-    }
-
+    private void OnUserJoined(string username) => _ = TextToSpeech.Default.SpeakAsync($"{username} has joined the group.");
+    private void OnUserLeft(string username) => _ = TextToSpeech.Default.SpeakAsync($"{username} has left the group.");
     private async void OnGroupDeleted()
     {
         MainThread.BeginInvokeOnMainThread(async () =>
@@ -1649,36 +1465,21 @@ public partial class LobbyPage : ContentPage
             await Navigation.PopAsync();
         });
     }
-    // --- LEAVE GROUP LOGIC ---
+
     private async void OnLeaveGroupClicked(object sender, EventArgs e)
     {
         bool confirm = await DisplayAlert("Leave Group", "Are you sure you want to permanently leave the group?", "Yes", "Cancel");
         if (confirm)
         {
-            _isLeavingGroupPermanently = true; // Mark as permanent!
+            _isLeavingGroupPermanently = true;
             await _signalRService.LeaveGroup(CurrentGoogleId);
             await Navigation.PopAsync();
         }
     }
-    // --- OVERLAY BUTTON HANDLERS ---
-    private void OnOpenSettingsClicked(object sender, EventArgs e)
-    {
-        // Opens the OS-level settings app so the user can flip the GPS/Permissions switch
-        AppInfo.Current.ShowSettingsUI();
-    }
 
-    private void OnRetryLocationClicked(object sender, EventArgs e)
-    {
-        // Re-run the initialization logic. If GPS is now on, the overlay will disappear!
-        InitializeLocalTrackingAsync();
-    }
-    // NEW: Pitstop Slider Handler
-    private void OnPitstopSliderChanged(object sender, ValueChangedEventArgs e)
-    {
-        int roundedValue = (int)Math.Round(e.NewValue);
-        PitstopSlider.Value = roundedValue;
-        PitstopValueLabel.Text = roundedValue == 0 ? "Off" : $"{roundedValue} km";
-    }
+    private void OnOpenSettingsClicked(object sender, EventArgs e) => AppInfo.Current.ShowSettingsUI();
+    private void OnRetryLocationClicked(object sender, EventArgs e) => InitializeLocalTrackingAsync();
+
     private async void OnRiderTapped(object sender, TappedEventArgs e)
     {
         if (!_amIAdmin)
@@ -1719,7 +1520,6 @@ public partial class LobbyPage : ContentPage
         {
             string backendRole = action == "Standard Rider" ? "Rider" : action;
 
-            // NEW RULE: Admin cannot step down from being Lead unless someone else is already assigned as Lead
             if (selectedRider.IsAdmin && backendRole != "Lead")
             {
                 bool hasOtherLead = Riders.Any(r => r.GoogleId != selectedRider.GoogleId && r.Role == "Lead");
@@ -1734,55 +1534,12 @@ public partial class LobbyPage : ContentPage
         }
     }
 
-    // 3. NEW: Group Size Slider Handler
-    private void OnSizeSliderChanged(object sender, ValueChangedEventArgs e)
-    {
-        int roundedValue = (int)Math.Round(e.NewValue);
-        SizeSlider.Value = roundedValue;
-        SizeValueLabel.Text = $"{roundedValue} Riders";
-    }
-    private void OnRecenterMapClicked(object sender, EventArgs e)
-    {
-        if (_lastKnownLocation != null)
-        {
-            // Instantly snap map back to user location with a tight zoom
-            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromMiles(0.5)));
-
-            // Re-enable 3D auto-centering if it was broken by manual panning
-            if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
-
-            // If we are in Overview mode, switch it back natively
-            OverviewButton.IsVisible = true;
-            ResumeNavButton.IsVisible = false;
-        }
-    }
-    // --- TELEMETRY DASHBOARD CLICK EVENTS ---
-    private async void OnTelemetryOverlayClicked(object sender, EventArgs e)
-    {
-        TelemetryDashboardOverlay.IsVisible = true;
-        await RefreshTelemetryData();
-    }
-
-    private async void OnRefreshTelemetryClicked(object sender, EventArgs e)
-    {
-        await RefreshTelemetryData();
-    }
-
-    private void OnCloseTelemetryClicked(object sender, EventArgs e)
-    {
-        TelemetryDashboardOverlay.IsVisible = false;
-    }
-
     private async Task RefreshTelemetryData()
     {
         var data = await _signalRService.GetGroupTelemetry(GroupNameLabel.Text);
-
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            TelemetryCollectionView.ItemsSource = data;
-        });
+        MainThread.BeginInvokeOnMainThread(() => TelemetryCollectionView.ItemsSource = data);
     }
-    // --- LOADING OVERLAY HELPERS ---
+
     private void ShowLoading(string message)
     {
         MainThread.BeginInvokeOnMainThread(() =>
@@ -1794,9 +1551,131 @@ public partial class LobbyPage : ContentPage
 
     private void HideLoading()
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        MainThread.BeginInvokeOnMainThread(() => LoadingOverlay.IsVisible = false);
+    }
+
+    private async void OnPauseNavClicked(object sender, EventArgs e)
+    {
+        if (!_amIAdmin) return;
+
+        string reason = await DisplayActionSheet("Reason for Pause?", "Cancel", null,
+            "Fuel Stop", "Food/Rest Break", "Scenic Viewpoint", "Mechanical Issue", "Wait for Stragglers");
+
+        if (reason == "Cancel" || string.IsNullOrEmpty(reason)) return;
+
+        ShowLoading("Pausing Route...");
+        try
         {
-            LoadingOverlay.IsVisible = false;
-        });
+            await _signalRService.PauseGroupNavigation(GroupNameLabel.Text, reason, _myName);
+        }
+        finally
+        {
+            HideLoading();
+        }
+    }
+
+    private async void OnResumeJourneyClicked(object sender, EventArgs e)
+    {
+        if (!_amIAdmin) return;
+
+        ShowLoading("Resuming...");
+        try
+        {
+            await _signalRService.ResumeGroupNavigation(GroupNameLabel.Text, _myName);
+        }
+        finally
+        {
+            HideLoading();
+        }
+    }
+
+    private async void OnCompleteNavClicked(object sender, EventArgs e)
+    {
+        if (!_amIAdmin) return;
+
+        bool confirm = await DisplayAlert("Complete Route", "Are you sure you want to end this journey? This will stop navigation for everyone.", "Finish Ride", "Cancel");
+        if (!confirm) return;
+
+        ShowLoading("Completing Route...");
+        try
+        {
+            await _signalRService.CompleteGroupNavigation(GroupNameLabel.Text, _myName);
+        }
+        finally
+        {
+            HideLoading();
+        }
+    }
+
+    private void OnNavigationPaused(string reason, string adminName)
+    {
+        GroupState pauseState = GroupStateHelper.GetBreakState(reason);
+        if (groupDetails != null) groupDetails.CurrentState = pauseState;
+        ChangeGroupState(pauseState, adminName, reason);
+    }
+
+    private void OnNavigationResumed(string adminName)
+    {
+        if (groupDetails != null) groupDetails.CurrentState = GroupState.Navigating;
+        ChangeGroupState(GroupState.Navigating, adminName);
+    }
+
+    private void OnNavigationCompleted(string adminName)
+    {
+        ChangeGroupState(GroupState.Completed, adminName);
+    }
+    private async void OnDestinationSet(double destLat, double destLng, string destName)
+    {
+        ShowLoading("Drawing Route Preview..."); // LOCK UI
+        try
+        {
+            _activeDestination = new Location(destLat, destLng);
+
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                PendingDestinationLabel.Text = destName;
+                PendingDestinationFrame.IsVisible = true;
+
+                if (_amIAdmin)
+                {
+                    StartJourneyButton.IsVisible = true;
+                    StartJourneyButton.IsEnabled = true;
+                }
+            });
+        }
+        finally
+        {
+            HideLoading();
+        }
+    }
+    // 3. NEW: Group Size Slider Handler
+    private void OnSizeSliderChanged(object sender, ValueChangedEventArgs e)
+    {
+        int roundedValue = (int)Math.Round(e.NewValue);
+        SizeSlider.Value = roundedValue;
+        SizeValueLabel.Text = $"{roundedValue} Riders";
+    }
+    private async void OnRefreshTelemetryClicked(object sender, EventArgs e)
+    {
+        await RefreshTelemetryData();
+    }
+    private void OnPitstopSliderChanged(object sender, ValueChangedEventArgs e)
+    {
+        int roundedValue = (int)Math.Round(e.NewValue);
+        PitstopSlider.Value = roundedValue;
+        PitstopValueLabel.Text = roundedValue == 0 ? "Off" : $"{roundedValue} km";
+    }
+    private void OnMapFollowClicked(object sender, EventArgs e)
+    {
+        if (_myPinVm == null) return;
+
+        // 1. Swap Buttons
+        MapFollowButton.IsVisible = false;
+        OverviewButton.IsVisible = true; // Show the "Overview" toggle
+
+        // 2. Tell the Android Handler to take control again!
+        // As soon as this is true, the very next GPS tick will automatically 
+        // swoop the camera back down into the 3D navigation view.
+        _myPinVm.IsAutoCentering = true;
     }
 }

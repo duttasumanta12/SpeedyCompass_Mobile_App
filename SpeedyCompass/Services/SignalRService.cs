@@ -32,6 +32,9 @@ public class SignalRService
     public event Action<string> PttLocked;
     public event Action<string> PttDenied;
     public event Action PttReleased;
+    public event Action<string, string> NavigationPaused; // Reason, AdminName
+    public event Action<string> NavigationResumed; // AdminName
+    public event Action<string> NavigationCompleted; // AdminName
 
     public SignalRService()
     {
@@ -199,6 +202,9 @@ public class SignalRService
         _hubConnection.On<string>("PttLocked", (speakerName) => PttLocked?.Invoke(speakerName));
         _hubConnection.On<string>("PttDenied", (activeSpeaker) => PttDenied?.Invoke(activeSpeaker));
         _hubConnection.On("PttReleased", () => PttReleased?.Invoke());
+        _hubConnection.On<string, string>("ReceiveNavigationPaused", (reason, adminName) => NavigationPaused?.Invoke(reason, adminName));
+        _hubConnection.On<string>("ReceiveNavigationResumed", (adminName) => NavigationResumed?.Invoke(adminName));
+        _hubConnection.On<string>("ReceiveNavigationCompleted", (adminName) => NavigationCompleted?.Invoke(adminName));
     }
 
     // Explicit Hub Commands with Global Exception Handling
@@ -484,5 +490,22 @@ public class SignalRService
         {
             LogException(nameof(StopAsync), ex);
         }
+    }
+    public async Task PauseGroupNavigation(string groupName, string reason, string adminName)
+    {
+        if (_hubConnection?.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("PauseNavigation", groupName, reason, adminName);
+    }
+
+    public async Task ResumeGroupNavigation(string groupName, string adminName)
+    {
+        if (_hubConnection?.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("ResumeNavigation", groupName, adminName);
+    }
+
+    public async Task CompleteGroupNavigation(string groupName, string adminName)
+    {
+        if (_hubConnection?.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("CompleteNavigation", groupName, adminName);
     }
 }
