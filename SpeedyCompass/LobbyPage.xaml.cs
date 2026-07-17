@@ -313,9 +313,9 @@ public partial class LobbyPage : ContentPage
     // --- STATE MACHINE ---
     private async void ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "")
     {
-        if (_currentState == newState) return;
+        if (this.groupDetails.CurrentState == newState) return;
 
-        _currentState = newState;
+        this.groupDetails.CurrentState = newState;
         _stateStartTime = DateTime.Now;
 
         MainThread.BeginInvokeOnMainThread(() =>
@@ -760,7 +760,6 @@ public partial class LobbyPage : ContentPage
     {
         if (groupDetails != null)
         {
-            groupDetails.CurrentState = GroupState.NotNavigating;
             //If not navigating but destination was set
             PendingDestinationFrame.IsVisible = false;
             ConfirmDestButton.IsVisible = true;
@@ -777,8 +776,8 @@ public partial class LobbyPage : ContentPage
     private async void OnNavigationStarted(double destLat, double destLng, string destName, bool isSyncRequired = false)
     {
         _activeDestination = new Location(destLat, destLng);
-        groupDetails.CurrentState = GroupState.Navigating;
-        ChangeGroupState(groupDetails.CurrentState, _myName);
+        DestinationSearchBar.Text = destName;
+        ChangeGroupState(GroupState.Navigating, _myName);
 
         var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         if (loc != null)
@@ -1610,13 +1609,11 @@ public partial class LobbyPage : ContentPage
     private void OnNavigationPaused(string reason, string adminName)
     {
         GroupState pauseState = GroupStateHelper.GetBreakState(reason);
-        if (groupDetails != null) groupDetails.CurrentState = pauseState;
         ChangeGroupState(pauseState, adminName, reason);
     }
 
     private void OnNavigationResumed(string adminName)
     {
-        if (groupDetails != null) groupDetails.CurrentState = GroupState.Navigating;
         ChangeGroupState(GroupState.Navigating, adminName);
     }
 
