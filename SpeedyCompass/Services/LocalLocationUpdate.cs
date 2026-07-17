@@ -19,4 +19,6 @@ public interface ILocationTracker
 
     // Event to update the local map UI when the screen is actually on
     event EventHandler<LocalLocationUpdate> LocationUpdated;
+    // NEW: Method to push rider counts to the native OS notification
+    void UpdateRiderCount(int count);
 }

@@ -68,6 +68,8 @@ public class MapPinTemplateSelector : DataTemplateSelector
     }
 }
 
+public class TabClickedEventArgs : EventArgs { public bool FromNavigationStarted { get; set; } }
+
 public partial class LobbyPage : ContentPage
 {
     private readonly SignalRService _signalRService;
@@ -483,6 +485,8 @@ public partial class LobbyPage : ContentPage
 
     private async void OnTabClicked(object sender, EventArgs e)
     {
+        bool calledFromNavStart = e is TabClickedEventArgs tce && tce.FromNavigationStarted;
+
         if (sender == TabRoster)
         {
             TabRoster.BackgroundColor = Colors.DodgerBlue;
@@ -503,7 +507,7 @@ public partial class LobbyPage : ContentPage
             RosterView.IsVisible = false;
             MapView.IsVisible = true;
 
-            if (!string.IsNullOrEmpty(DestinationSearchBar.Text))
+            if (!calledFromNavStart && _activeDestination != null)
             {
                 var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
                 UpdateDestinationPin(_activeDestination, DestinationSearchBar.Text);
@@ -533,9 +537,9 @@ public partial class LobbyPage : ContentPage
         _pendingDestination = e.Location;
         UpdateDestinationPin(_pendingDestination, "Selected Destination");
         var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+        await CalculateAndDrawRoute(currentLoc, _pendingDestination);
         MainThread.BeginInvokeOnMainThread(async () =>
         {
-            await CalculateAndDrawRoute(currentLoc, _pendingDestination);
             FitMapToBounds([currentLoc, _pendingDestination]);
         });
 
@@ -626,6 +630,8 @@ public partial class LobbyPage : ContentPage
         PendingDestinationFrame.IsVisible = false; // Hide Roster dashboard
         _routeIsActive = false;
         _isSimulating = false;
+        _activeDestination = null;
+        DestinationSearchBar.Text = string.Empty;
 
         if (_activeRouteLine != null)
         {
@@ -648,7 +654,7 @@ public partial class LobbyPage : ContentPage
         MainThread.BeginInvokeOnMainThread(() =>
         {
             // 🚀 FORCE EVERYONE TO THE MAP TAB AUTOMATICALLY
-            OnTabClicked(TabMap, EventArgs.Empty);
+            OnTabClicked(TabMap, new TabClickedEventArgs { FromNavigationStarted = true });
 
             // --- THE FIX: STRICT UI STATE ENFORCEMENT ---
             // 1. Hide ALL Setup & Destination Picker UI Elements
@@ -677,10 +683,9 @@ public partial class LobbyPage : ContentPage
         var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         if (loc != null)
         {
-            //await CalculateAndDrawRoute(loc, _activeDestination);
-            MainThread.BeginInvokeOnMainThread(async () =>
+            await CalculateAndDrawRoute(loc, _activeDestination);
+            MainThread.BeginInvokeOnMainThread(() =>
             {
-                await CalculateAndDrawRoute(loc, _activeDestination);
                 FitMapToBounds();
             });
 
@@ -728,11 +733,24 @@ public partial class LobbyPage : ContentPage
                 _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 8 };
 
                 _currentRoutePoints = DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
-                foreach (var coord in _currentRoutePoints)
+
+                if (_currentRoutePoints == null || _currentRoutePoints.Count == 0) return;
+
+                MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    _activeRouteLine.Geopath.Add(coord);
-                }
-                LiveMap.MapElements.Add(_activeRouteLine);
+                    try
+                    {
+                        foreach (var coord in _currentRoutePoints)
+                        {
+                            _activeRouteLine.Geopath.Add(coord);
+                        }
+                        LiveMap.MapElements.Add(_activeRouteLine);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"UI Map update error: {ex.Message}");
+                    }
+                });
             }
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Routing Error: {ex.Message}"); }

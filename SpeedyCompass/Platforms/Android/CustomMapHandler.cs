@@ -13,7 +13,6 @@ using Paint = Android.Graphics.Paint;
 using Path = Android.Graphics.Path;
 using Rect = Android.Graphics.Rect;
 using RectF = Android.Graphics.RectF;
-using WebView = Android.Webkit.WebView;
 
 namespace SpeedyCompass.Platforms.Android
 {

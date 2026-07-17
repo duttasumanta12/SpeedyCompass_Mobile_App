@@ -36,4 +36,9 @@ public class AndroidLocationTracker : ILocationTracker
     {
         OnLocationUpdatedEvent?.Invoke(null, new LocalLocationUpdate { Location = loc, SpeedMph = speed, Heading = heading });
     }
+    public void UpdateRiderCount(int count)
+    {
+        // Pass the count down to the native Android service
+        AndroidLocationService.Instance?.UpdateRiderCount(count);
+    }
 }

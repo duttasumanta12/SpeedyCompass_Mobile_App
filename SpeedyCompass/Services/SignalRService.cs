@@ -471,4 +471,18 @@ public class SignalRService
         System.Diagnostics.Debug.WriteLine($"[SignalR Exception] {context}: {ex}");
     }
 
+    internal async Task StopAsync()
+    {
+        try
+        {
+            if (_hubConnection != null && _hubConnection.State == HubConnectionState.Connected)
+            {
+                await _hubConnection.StopAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogException(nameof(StopAsync), ex);
+        }
+    }
 }

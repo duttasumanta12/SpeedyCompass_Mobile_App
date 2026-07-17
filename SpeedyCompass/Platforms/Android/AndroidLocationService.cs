@@ -16,28 +16,33 @@ public class AndroidLocationService : Service, ILocationListener
     private SignalRService _signalRService;
     private string _groupName;
     private PowerManager.WakeLock _wakeLock;
+    private NotificationManager _notificationManager;
+
+    // Expose instance so we can update the notification live
+    public static AndroidLocationService Instance { get; private set; }
 
     public override IBinder OnBind(Intent intent) => null;
 
     public override StartCommandResult OnStartCommand(Intent intent, StartCommandFlags flags, int startId)
     {
+        Instance = this;
+
+        // 1. ALWAYS update the group name and preferences on every call
+        _groupName = intent?.GetStringExtra("GroupName");
+        Preferences.Default.Set("CurrentGroupName", _groupName);
+
+
+        _notificationManager = (NotificationManager)GetSystemService(NotificationService);
         CreateNotificationChannel();
 
         var powerManager = (PowerManager)GetSystemService(PowerService);
         _wakeLock = powerManager.NewWakeLock(WakeLockFlags.Partial, "SpeedyCompass::NavigationWakeLock");
         _wakeLock.Acquire();
 
-        _groupName = intent?.GetStringExtra("GroupName");
         _signalRService = IPlatformApplication.Current?.Services.GetService<SignalRService>();
 
-        var notification = new NotificationCompat.Builder(this, "compass_location_channel")
-            .SetContentTitle("SpeedyCompass Active")
-            .SetContentText("Routing in progress. Tracking in background.")
-            .SetSmallIcon(Resource.Mipmap.appicon)
-            .SetOngoing(true)
-            .Build();
+        var notification = CreateNotification(1);
 
-        // --- THE FIX: Android 14 (API 34+) Strict Foreground Service Requirements ---
         if (Build.VERSION.SdkInt >= BuildVersionCodes.Q)
         {
             StartForeground(10001, notification, ForegroundService.TypeLocation);
@@ -48,7 +53,6 @@ public class AndroidLocationService : Service, ILocationListener
         }
 
         _locationManager = (LocationManager)GetSystemService(LocationService);
-
         try
         {
             if (_locationManager.IsProviderEnabled(LocationManager.GpsProvider))
@@ -58,12 +62,48 @@ public class AndroidLocationService : Service, ILocationListener
         }
         catch (Java.Lang.SecurityException ex)
         {
-            // Catch if user revoked location permissions while app was in background
             System.Diagnostics.Debug.WriteLine($"[Background GPS] Security Exception: {ex.Message}");
-            StopSelf(); // Gracefully kill the service
+            StopSelf();
         }
 
+
         return StartCommandResult.Sticky;
+    }
+
+    // --- NEW: Dynamic Notification Builder ---
+    public void UpdateRiderCount(int count)
+    {
+        if (_notificationManager != null)
+        {
+            var notification = CreateNotification(count);
+            _notificationManager.Notify(10001, notification);
+        }
+    }
+
+    private Notification CreateNotification(int count)
+    {
+        // 1. SOS Button Intent (Must be Immutable for Android 12+)
+        var sosIntent = new Intent(this, typeof(NotificationActionReceiver));
+        sosIntent.SetAction("ACTION_SOS");
+        var sosPendingIntent = PendingIntent.GetBroadcast(this, 0, sosIntent, PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
+
+        // 2. Open App Intent
+        var mainIntent = new Intent(this, typeof(MainActivity));
+        mainIntent.SetAction(Intent.ActionMain);
+        mainIntent.AddCategory(Intent.CategoryLauncher);
+        mainIntent.AddFlags(ActivityFlags.SingleTop | ActivityFlags.ClearTop | ActivityFlags.NewTask);
+
+        var mainPendingIntent = PendingIntent.GetActivity(this, 0, mainIntent, PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
+
+        return new NotificationCompat.Builder(this, "compass_location_channel")
+            .SetContentTitle("SpeedyCompass Active")
+            .SetContentText($"Routing in progress. {count} Riders in convoy.")
+            .SetSmallIcon(Resource.Mipmap.appicon)
+            .SetContentIntent(mainPendingIntent)
+            .SetOngoing(true)
+            .SetVisibility(NotificationCompat.VisibilityPublic) // Show fully on Lock Screen
+            .AddAction(0, "🛑 EMERGENCY SOS", sosPendingIntent) // Add Lock Screen Button
+            .Build();
     }
 
     public async void OnLocationChanged(global::Android.Locations.Location location)
@@ -71,10 +111,7 @@ public class AndroidLocationService : Service, ILocationListener
         try
         {
             var tracker = IPlatformApplication.Current?.Services.GetService<ILocationTracker>();
-            if (tracker != null && tracker.IsSimulating)
-            {
-                return;
-            }
+            if (tracker != null && tracker.IsSimulating) return;
 
             var mauiLocation = new Microsoft.Maui.Devices.Sensors.Location(location.Latitude, location.Longitude);
             double speedMph = location.HasSpeed ? location.Speed * 2.23694 : 0;
@@ -96,17 +133,9 @@ public class AndroidLocationService : Service, ILocationListener
     public override void OnDestroy()
     {
         base.OnDestroy();
-
-        try
-        {
-            _locationManager?.RemoveUpdates(this);
-        }
-        catch { /* Ignore if it fails to detach */ }
-
-        if (_wakeLock != null && _wakeLock.IsHeld)
-        {
-            _wakeLock.Release();
-        }
+        Instance = null;
+        try { _locationManager?.RemoveUpdates(this); } catch { }
+        if (_wakeLock != null && _wakeLock.IsHeld) { _wakeLock.Release(); }
     }
 
     public void OnProviderDisabled(string provider) { }

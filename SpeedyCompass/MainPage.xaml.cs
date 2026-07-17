@@ -3,6 +3,7 @@ using Microsoft.Maui.ApplicationModel;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Models;
 using System.Collections.ObjectModel;
+using System.Net.Http.Json;
 
 namespace SpeedyCompass;
 
@@ -25,13 +26,15 @@ public partial class MainPage : ContentPage
     public ObservableCollection<GroupItemViewModel> AvailableGroups { get; set; } = new();
 
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
+    private readonly IHttpClientFactory _httpClientFactory;
 
-    public MainPage(SignalRService signalRService, MsalAuthService authService)
+    public MainPage(SignalRService signalRService, MsalAuthService authService, IHttpClientFactory httpClientFactory)
     {
         InitializeComponent();
         _signalRService = signalRService;
         _authService = authService;
         GroupsCollectionView.ItemsSource = AvailableGroups;
+        _httpClientFactory = httpClientFactory;
     }
 
     protected override async void OnAppearing()
@@ -45,6 +48,7 @@ public partial class MainPage : ContentPage
         {
             // Just silently refresh the group list in the background and exit!
             // No new tokens, no new SignalR connections.
+            await _signalRService.StopAsync();
             await LoadGroupsAsync();
             return;
         }
@@ -101,8 +105,10 @@ public partial class MainPage : ContentPage
 
     private async Task ProcessLoginFlow(string googleId)
     {
+        await ConnectSignalR(3);
         // Fetch full profile from backend
         var profile = await _signalRService.AuthenticateUser(googleId);
+        await _signalRService.StopAsync(); // Stop the connection after fetching profile
 
         if (profile != null)
         {
@@ -275,7 +281,10 @@ public partial class MainPage : ContentPage
 
         try
         {
+            await ConnectSignalR(3);
             bool success = await _signalRService.SaveUserProfile(CurrentGoogleId, updatedProfile);
+            await _signalRService.StopAsync(); // Stop the connection after saving profile
+
             if (success)
             {
                 Preferences.Default.Set("username", updatedProfile.Username);
@@ -315,8 +324,16 @@ public partial class MainPage : ContentPage
     {
         try
         {
-            var groups = await _signalRService.GetActiveGroups();
+            // --- NEW: Safely create a client from the factory ---
+            // This prevents socket exhaustion and DNS caching issues!
+            var client = _httpClientFactory.CreateClient("CompassBackend");
+
+            // Lightweight HTTP request instead of a heavy WebSocket!
+            var groups = await client.GetFromJsonAsync<List<ActiveGroupDto>>("api/groups") ?? new List<ActiveGroupDto>();
+
             AvailableGroups.Clear();
+
+            // Add items one-by-one to avoid calling an incompatible AddRange extension
             foreach (var g in groups)
             {
                 AvailableGroups.Add(new GroupItemViewModel
@@ -328,7 +345,11 @@ public partial class MainPage : ContentPage
                 });
             }
         }
-        catch (Exception ex) { Console.WriteLine($"Failed to load groups: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching groups over HTTP: {ex.Message}");
+            //MainThread.BeginInvokeOnMainThread(() => GroupsRefreshView.IsRefreshing = false);
+        }
     }
 
     private async void OnCreateGroupClicked(object sender, EventArgs e)
@@ -338,8 +359,11 @@ public partial class MainPage : ContentPage
 
         try
         {
+            await ConnectSignalR(3);
             await _signalRService.CreateGroup(groupName, WelcomeNameLabel.Text, CurrentGoogleId);
             var groupDetails = await _signalRService.GetGroupDetails(groupName);
+            
+            await _signalRService.StopAsync(); // Stop the connection after creating group
 
             await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
@@ -368,6 +392,7 @@ public partial class MainPage : ContentPage
 
         try
         {
+            await ConnectSignalR(3);
             // Note: We know SignalR is ALREADY connected here from OnAzureLoginClicked!
             await _signalRService.JoinGroup(groupName, userName, CurrentGoogleId);
 
@@ -379,6 +404,7 @@ public partial class MainPage : ContentPage
         catch (Exception ex)
         {
             await DisplayAlert("Connection Failed", ex.Message, "OK");
+            await _signalRService.StopAsync(); // Ensure we stop the connection on failure
         }
         finally
         {
@@ -409,7 +435,9 @@ public partial class MainPage : ContentPage
             bool confirm = await DisplayAlert("Delete Group", $"Are you sure you want to delete {groupName}?", "Yes", "No");
             if (confirm)
             {
+                await ConnectSignalR(3);
                 await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
+                await _signalRService.StopAsync(); // Stop the connection after deleting group
                 await LoadGroupsAsync();
             }
         }
