@@ -157,6 +157,7 @@ public class SignalRService
         // --- RECONNECTION LOGIC ---
         _hubConnection.Closed += async (error) =>
         {
+            if (error == null) return;
             ConnectionStatusChanged?.Invoke("Disconnected", Colors.Red);
             if (error != null) LogException("Connection Closed", error);
 

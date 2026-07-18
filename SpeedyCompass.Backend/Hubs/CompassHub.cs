@@ -264,7 +264,7 @@ public class CompassHub : Hub
                 {
                     // Everyone is offline! Wipe the active navigation state so the next ride starts fresh.
                     var update = Builders<GroupSession>.Update
-                        .Set(g => g.CurrentState, GroupState.NotNavigating);
+                        .Set(g => g.CurrentState, GroupState.DestinationSet);
 
                     await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, update);
 

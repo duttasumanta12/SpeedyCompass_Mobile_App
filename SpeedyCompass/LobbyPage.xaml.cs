@@ -80,7 +80,6 @@ public partial class LobbyPage : ContentPage
     private bool _hasJoined = false;
     private bool _amIAdmin = false;
     private string _myName = "";
-    private GroupState _currentState = GroupState.NotNavigating;
     private DateTime _stateStartTime;
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
 
@@ -123,6 +122,10 @@ public partial class LobbyPage : ContentPage
     private double _drawerPeekHeight = 160;
     private double _currentDrawerTranslation = 0;
     private ILocationTracker? _locationTracker;
+    // --- NEW: REROUTING VARIABLE ---
+    private DateTime _lastRerouteTime = DateTime.MinValue;
+    // --- THE FIX: App Lifecycle Flag ---
+    private bool _isAppInForeground = true;
 
     public LobbyPage(SignalRService signalRService, GroupDetailsDto groupDetails)
     {
@@ -215,20 +218,41 @@ public partial class LobbyPage : ContentPage
                 break;
 
             case GestureStatus.Running:
+                // Smoothly drag the drawer up and down with the finger
                 double newTranslation = _currentDrawerTranslation + e.TotalY;
+                // Clamp it so they can't drag it too high off screen or too low past the peek
                 ActionDrawer.TranslationY = Math.Max(0, Math.Min(newTranslation, maxTranslation));
                 break;
 
             case GestureStatus.Completed:
+                // Snap physics: If dragged past halfway, snap to top. Otherwise, snap to peek.
                 if (ActionDrawer.TranslationY < maxTranslation * 0.4)
                 {
+                    // Snap Full Screen
                     ActionDrawer.TranslateTo(0, 0, 250, Easing.CubicOut);
                 }
                 else
                 {
+                    // Snap to Peek at bottom
                     ActionDrawer.TranslateTo(0, maxTranslation, 250, Easing.CubicOut);
                 }
                 break;
+        }
+    }
+
+    // --- NEW: DRAWER HANDLE CLICK LOGIC ---
+    private void OnDrawerHandleTapped(object sender, TappedEventArgs e)
+    {
+        double maxTranslation = _drawerFullHeight - _drawerPeekHeight;
+
+        // If the drawer is closer to the top (open), snap it down to the peek state
+        if (ActionDrawer.TranslationY < maxTranslation * 0.5)
+        {
+            ActionDrawer.TranslateTo(0, maxTranslation, 250, Easing.CubicOut);
+        }
+        else // If it is currently peeked at the bottom, snap it fully open
+        {
+            ActionDrawer.TranslateTo(0, 0, 250, Easing.CubicOut);
         }
     }
 
@@ -526,6 +550,16 @@ public partial class LobbyPage : ContentPage
                 _myPinVm.Heading = e.Heading;
             }
         });
+
+        // --- THE FIX: Abort Map updates if the screen is locked or app is backgrounded! ---
+        // Android destroys the Map Surface when locked. Updating pins will cause a fatal crash!
+        if (!_isAppInForeground) return;
+
+        // --- THE FIX: Trim the blue line dynamically! ---
+        if (groupDetails?.CurrentState == GroupState.Navigating)
+        {
+            _ = TrimRouteVisuals(e.Location);
+        }
     }
 
     protected override async void OnAppearing()
@@ -558,6 +592,7 @@ public partial class LobbyPage : ContentPage
 
                 if (groupDetails.CurrentState == GroupState.Navigating)
                 {
+                    groupDetails.CurrentState = GroupState.NotNavigating;
                     OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName, true);
                 }
             }
@@ -662,7 +697,7 @@ public partial class LobbyPage : ContentPage
             if (!calledFromNavStart && _activeDestination != null)
             {
                 var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
-                UpdateDestinationPin(_activeDestination, DestinationSearchBar.Text);
+                UpdateDestinationPin(_activeDestination, DestinationSearchBar.Text ?? PendingDestinationLabel.Text ?? "Selected Destination");
                 await CalculateAndDrawRoute(currentLoc, _activeDestination);
 
                 MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _activeDestination]));
@@ -778,8 +813,14 @@ public partial class LobbyPage : ContentPage
         _activeDestination = new Location(destLat, destLng);
         DestinationSearchBar.Text = destName;
         ChangeGroupState(GroupState.Navigating, _myName);
+        Location loc;
 
-        var loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+#if DEBUG
+        loc = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
+#else
+        loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+#endif
+
         if (loc != null)
         {
             await CalculateAndDrawRoute(loc, _activeDestination);
@@ -1123,6 +1164,7 @@ public partial class LobbyPage : ContentPage
         {
             _ = _signalRService.LeaveLobby();
         }
+        await _signalRService.StopAsync();
     }
 
     private void MapPinClicked(RiderPin pin)
@@ -1139,7 +1181,7 @@ public partial class LobbyPage : ContentPage
 
         if (_locationTracker != null) _locationTracker.IsSimulating = true;
 
-        foreach (var point in _currentRoutePoints)
+        foreach (var point in _currentRoutePoints.ToList())
         {
             if (groupDetails.CurrentState != GroupState.Navigating || !_isSimulating)
             {
@@ -1161,8 +1203,12 @@ public partial class LobbyPage : ContentPage
                 }
             });
 
+            
+
             _lastKnownLocation = point;
             await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
+
+            _ = TrimRouteVisuals(point);
 
             await Task.Delay(2000);
         }
@@ -1358,17 +1404,23 @@ public partial class LobbyPage : ContentPage
 
     private async void OnEmergencyStopClicked(object sender, EventArgs e)
     {
+        DrawerActionsTab.IsEnabled = false;
         await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Emergency", _myName);
+        DrawerActionsTab.IsEnabled = true;
     }
 
     private async void OnRefuelStopClicked(object sender, EventArgs e)
     {
+        DrawerActionsTab.IsEnabled = false;
         await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Refuel", _myName);
+        DrawerActionsTab.IsEnabled = true;
     }
 
     private async void OnRestStopClicked(object sender, EventArgs e)
     {
+        DrawerActionsTab.IsEnabled = false;
         await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Rest", _myName);
+        DrawerActionsTab.IsEnabled = true;
     }
 
     private async void OnAlertReceived(string alertType, string senderName)
@@ -1674,5 +1726,63 @@ public partial class LobbyPage : ContentPage
         // As soon as this is true, the very next GPS tick will automatically 
         // swoop the camera back down into the 3D navigation view.
         _myPinVm.IsAutoCentering = true;
+    }
+    // =====================================================================
+    // --- NEW: DYNAMIC ROUTE TRIMMER & AUTO-REROUTER ---
+    // =====================================================================
+    private async Task TrimRouteVisuals(Location currentLocation)
+    {
+        if (_activeRouteLine == null || _activeRouteLine.Geopath.Count < 2 || _activeDestination == null) return;
+
+        double minDistance = double.MaxValue;
+        int closestIndex = 0;
+
+        // Search only the next 20 points ahead to avoid snapping to a return-loop later in the ride
+        int searchRange = Math.Min(20, _currentRoutePoints.Count);
+        for (int i = 0; i < searchRange; i++)
+        {
+            double dist = Location.CalculateDistance(currentLocation, _currentRoutePoints[i], DistanceUnits.Kilometers);
+            if (dist < minDistance)
+            {
+                minDistance = dist;
+                closestIndex = i;
+            }
+        }
+
+        // Check 1: Did they go WAY off route? (> 100 meters away from the line)
+        if (minDistance > 0.1)
+        {
+            // Throttle the Google API calls! Only recalculate a full new route once every 15 seconds max.
+            if ((DateTime.Now - _lastRerouteTime).TotalSeconds > 15)
+            {
+                _lastRerouteTime = DateTime.Now;
+                await CalculateAndDrawRoute(currentLocation, _activeDestination);
+            }
+            return;
+        }
+
+        // Check 2: They are still on the line! Let's slice it perfectly.
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            try
+            {
+                // Remove the coordinates that we have already physically passed
+                for (int i = 0; i < closestIndex; i++)
+                {
+                    if (_activeRouteLine.Geopath.Count > 0) _activeRouteLine.Geopath.RemoveAt(0);
+                    if (_currentRoutePoints.Count > 0) _currentRoutePoints.RemoveAt(0);
+                }
+
+                // Snap the very beginning of the polyline directly to the bike's front tire!
+                if (_activeRouteLine.Geopath.Count > 0)
+                {
+                    _activeRouteLine.Geopath[0] = currentLocation;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Line Trimming Error: {ex.Message}");
+            }
+        });
     }
 }

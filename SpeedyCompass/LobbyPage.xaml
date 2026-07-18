@@ -170,28 +170,25 @@
                 Margin="0,0,0,-40"
                 ZIndex="40">
 
-                <Border.StrokeShape>
-                    <RoundRectangle CornerRadius="30,30,0,0" />
-                </Border.StrokeShape>
-                <Border.Shadow>
-                    <Shadow Brush="Black" Offset="0,-4" Opacity="0.3" Radius="10" />
-                </Border.Shadow>
-
-                <!-- Swipe Handler -->
-                <Border.GestureRecognizers>
-                    <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
-                </Border.GestureRecognizers>
+                <!-- THE FIX: We removed the Border.GestureRecognizers from here! -->
 
                 <Grid RowDefinitions="Auto, Auto, *">
 
-                    <!-- DRAG HANDLE (Pill shape at top) -->
-                    <BoxView Grid.Row="0" 
-                         HeightRequest="5" 
+                    <!-- NEW: DRAG HANDLE AREA (Larger touch target with Gestures attached!) -->
+                    <Grid Grid.Row="0" Padding="0,15,0,15" BackgroundColor="Transparent">
+                        <Grid.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
+                            <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
+                        </Grid.GestureRecognizers>
+
+                        <BoxView HeightRequest="5" 
                          WidthRequest="40" 
                          CornerRadius="2.5" 
                          BackgroundColor="Gray" 
-                         HorizontalOptions="Center" 
-                         Margin="0,15,0,10" />
+                         HorizontalOptions="Center" />
+                    </Grid>
+
+                    <!-- DRAWER TABS -->
 
                     <!-- DRAWER TABS (THE FIX: Added Grid.Column properties!) -->
                     <Grid Grid.Row="1" ColumnDefinitions="*, *, *" Margin="10,0,10,10">

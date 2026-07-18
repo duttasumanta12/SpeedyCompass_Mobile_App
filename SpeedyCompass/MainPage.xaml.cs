@@ -442,4 +442,8 @@ public partial class MainPage : ContentPage
             }
         }
     }
+    protected override void OnDisappearing()
+    {
+        base.OnDisappearing();
+    }
 }
