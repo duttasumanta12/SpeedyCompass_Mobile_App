@@ -124,8 +124,6 @@ public partial class LobbyPage : ContentPage
     private ILocationTracker? _locationTracker;
     // --- NEW: REROUTING VARIABLE ---
     private DateTime _lastRerouteTime = DateTime.MinValue;
-    // --- THE FIX: App Lifecycle Flag ---
-    private bool _isAppInForeground = true;
 
     public LobbyPage(SignalRService signalRService, GroupDetailsDto groupDetails)
     {
@@ -550,10 +548,6 @@ public partial class LobbyPage : ContentPage
                 _myPinVm.Heading = e.Heading;
             }
         });
-
-        // --- THE FIX: Abort Map updates if the screen is locked or app is backgrounded! ---
-        // Android destroys the Map Surface when locked. Updating pins will cause a fatal crash!
-        if (!_isAppInForeground) return;
 
         // --- THE FIX: Trim the blue line dynamically! ---
         if (groupDetails?.CurrentState == GroupState.Navigating)
