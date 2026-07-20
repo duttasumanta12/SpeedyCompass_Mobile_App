@@ -189,6 +189,7 @@ public class CompassHub : Hub
         {
             GroupName = groupName,
             AdminGoogleId = googleId,
+            CurrentState = GroupState.NotNavigating,
             Settings = new GroupSettings 
             { 
                 MaxGroupSize = 15, 
@@ -264,7 +265,7 @@ public class CompassHub : Hub
                 {
                     // Everyone is offline! Wipe the active navigation state so the next ride starts fresh.
                     var update = Builders<GroupSession>.Update
-                        .Set(g => g.CurrentState, GroupState.DestinationSet);
+                        .Set(g => g.CurrentState, string.IsNullOrEmpty(session.DestName) ? GroupState.NotNavigating : GroupState.DestinationSet);
 
                     await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, update);
 
