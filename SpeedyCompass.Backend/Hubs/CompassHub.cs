@@ -130,14 +130,64 @@ public class CompassHub : Hub
 
     public async Task<string> RegisterOrUpdateUser(string currentGoogleId, string desiredUsername)
     {
-        var owner = await _state.UserAccounts.Find(u => u.Username.ToLower() == desiredUsername.ToLower()).FirstOrDefaultAsync();
-        if (owner != null && (string.IsNullOrEmpty(currentGoogleId) || owner.GoogleId != currentGoogleId))
-            throw new HubException($"The username '{desiredUsername}' is already taken.");
+        string googleIdToUse = string.IsNullOrEmpty(currentGoogleId) ? throw new HubException("Google Id cannot be null or empty string."): currentGoogleId;
 
-        string googleIdToUse = string.IsNullOrEmpty(currentGoogleId) ? Guid.NewGuid().ToString() : currentGoogleId;
-        var newAccount = new UserAccount { GoogleId = googleIdToUse, Username = desiredUsername };
+        // 1. Check if user exists by Google ID
+        var existingUser = await _state.UserAccounts.Find(u => u.GoogleId == googleIdToUse).FirstOrDefaultAsync();
 
-        await _state.UserAccounts.ReplaceOneAsync(u => u.GoogleId == googleIdToUse, newAccount, new ReplaceOptions { IsUpsert = true });
+        if (existingUser != null)
+        {
+            // --- IF YES: User exists in the Database ---
+
+            // Check if the current username and the provided username are the same
+            if (existingUser.Username.Equals(desiredUsername, StringComparison.OrdinalIgnoreCase))
+            {
+                return googleIdToUse; // Same name, no update needed!
+            }
+
+            // If they are different, check if the NEW username already exists for someone else
+            bool nameExists = await _state.UserAccounts.Find(u => u.Username.ToLower() == desiredUsername.ToLower() && u.GoogleId != googleIdToUse).AnyAsync();
+
+            if (!nameExists)
+            {
+                // If the name is free, update it!
+                var update = Builders<UserAccount>.Update.Set(u => u.Username, desiredUsername);
+                await _state.UserAccounts.UpdateOneAsync(u => u.GoogleId == googleIdToUse, update);
+            }
+            else
+            {
+                // We reject updates if a veteran user tries to steal another existing user's exact name
+                throw new HubException($"The username '{desiredUsername}' is already taken by another rider.");
+            }
+        }
+        else
+        {
+            // --- IF NO: Brand new user registration ---
+
+            string finalUsername = desiredUsername;
+
+            // Check if the desired username is already taken by someone else
+            bool nameExists = await _state.UserAccounts.Find(u => u.Username.ToLower() == finalUsername.ToLower()).AnyAsync();
+
+            if (nameExists)
+            {
+                // Generate a new username by adding numbers at the end (e.g. "Rider" -> "Rider4921")
+                var random = new Random();
+                while (true)
+                {
+                    finalUsername = $"{desiredUsername}{random.Next(1000, 10000)}";
+
+                    // Double check the newly generated name isn't somehow taken too
+                    bool stillTaken = await _state.UserAccounts.Find(u => u.Username.ToLower() == finalUsername.ToLower()).AnyAsync();
+                    if (!stillTaken) break;
+                }
+            }
+
+            // Save the brand new account to MongoDB
+            var newAccount = new UserAccount { GoogleId = googleIdToUse, Username = finalUsername };
+            await _state.UserAccounts.InsertOneAsync(newAccount);
+        }
+
         return googleIdToUse;
     }
 

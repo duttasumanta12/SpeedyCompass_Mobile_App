@@ -41,7 +41,8 @@ public class AndroidLocationService : Service, ILocationListener
 
         _signalRService = IPlatformApplication.Current?.Services.GetService<SignalRService>();
 
-        var notification = CreateNotification(1);
+        int count = intent?.GetIntExtra("NumberOfOnlineRiders", 0) ?? 0;
+        var notification = CreateNotification(count);
 
         if (Build.VERSION.SdkInt >= BuildVersionCodes.Q)
         {
@@ -136,6 +137,17 @@ public class AndroidLocationService : Service, ILocationListener
         Instance = null;
         try { _locationManager?.RemoveUpdates(this); } catch { }
         if (_wakeLock != null && _wakeLock.IsHeld) { _wakeLock.Release(); }
+
+        if (Build.VERSION.SdkInt >= BuildVersionCodes.N)
+        {
+            StopForeground(StopForegroundFlags.Remove);
+        }
+        else
+        {
+#pragma warning disable CS0618 // Type or member is obsolete
+            StopForeground(true);
+#pragma warning restore CS0618
+        }
     }
 
     public void OnProviderDisabled(string provider) { }

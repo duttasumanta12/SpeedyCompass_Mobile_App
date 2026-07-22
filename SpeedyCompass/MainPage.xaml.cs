@@ -157,6 +157,10 @@ public partial class MainPage : ContentPage
                 return; // User canceled or login failed
             }
 
+            await ConnectSignalR(3);
+            string registeredId = await _signalRService.RegisterOrUpdateUser(authResult.UniqueId, authResult.Account.Username);
+            await _signalRService.StopAsync();
+
             // Save credentials securely
             Preferences.Default.Set("username", authResult.Account.Username);
             Preferences.Default.Set("GoogleId", authResult.UniqueId);

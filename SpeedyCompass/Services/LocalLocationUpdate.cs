@@ -14,7 +14,7 @@ public interface ILocationTracker
 {
     // --- NEW FLAG FOR SIMULATION & WAKE LOCKS ---
     bool IsSimulating { get; set; }
-    void StartTracking(string groupName);
+    void StartTracking(string groupName, int numberOfOnlineRiders);
     void StopTracking();
 
     // Event to update the local map UI when the screen is actually on

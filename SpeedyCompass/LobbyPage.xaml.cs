@@ -333,7 +333,7 @@ public partial class LobbyPage : ContentPage
     }
 
     // --- STATE MACHINE ---
-    private async void ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "")
+    private async Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "")
     {
         if (this.groupDetails.CurrentState == newState) return;
 
@@ -396,7 +396,7 @@ public partial class LobbyPage : ContentPage
                     }
 
                     SetActionButtonsEnabled(true);
-                    _locationTracker?.StartTracking(GroupNameLabel.Text);
+                    _locationTracker?.StartTracking(GroupNameLabel.Text, Riders.Count(x => x.IsOnline));
 
 #if ANDROID
                     MainActivity.IsInNavigationMode = true;
@@ -536,7 +536,7 @@ public partial class LobbyPage : ContentPage
     }
 
     // --- BACKGROUND LOCATION OVERRIDES ---
-    private void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
+    private async void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
         MainThread.BeginInvokeOnMainThread(async () =>
         {
@@ -552,7 +552,7 @@ public partial class LobbyPage : ContentPage
         // --- THE FIX: Trim the blue line dynamically! ---
         if (groupDetails?.CurrentState == GroupState.Navigating)
         {
-            _ = TrimRouteVisuals(e.Location);
+            //await TrimRouteVisuals(e.Location);
         }
     }
 
@@ -570,6 +570,10 @@ public partial class LobbyPage : ContentPage
             {
                 OnRosterUpdated(roster);
             }
+
+            _hasJoined = true;
+            AdminSettingsBtn.IsVisible = _amIAdmin;
+            await InitializeLocalTrackingAsync();
 
             if (groupDetails != null)
             {
@@ -590,10 +594,6 @@ public partial class LobbyPage : ContentPage
                     OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName, true);
                 }
             }
-
-            _hasJoined = true;
-            AdminSettingsBtn.IsVisible = _amIAdmin;
-            InitializeLocalTrackingAsync();
         }
         catch (Exception ex)
         {
@@ -797,7 +797,7 @@ public partial class LobbyPage : ContentPage
             DestinationSearchBar.Text = string.Empty;
             _activeDestination = null;
         }
-        ChangeGroupState(GroupState.NotNavigating);
+        await ChangeGroupState(GroupState.NotNavigating);
         await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
     }
 
@@ -806,7 +806,7 @@ public partial class LobbyPage : ContentPage
     {
         _activeDestination = new Location(destLat, destLng);
         DestinationSearchBar.Text = destName;
-        ChangeGroupState(GroupState.Navigating, _myName);
+        await ChangeGroupState(GroupState.Navigating, _myName);
         Location loc;
 
 #if DEBUG
@@ -909,7 +909,7 @@ public partial class LobbyPage : ContentPage
     }
 
     // --- REPLACED TRACKING LOGIC ---
-    private async void InitializeLocalTrackingAsync()
+    private async Task InitializeLocalTrackingAsync()
     {
         ShowLoading("Initializing...");
         try
@@ -939,6 +939,27 @@ public partial class LobbyPage : ContentPage
                     await Permissions.RequestAsync<Permissions.PostNotifications>();
                 }
             }
+
+#if ANDROID
+            // --- NEW: BATTERY OPTIMIZATION OVERRIDE ---
+            // Ask Android to never kill our SignalR connection or GPS tracker when the screen is locked!
+            var pm = (global::Android.OS.PowerManager)global::Android.App.Application.Context.GetSystemService(global::Android.Content.Context.PowerService);
+            if (!pm.IsIgnoringBatteryOptimizations(global::Android.App.Application.Context.PackageName))
+            {
+                MainThread.BeginInvokeOnMainThread(async () =>
+                {
+                    bool accept = await DisplayAlert("Background Tracking", "To keep navigation active while your screen is locked, please allow unrestricted background activity on the next screen.", "OK", "Cancel");
+                    if (accept)
+                    {
+                        var intent = new global::Android.Content.Intent();
+                        intent.SetAction(global::Android.Provider.Settings.ActionRequestIgnoreBatteryOptimizations);
+                        intent.SetData(global::Android.Net.Uri.Parse("package:" + global::Android.App.Application.Context.PackageName));
+                        intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
+                        global::Android.App.Application.Context.StartActivity(intent);
+                    }
+                });
+            }
+#endif
 
             var locationRequest = new GeolocationRequest(GeolocationAccuracy.High, TimeSpan.FromSeconds(5));
             var currentLocation = await Geolocation.Default.GetLocationAsync(locationRequest);
@@ -1085,36 +1106,42 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            var updatedRiders = new ObservableCollection<Rider>();
-            string myName = Preferences.Default.Get("username", "Rider");
+        var updatedRiders = new ObservableCollection<Rider>();
+        string myName = Preferences.Default.Get("username", "Rider");
 
-            foreach (var r in roster)
+        foreach (var r in roster)
+        {
+            string displayName = r.Name;
+
+            if (displayName == myName)
             {
-                string displayName = r.Name;
-
-                if (displayName == myName)
-                {
-                    displayName += " (You)";
-                    _amIAdmin = r.IsAdmin;
-                }
-
-                if (!r.IsOnline)
-                    displayName += " (Offline)";
-
-                updatedRiders.Add(new Rider
-                {
-                    Name = displayName,
-                    GoogleId = r.GoogleId,
-                    IsAdmin = r.IsAdmin,
-                    Role = r.Role,
-                    IsOnline = r.IsOnline
-                });
+                displayName += " (You)";
+                _amIAdmin = r.IsAdmin;
             }
 
-            Riders = updatedRiders;
-            RidersCollectionView.ItemsSource = Riders;
+            if (!r.IsOnline)
+                displayName += " (Offline)";
 
-            PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
+            updatedRiders.Add(new Rider
+            {
+                Name = displayName,
+                GoogleId = r.GoogleId,
+                IsAdmin = r.IsAdmin,
+                Role = r.Role,
+                IsOnline = r.IsOnline
+            });
+        }
+
+        Riders = updatedRiders;
+        RidersCollectionView.ItemsSource = Riders;
+
+        PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
+            
+        if (_locationTracker != null)
+        {
+            _locationTracker.UpdateRiderCount(Riders.Count(r => r.IsOnline));
+        }
+
         });
     }
 
@@ -1202,7 +1229,7 @@ public partial class LobbyPage : ContentPage
             _lastKnownLocation = point;
             await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
 
-            _ = TrimRouteVisuals(point);
+            //await TrimRouteVisuals(point);
 
             await Task.Delay(2000);
         }
@@ -1210,7 +1237,7 @@ public partial class LobbyPage : ContentPage
         _isSimulating = false;
     }
 
-    private void OnNavigationCancelled()
+    private async void OnNavigationCancelled()
     {
 #if ANDROID
         MainActivity.IsInNavigationMode = false;
@@ -1218,10 +1245,7 @@ public partial class LobbyPage : ContentPage
 
         _locationTracker?.StopTracking();
 
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            ChangeGroupState(GroupState.NotNavigating);
-        });
+        await ChangeGroupState(GroupState.NotNavigating);
     }
 
     private async void OnSearchTextChanged(object sender, TextChangedEventArgs e)
@@ -1652,20 +1676,41 @@ public partial class LobbyPage : ContentPage
         }
     }
 
-    private void OnNavigationPaused(string reason, string adminName)
+    private async void OnNavigationPaused(string reason, string adminName)
     {
         GroupState pauseState = GroupStateHelper.GetBreakState(reason);
-        ChangeGroupState(pauseState, adminName, reason);
+        await ChangeGroupState(pauseState, adminName, reason);
     }
 
-    private void OnNavigationResumed(string adminName)
+    private async void OnNavigationResumed(string adminName)
     {
-        ChangeGroupState(GroupState.Navigating, adminName);
+        await ChangeGroupState(GroupState.Navigating, adminName);
+        Location loc;
+
+#if DEBUG
+        loc = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
+#else
+        loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+#endif
+
+        if (loc != null)
+        {
+            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
+
+#if DEBUG
+            if (_currentRoutePoints != null && _currentRoutePoints.Any() && !_isSimulating)
+            {
+                _ = SimulateMovementAlongRouteAsync();
+            }
+#endif
+        }
+
+            _ = TextToSpeech.Default.SpeakAsync($"Resuming Navigation to {groupDetails.DestName}. Ride safe!");
     }
 
-    private void OnNavigationCompleted(string adminName)
+    private async void OnNavigationCompleted(string adminName)
     {
-        ChangeGroupState(GroupState.Completed, adminName);
+        await ChangeGroupState(GroupState.Completed, adminName);
     }
     private async void OnDestinationSet(double destLat, double destLng, string destName)
     {
@@ -1726,57 +1771,64 @@ public partial class LobbyPage : ContentPage
     // =====================================================================
     private async Task TrimRouteVisuals(Location currentLocation)
     {
-        if (_activeRouteLine == null || _activeRouteLine.Geopath.Count < 2 || _activeDestination == null) return;
-
-        double minDistance = double.MaxValue;
-        int closestIndex = 0;
-
-        // Search only the next 20 points ahead to avoid snapping to a return-loop later in the ride
-        int searchRange = Math.Min(20, _currentRoutePoints.Count);
-        for (int i = 0; i < searchRange; i++)
+        try
         {
-            double dist = Location.CalculateDistance(currentLocation, _currentRoutePoints[i], DistanceUnits.Kilometers);
-            if (dist < minDistance)
-            {
-                minDistance = dist;
-                closestIndex = i;
-            }
-        }
+            if (_activeRouteLine == null || _activeRouteLine.Geopath.Count < 2 || _activeDestination == null) return;
 
-        // Check 1: Did they go WAY off route? (> 100 meters away from the line)
-        if (minDistance > 0.1)
-        {
-            // Throttle the Google API calls! Only recalculate a full new route once every 15 seconds max.
-            if ((DateTime.Now - _lastRerouteTime).TotalSeconds > 15)
-            {
-                _lastRerouteTime = DateTime.Now;
-                await CalculateAndDrawRoute(currentLocation, _activeDestination);
-            }
-            return;
-        }
+            double minDistance = double.MaxValue;
+            int closestIndex = 0;
 
-        // Check 2: They are still on the line! Let's slice it perfectly.
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            try
+            // Search only the next 20 points ahead to avoid snapping to a return-loop later in the ride
+            int searchRange = Math.Min(20, _currentRoutePoints.Count);
+            for (int i = 0; i < searchRange; i++)
             {
-                // Remove the coordinates that we have already physically passed
-                for (int i = 0; i < closestIndex; i++)
+                double dist = Location.CalculateDistance(currentLocation, _currentRoutePoints[i], DistanceUnits.Kilometers);
+                if (dist < minDistance)
                 {
-                    if (_activeRouteLine.Geopath.Count > 0) _activeRouteLine.Geopath.RemoveAt(0);
-                    if (_currentRoutePoints.Count > 0) _currentRoutePoints.RemoveAt(0);
-                }
-
-                // Snap the very beginning of the polyline directly to the bike's front tire!
-                if (_activeRouteLine.Geopath.Count > 0)
-                {
-                    _activeRouteLine.Geopath[0] = currentLocation;
+                    minDistance = dist;
+                    closestIndex = i;
                 }
             }
-            catch (Exception ex)
+
+            // Check 1: Did they go WAY off route? (> 100 meters away from the line)
+            if (minDistance > 0.1)
             {
-                System.Diagnostics.Debug.WriteLine($"Line Trimming Error: {ex.Message}");
+                // Throttle the Google API calls! Only recalculate a full new route once every 15 seconds max.
+                if ((DateTime.Now - _lastRerouteTime).TotalSeconds > 15)
+                {
+                    _lastRerouteTime = DateTime.Now;
+                    await CalculateAndDrawRoute(currentLocation, _activeDestination);
+                }
+                return;
             }
-        });
+
+            // Check 2: They are still on the line! Let's slice it perfectly.
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                try
+                {
+                    // Remove the coordinates that we have already physically passed
+                    for (int i = 0; i < closestIndex; i++)
+                    {
+                        if (_activeRouteLine.Geopath.Count > 0) _activeRouteLine.Geopath.RemoveAt(0);
+                        if (_currentRoutePoints.Count > 0) _currentRoutePoints.RemoveAt(0);
+                    }
+
+                    // Snap the very beginning of the polyline directly to the bike's front tire!
+                    if (_activeRouteLine.Geopath.Count > 0)
+                    {
+                        _activeRouteLine.Geopath[0] = currentLocation;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Line Trimming Error: {ex.Message}");
+                }
+            });
+        }
+        catch(Exception ex)
+        {
+
+        }
     }
 }
