@@ -13,89 +13,113 @@ public class GroupItemViewModel
     public int MemberCount { get; set; }
     public int MaxGroupSize { get; set; }
     public bool IsMyAdmin { get; set; }
-    public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Members";
-    public bool CanJoin => IsMyAdmin || MemberCount < MaxGroupSize;
-    public string JoinButtonText => IsMyAdmin ? "Enter" : "Join";
+    public bool IsMember { get; set; } // Tracks if they already validated the PIN previously
+
+    public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Riders";
+    public bool CanJoin => IsMyAdmin || IsMember || MemberCount < MaxGroupSize;
+
+    // Dynamic Button UI Rules
+    public string JoinButtonText => IsMyAdmin ? "Resume" : (IsMember ? "Enter" : "Join");
+    public Color JoinButtonColor => IsMyAdmin || IsMember ? Colors.DodgerBlue : Colors.MediumSeaGreen;
 }
 
 public partial class MainPage : ContentPage
 {
     private readonly SignalRService _signalRService;
     private readonly MsalAuthService _authService;
+    private readonly IHttpClientFactory _httpClientFactory;
+
+    private string _pendingJoinGroupName = string.Empty;
 
     public ObservableCollection<GroupItemViewModel> AvailableGroups { get; set; } = new();
 
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
-    private readonly IHttpClientFactory _httpClientFactory;
+    private string CurrentUsername => Preferences.Default.Get("username", "Rider");
 
     public MainPage(SignalRService signalRService, MsalAuthService authService, IHttpClientFactory httpClientFactory)
     {
         InitializeComponent();
         _signalRService = signalRService;
         _authService = authService;
-        GroupsCollectionView.ItemsSource = AvailableGroups;
         _httpClientFactory = httpClientFactory;
+
+        GroupsCollectionView.ItemsSource = AvailableGroups;
     }
 
     protected override async void OnAppearing()
     {
         base.OnAppearing();
 
-        // 🛡️ THE GUARD CLAUSE 🛡️
-        // If the Dashboard is already visible, it means we already successfully logged in
-        // and connected to SignalR during this app session. 
         if (DashboardView.IsVisible)
         {
-            // Just silently refresh the group list in the background and exit!
-            // No new tokens, no new SignalR connections.
             await _signalRService.StopAsync();
             await LoadGroupsAsync();
             return;
         }
 
-        // If we reach here, it's a fresh boot. Attempt the silent token validation!
         await AttemptSilentLoginAsync();
     }
+
+    // --- AUTHENTICATION ---
     private async Task AttemptSilentLoginAsync()
     {
         try
         {
-            // Fetch accounts from the MSAL cache (This is your local token cache!)
             var accounts = await _authService.GetAccounts();
             var firstAccount = accounts.FirstOrDefault();
 
             if (firstAccount != null)
             {
                 ShowLoading("Validating session...");
-
-                // AcquireTokenSilent automatically checks if the cached token is valid.
-                // If it's expired, MSAL automatically uses the refresh token to get a new one!
                 var authResult = await _authService.AcquireTokenSilentAsync(firstAccount);
 
-                // Save credentials securely
                 Preferences.Default.Set("username", authResult.Account.Username);
                 Preferences.Default.Set("GoogleId", authResult.UniqueId);
 
-                bool isConnected = false;
-                isConnected = await ConnectSignalR(3);
-
-                if(!isConnected)
+                bool isConnected = await ConnectSignalR(3);
+                if (!isConnected)
                 {
                     HideLoading();
-                    return; // Stop the flow completely
+                    return;
                 }
 
-                await ProcessLoginFlow(authResult.UniqueId); // Proceed with the login flow using the valid token
+                await ProcessLoginFlow(authResult.UniqueId);
             }
         }
-        catch (MsalUiRequiredException)
+        catch (MsalUiRequiredException) { /* Do nothing, show login UI */ }
+        catch (Exception ex) { Console.WriteLine($"Silent Auth failed: {ex.Message}"); }
+        finally { HideLoading(); }
+    }
+
+    private async void OnAzureLoginClicked(object sender, EventArgs e)
+    {
+        ShowLoading("Authenticating...");
+        try
         {
-            // The token is completely expired, or the user changed their password.
-            // The cache is invalid. Do nothing and let them see the "Login" button.
+            var authResult = await _authService.LoginAsync();
+            if (authResult == null)
+            {
+                HideLoading();
+                return;
+            }
+
+            await ConnectSignalR(3);
+            await _signalRService.RegisterOrUpdateUser(authResult.UniqueId, authResult.Account.Username);
+            await _signalRService.StopAsync();
+
+            Preferences.Default.Set("username", authResult.Account.Username);
+            Preferences.Default.Set("GoogleId", authResult.UniqueId);
+
+            ShowLoading("Connecting to Server...");
+            bool flowControl = await ConnectSignalR(3);
+            if (!flowControl) return;
+
+            ShowLoading("Fetching Groups...");
+            await ProcessLoginFlow(authResult.UniqueId);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Silent Auth failed: {ex.Message}");
+            await DisplayAlertAsync("Error", $"Login Failed: {ex.Message}", "OK");
         }
         finally
         {
@@ -106,9 +130,8 @@ public partial class MainPage : ContentPage
     private async Task ProcessLoginFlow(string googleId)
     {
         await ConnectSignalR(3);
-        // Fetch full profile from backend
         var profile = await _signalRService.AuthenticateUser(googleId);
-        await _signalRService.StopAsync(); // Stop the connection after fetching profile
+        await _signalRService.StopAsync();
 
         if (profile != null)
         {
@@ -118,7 +141,6 @@ public partial class MainPage : ContentPage
             LoginView.IsVisible = false;
             DashboardView.IsVisible = true;
 
-            // MANDATORY CHECK: Have they filled out the emergency profile?
             if (!profile.HasConsented || string.IsNullOrEmpty(profile.EmergencyContact))
             {
                 OpenProfileModal(profile, isMandatory: true);
@@ -135,57 +157,10 @@ public partial class MainPage : ContentPage
         }
         else
         {
-            // Invalid session, dump to login
             Preferences.Default.Remove("GoogleId");
             Preferences.Default.Remove("username");
             LoginView.IsVisible = true;
             DashboardView.IsVisible = false;
-        }
-    }
-
-    private async void OnAzureLoginClicked(object sender, EventArgs e)
-    {
-        // 1. Lock UI and Authenticate via Azure B2C
-        ShowLoading("Authenticating...");
-
-        try
-        {
-            var authResult = await _authService.LoginAsync();
-            if (authResult == null)
-            {
-                HideLoading();
-                return; // User canceled or login failed
-            }
-
-            await ConnectSignalR(3);
-            string registeredId = await _signalRService.RegisterOrUpdateUser(authResult.UniqueId, authResult.Account.Username);
-            await _signalRService.StopAsync();
-
-            // Save credentials securely
-            Preferences.Default.Set("username", authResult.Account.Username);
-            Preferences.Default.Set("GoogleId", authResult.UniqueId);
-
-            // 2. ROBUST INITIAL CONNECTION WITH RETRY LOGIC
-            ShowLoading("Connecting to Server...");
-            int maxRetries = 3;
-            bool flowControl = await ConnectSignalR(maxRetries);
-            if (!flowControl)
-            {
-                return;
-            }
-
-            // 3. Fetch Active Groups using the now-open socket!
-            ShowLoading("Fetching Groups...");
-
-            await ProcessLoginFlow(authResult.UniqueId);
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", $"Login Failed: {ex.Message}", "OK");
-        }
-        finally
-        {
-            HideLoading();
         }
     }
 
@@ -196,32 +171,208 @@ public partial class MainPage : ContentPage
             try
             {
                 if (i > 1) ShowLoading($"Connecting... (Attempt {i}/{maxRetries})");
-
                 await _signalRService.StartAsync();
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                System.Diagnostics.Debug.WriteLine($"SignalR Start Failed (Attempt {i}): {ex.Message}");
-
                 if (i == maxRetries)
                 {
                     HideLoading();
-                    await DisplayAlert("Connection Failed", "Could not reach the server. Please check your internet connection and try again.", "OK");
-                    return false; // Stop the flow completely
+                    await DisplayAlertAsync("Connection Failed", "Could not reach the server. Please check your internet connection.", "OK");
+                    return false;
                 }
-
-                await Task.Delay(2000); // Wait 2 seconds before retrying
+                await Task.Delay(2000);
             }
         }
-
         return true;
+    }
+
+    // --- DASHBOARD DATA LOADING ---
+    private async void OnRefreshGroups(object sender, EventArgs e)
+    {
+        await LoadGroupsAsync();
+        GroupsRefreshView.IsRefreshing = false;
+    }
+
+    private async Task LoadGroupsAsync()
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient("CompassBackend");
+            var googleId = Preferences.Default.Get("GoogleId", "");
+
+            if (string.IsNullOrEmpty(googleId))
+            {
+                throw new NullReferenceException("GoogleId cannot be null/empty.");
+            }
+
+            var groups = await client.GetFromJsonAsync<List<ActiveGroupDto>>($"api/groups?googleId={googleId}") ?? new List<ActiveGroupDto>();
+
+            AvailableGroups.Clear();
+
+            foreach (var g in groups)
+            {
+                // NOTE FOR BACKEND: Make sure `api/groups` checks if CurrentGoogleId is inside g.ActiveRiders
+                // and sets `IsMember` to true in the DTO if they already joined earlier!
+                AvailableGroups.Add(new GroupItemViewModel
+                {
+                    GroupName = g.GroupName,
+                    MemberCount = g.MemberCount,
+                    MaxGroupSize = g.MaxGroupSize,
+                    IsMyAdmin = g.AdminGoogleId == CurrentGoogleId,
+                    IsMember = g.IsMember
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching groups: {ex.Message}");
+        }
+    }
+
+    // --- 1. CREATE GROUP MODAL LOGIC ---
+    private void OnOpenCreateGroupModalClicked(object sender, EventArgs e)
+    {
+        NewGroupNameEntry.Text = string.Empty;
+        CreateSizeSlider.Value = 10;
+        CreateLagSlider.Value = 500;
+        CreateSplinterSlider.Value = 2000;
+
+        CreateGroupModalOverlay.IsVisible = true;
+    }
+
+    private void OnCloseCreateGroupModalClicked(object sender, EventArgs e) => CreateGroupModalOverlay.IsVisible = false;
+
+    private void OnCreateSizeSliderChanged(object sender, ValueChangedEventArgs e) => CreateSizeLabel.Text = $"{(int)Math.Round(e.NewValue)} Riders";
+    private void OnCreateLagSliderChanged(object sender, ValueChangedEventArgs e)
+    {
+        int val = (int)(Math.Round(e.NewValue / 50.0) * 50);
+        CreateLagLabel.Text = val == 0 ? "Off" : $"{val}m";
+    }
+    private void OnCreateSplinterSliderChanged(object sender, ValueChangedEventArgs e)
+    {
+        int val = (int)(Math.Round(e.NewValue / 100.0) * 100);
+        CreateSplinterLabel.Text = val == 0 ? "Off" : $"{val}m";
+    }
+
+    private async void OnConfirmCreateGroupClicked(object sender, EventArgs e)
+    {
+        string groupName = NewGroupNameEntry.Text?.Trim();
+        if (string.IsNullOrEmpty(groupName))
+        {
+            await DisplayAlert("Hold Up", "Please enter a name for your convoy.", "OK");
+            return;
+        }
+
+        CreateGroupModalOverlay.IsVisible = false;
+        ShowLoading("Generating Convoy PIN...");
+
+        // Generate Secure 6-Digit PIN
+        string generatedPin = new Random().Next(100000, 999999).ToString();
+
+        // Package the initial settings configured by the Admin
+        var initialSettings = new GroupSettingsDto
+        {
+            MaxGroupSize = (int)Math.Round(CreateSizeSlider.Value),
+            MaxLagDistanceMeters = (int)(Math.Round(CreateLagSlider.Value / 50.0) * 50),
+            SplinterWarningDistanceMeters = (int)(Math.Round(CreateSplinterSlider.Value / 100.0) * 100),
+            PitstopDistanceMeters = 0 // Optional: Add a slider for this if needed
+        };
+
+        try
+        {
+            await ConnectSignalR(3);
+
+            // NOTE FOR BACKEND: Update this SignalR Hub method to accept `generatedPin` and `initialSettings`
+            await _signalRService.CreateGroup(groupName, CurrentUsername, CurrentGoogleId, generatedPin, initialSettings);
+
+            var groupDetails = await _signalRService.GetGroupDetails(groupName);
+            await _signalRService.StopAsync();
+
+            // Show PIN to Admin before jumping into the Lobby
+            await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
+
+            HideLoading();
+
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlertAsync("Error", ex.Message, "OK");
+        }
+        finally
+        {
+            HideLoading();
+        }
+    }
+
+    // --- 2. JOIN GROUP PIN MODAL LOGIC ---
+    private async void OnJoinGroupClicked(object sender, EventArgs e)
+    {
+        if (sender is Button btn && btn.CommandParameter is GroupItemViewModel groupData)
+        {
+            if (groupData.IsMyAdmin || groupData.IsMember)
+            {
+                // They are already authenticated for this group. Jump straight in!
+                await ExecuteJoinFlow(groupData.GroupName, null);
+            }
+            else
+            {
+                // They are a new rider trying to join. Ask for the PIN!
+                _pendingJoinGroupName = groupData.GroupName;
+                JoinPinEntry.Text = string.Empty;
+                JoinGroupModalOverlay.IsVisible = true;
+
+                // UX Polish: Auto-focus the keyboard
+                JoinPinEntry.Focus();
+            }
+        }
+    }
+
+    private void OnCloseJoinModalClicked(object sender, EventArgs e) => JoinGroupModalOverlay.IsVisible = false;
+
+    private async void OnConfirmJoinPinClicked(object sender, EventArgs e)
+    {
+        string pinCode = JoinPinEntry.Text?.Trim();
+        if (string.IsNullOrEmpty(pinCode) || pinCode.Length != 6)
+        {
+            await DisplayAlert("Invalid PIN", "Please enter the full 6-digit code provided by the Admin.", "OK");
+            return;
+        }
+
+        JoinGroupModalOverlay.IsVisible = false;
+        await ExecuteJoinFlow(_pendingJoinGroupName, pinCode);
+    }
+
+    private async Task ExecuteJoinFlow(string groupName, string pinCode)
+    {
+        ShowLoading("Joining Convoy...");
+        try
+        {
+            await ConnectSignalR(3);
+
+            // NOTE FOR BACKEND: Update this SignalR Hub method to accept `pinCode`. 
+            // If the pinCode is wrong, throw a HubException so it gets caught right here!
+            await _signalRService.JoinGroup(groupName, CurrentUsername, CurrentGoogleId, pinCode);
+
+            var groupDetails = await _signalRService.GetGroupDetails(groupName);
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Access Denied", ex.Message, "OK");
+            await _signalRService.StopAsync();
+        }
+        finally
+        {
+            HideLoading();
+        }
     }
 
     // --- PROFILE MODAL LOGIC ---
     private void OnOpenProfileClicked(object sender, EventArgs e)
     {
-        // Opening manually from the Dashboard -> Pre-fill with known preferences and allow canceling
         var profile = new UserProfileDto
         {
             Username = Preferences.Default.Get("username", "Rider"),
@@ -241,14 +392,13 @@ public partial class MainPage : ContentPage
         ProfileBloodGroupPicker.SelectedItem = string.IsNullOrEmpty(profile.BloodGroup) ? "Unknown" : profile.BloodGroup;
         ConsentCheckbox.IsChecked = profile.HasConsented;
 
-        // NEW: Load Screen On Preference
         KeepScreenOnSwitch.IsToggled = Preferences.Default.Get("KeepScreenOn", false);
 
         if (isMandatory)
         {
             ProfileModalTitle.Text = "Complete Setup";
             ProfileModalSubtitle.Text = "We need this emergency info before you can ride.";
-            CancelProfileButton.IsVisible = false; // Force them to finish
+            CancelProfileButton.IsVisible = false;
         }
         else
         {
@@ -287,7 +437,7 @@ public partial class MainPage : ContentPage
         {
             await ConnectSignalR(3);
             bool success = await _signalRService.SaveUserProfile(CurrentGoogleId, updatedProfile);
-            await _signalRService.StopAsync(); // Stop the connection after saving profile
+            await _signalRService.StopAsync();
 
             if (success)
             {
@@ -295,15 +445,15 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Set("EmergencyContact", updatedProfile.EmergencyContact);
                 Preferences.Default.Set("VehicleNumber", updatedProfile.VehicleNumber);
                 Preferences.Default.Set("BloodGroup", updatedProfile.BloodGroup);
+                Preferences.Default.Set("HasConsented", updatedProfile.HasConsented);
 
-                // NEW: Save and Apply Screen On Preference immediately
                 Preferences.Default.Set("KeepScreenOn", KeepScreenOnSwitch.IsToggled);
                 DeviceDisplay.Current.KeepScreenOn = KeepScreenOnSwitch.IsToggled;
 
                 WelcomeNameLabel.Text = updatedProfile.Username;
                 ProfileModalOverlay.IsVisible = false;
 
-                await LoadGroupsAsync(); // Load groups now that they are authorized
+                await LoadGroupsAsync();
             }
         }
         catch (Exception ex)
@@ -312,126 +462,9 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private void OnCancelProfileClicked(object sender, EventArgs e)
-    {
-        ProfileModalOverlay.IsVisible = false;
-    }
+    private void OnCancelProfileClicked(object sender, EventArgs e) => ProfileModalOverlay.IsVisible = false;
 
-    // --- GROUP LOGIC ---
-    private async void OnRefreshGroups(object sender, EventArgs e)
-    {
-        await LoadGroupsAsync();
-        GroupsRefreshView.IsRefreshing = false;
-    }
-
-    private async Task LoadGroupsAsync()
-    {
-        try
-        {
-            // --- NEW: Safely create a client from the factory ---
-            // This prevents socket exhaustion and DNS caching issues!
-            var client = _httpClientFactory.CreateClient("CompassBackend");
-
-            // Lightweight HTTP request instead of a heavy WebSocket!
-            var groups = await client.GetFromJsonAsync<List<ActiveGroupDto>>("api/groups") ?? new List<ActiveGroupDto>();
-
-            AvailableGroups.Clear();
-
-            // Add items one-by-one to avoid calling an incompatible AddRange extension
-            foreach (var g in groups)
-            {
-                AvailableGroups.Add(new GroupItemViewModel
-                {
-                    GroupName = g.GroupName,
-                    MemberCount = g.MemberCount,
-                    MaxGroupSize = g.MaxGroupSize,
-                    IsMyAdmin = g.AdminGoogleId == CurrentGoogleId
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error fetching groups over HTTP: {ex.Message}");
-            //MainThread.BeginInvokeOnMainThread(() => GroupsRefreshView.IsRefreshing = false);
-        }
-    }
-
-    private async void OnCreateGroupClicked(object sender, EventArgs e)
-    {
-        string groupName = GroupNameEntry.Text?.Trim();
-        if (string.IsNullOrEmpty(groupName)) return;
-
-        try
-        {
-            await ConnectSignalR(3);
-            await _signalRService.CreateGroup(groupName, WelcomeNameLabel.Text, CurrentGoogleId);
-            var groupDetails = await _signalRService.GetGroupDetails(groupName);
-            
-            await _signalRService.StopAsync(); // Stop the connection after creating group
-
-            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
-        }
-        catch (Exception ex) { await DisplayAlert("Error", ex.Message, "OK"); }
-    }
-
-    private async void OnJoinGroupClicked(object sender, EventArgs e)
-    {
-        if (sender is Button btn && btn.CommandParameter is string groupName)
-        {
-        }
-        else
-        {
-            return;
-        }
-        string userName = Preferences.Default.Get("username", "Rider");
-
-        if (string.IsNullOrEmpty(groupName))
-        {
-            await DisplayAlert("Error", "Please select or enter a group to join.", "OK");
-            return;
-        }
-
-        // Lock the UI
-        ShowLoading("Joining Convoy...");
-
-        try
-        {
-            await ConnectSignalR(3);
-            // Note: We know SignalR is ALREADY connected here from OnAzureLoginClicked!
-            await _signalRService.JoinGroup(groupName, userName, CurrentGoogleId);
-
-            var groupDetails = await _signalRService.GetGroupDetails(groupName);
-
-            // Navigate to Lobby
-            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Connection Failed", ex.Message, "OK");
-            await _signalRService.StopAsync(); // Ensure we stop the connection on failure
-        }
-        finally
-        {
-            HideLoading();
-        }
-    }
-
-    private void HideLoading()
-    {
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            LoadingOverlay.IsVisible = false;
-        });
-    }
-    private void ShowLoading(string message)
-    {
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            LoadingText.Text = message;
-            LoadingOverlay.IsVisible = true;
-        });
-    }
-
+    // --- ADMIN ACTION ---
     private async void OnDeleteGroupClicked(object sender, EventArgs e)
     {
         if (sender is Button btn && btn.CommandParameter is string groupName)
@@ -441,13 +474,19 @@ public partial class MainPage : ContentPage
             {
                 await ConnectSignalR(3);
                 await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
-                await _signalRService.StopAsync(); // Stop the connection after deleting group
+                await _signalRService.StopAsync();
                 await LoadGroupsAsync();
             }
         }
     }
-    protected override void OnDisappearing()
+
+    private void HideLoading() => MainThread.BeginInvokeOnMainThread(() => LoadingOverlay.IsVisible = false);
+    private void ShowLoading(string message)
     {
-        base.OnDisappearing();
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            LoadingText.Text = message;
+            LoadingOverlay.IsVisible = true;
+        });
     }
 }

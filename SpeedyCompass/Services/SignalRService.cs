@@ -286,11 +286,11 @@ public class SignalRService
         }
     }
 
-    public async Task CreateGroup(string groupName, string userName)
+    public async Task CreateGroup(string groupName, string userName, string googleId, string joinCode, GroupSettingsDto initialSettings)
     {
         try
         {
-            await _hubConnection.InvokeAsync("CreateGroup", groupName, userName);
+            await _hubConnection.InvokeAsync("CreateGroup", groupName, userName, googleId, joinCode, initialSettings);
         }
         catch (Exception ex)
         {
@@ -446,12 +446,12 @@ public class SignalRService
         await _hubConnection.InvokeAsync("CreateGroup", groupName, userName, googleId);
     }
 
-    public async Task JoinGroup(string groupName, string userName, string googleId)
+    public async Task JoinGroup(string groupName, string userName, string googleId, string pinCode)
     {
         _activeGroupName = groupName;
         _activeUserName = userName;
         _activeGoogleId = googleId;
-        await _hubConnection.InvokeAsync("JoinGroup", groupName, userName, googleId);
+        await _hubConnection.InvokeAsync("JoinGroup", groupName, userName, googleId, pinCode);
     }
 
     // UPDATE: Pass googleId to the backend

@@ -14,8 +14,13 @@ builder.Services.AddSingleton<CompassStateManager>();
 // 1. Add SignalR and configure it to use Azure SignalR Service.
 // It will automatically look for a connection string in your appsettings.json
 // under the key: "Azure:SignalR:ConnectionString"
-builder.Services.AddSignalR()
+builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
+{
+    options.EnableDetailedErrors = true;
+})
                 .AddAzureSignalR();
+
+builder.Services.AddMemoryCache();
 
 
 
@@ -38,6 +43,16 @@ app.UseCors();
 app.UseDefaultFiles();
 app.UseRouting();
 app.UseStaticFiles();
+
+//// ====================================================================
+//// --- NEW: AUTO-MIGRATION EXECUTION ON STARTUP ---
+//// ====================================================================
+//using (var scope = app.Services.CreateScope())
+//{
+//    var migrationService = scope.ServiceProvider.GetRequiredService<DatabaseMigrationService>();
+//    // This runs automatically every time the server starts!
+//    await migrationService.ApplyMissingMigrationsAsync();
+//}
 
 // 2. Map the incoming connections to your Hub
 app.MapHub<CompassHub>("/compasshub", config =>
@@ -66,26 +81,33 @@ app.MapGet("/", () => "Speedy Compass SignalR Server is running!");
 //    return Results.Ok(profile);
 //});
 
-// --- NEW: HTTP REST API FOR DASHBOARD ---
-// Allows the app to fetch active groups without connecting to SignalR!
-app.MapGet("/api/groups", async (CompassStateManager state) =>
+// --- UPDATED: HTTP REST API FOR DASHBOARD ---
+// Allows the app to fetch active groups and dynamically check membership!
+app.MapGet("/api/groups", async (string googleId, CompassStateManager state) =>
 {
-    var list = new List<ActiveGroupDto>();
-    var allGroups = await state.ActiveGroups.Find(_ => true).ToListAsync();
+    var groups = await state.ActiveGroups.Find(_ => true).ToListAsync();
 
-    foreach (var session in allGroups)
+    var groupList = new List<object>();
+    foreach (var g in groups)
     {
-        list.Add(new ActiveGroupDto
+        // 1. Count total members associated with this group in the new table
+        long memberCount = await state.GroupMembers.CountDocumentsAsync(m => m.GroupName == g.GroupName);
+
+        // 2. Check if the specific user requesting the list is already in the group
+        bool isMember = !string.IsNullOrEmpty(googleId) &&
+                        await state.GroupMembers.Find(m => m.GroupName == g.GroupName && m.GoogleId == googleId).AnyAsync();
+
+        groupList.Add(new
         {
-            GroupName = session.GroupName,
-            AdminGoogleId = session.AdminGoogleId,
-            MemberCount = state.ConnectedRiders.Values.Count(r => r.GroupName == session.GroupName),
-            IsNavigating = session.CurrentState == SpeedyCompass.Shared.Constants.GroupState.Navigating,
-            MaxGroupSize = session.Settings.MaxGroupSize
+            GroupName = g.GroupName,
+            MemberCount = (int)memberCount,
+            MaxGroupSize = g.Settings.MaxGroupSize,
+            AdminGoogleId = g.AdminGoogleId,
+            IsMember = isMember
         });
     }
 
-    return Results.Ok(list);
+    return Results.Ok(groupList);
 });
 
 // 3. Save User Profile

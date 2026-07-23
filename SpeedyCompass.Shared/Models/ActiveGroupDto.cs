@@ -8,4 +8,5 @@ public class ActiveGroupDto
     public bool IsNavigating { get; set; }
     // NEW: Expose the max size to the Dashboard
     public int MaxGroupSize { get; set; }
+    public bool IsMember { get; set; }
 }

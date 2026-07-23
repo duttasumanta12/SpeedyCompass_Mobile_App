@@ -15,5 +15,6 @@ namespace SpeedyCompass.Shared.Models
         public double DestLat { get; set; }
         public double DestLng { get; set; }
         public string AdminGoogleId { get; set; }
+        public string? JoinCode { get; set; }
     }
 }

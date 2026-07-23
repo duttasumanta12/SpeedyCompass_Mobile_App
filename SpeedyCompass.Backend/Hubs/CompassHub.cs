@@ -1,5 +1,6 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using MongoDB.Driver;
+using SpeedyCompass.Backend.Models;
 using SpeedyCompass.Shared;
 using SpeedyCompass.Shared.Constants;
 using SpeedyCompass.Shared.Models;
@@ -11,7 +12,6 @@ using System.Threading.Tasks;
 
 namespace SpeedyCompass.Backend.Hubs;
 
-// NEW: Local class to track speed and odometers in RAM
 public class RiderTelemetry
 {
     public DateTime LastUpdate { get; set; } = DateTime.UtcNow;
@@ -22,9 +22,7 @@ public class RiderTelemetry
 public class CompassHub : Hub
 {
     private readonly CompassStateManager _state;
-
     private static readonly ConcurrentDictionary<string, DateTime> _alertCooldowns = new();
-    // NEW: Tracks real-time speeds and distances
     private static readonly ConcurrentDictionary<string, RiderTelemetry> _telemetryStats = new();
 
     public CompassHub(CompassStateManager state)
@@ -32,36 +30,17 @@ public class CompassHub : Hub
         _state = state;
     }
 
-    public async Task<List<RiderInfo>> GetGroupRoster(string groupName)
+    public async Task<List<GroupMember>> GetGroupRoster(string groupName)
     {
-        var roster = new List<RiderInfo>();
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
-
-        if (session != null)
-        {
-            var ridersInGroup = _state.ConnectedRiders.Values.Where(r => r.GroupName == groupName).ToList();
-            foreach (var rider in ridersInGroup)
-            {
-                roster.Add(new RiderInfo
-                {
-                    Name = rider.UserName,
-                    GoogleId = rider.GoogleId,
-                    IsAdmin = rider.GoogleId == session.AdminGoogleId,
-                    IsOnline = !string.IsNullOrEmpty(rider.ConnectionId),
-                    Role = rider.Role
-                });
-            }
-        }
-        return roster;
+        // 100% Database Driven - No more ConnectedRiders RAM dictionary!
+        return await _state.GroupMembers.Find(m => m.GroupName == groupName).ToListAsync();
     }
 
-    // --- AUTHENTICATION & USER REGISTRY ---
     public async Task<UserProfileDto?> AuthenticateUser(string googleId)
     {
         var account = await _state.UserAccounts.Find(u => u.GoogleId == googleId).FirstOrDefaultAsync();
         if (account == null) return null;
 
-        // DECRYPT before sending back to the owning user
         return new UserProfileDto
         {
             Username = account.Username,
@@ -71,6 +50,7 @@ public class CompassHub : Hub
             HasConsented = account.HasConsented
         };
     }
+
     public async Task<bool> SaveUserProfile(string googleId, UserProfileDto profile)
     {
         if (string.IsNullOrEmpty(googleId) || string.IsNullOrWhiteSpace(profile.Username))
@@ -82,7 +62,6 @@ public class CompassHub : Hub
             throw new HubException($"The username '{profile.Username}' is already taken.");
         }
 
-        // ENCRYPT the PII fields before they touch the database
         var update = Builders<UserAccount>.Update
             .Set(u => u.Username, profile.Username.Trim())
             .Set(u => u.EmergencyContact, EncryptionHelper.Encrypt(profile.EmergencyContact?.Trim() ?? ""))
@@ -90,32 +69,23 @@ public class CompassHub : Hub
             .Set(u => u.BloodGroup, EncryptionHelper.Encrypt(profile.BloodGroup ?? ""))
             .Set(u => u.HasConsented, profile.HasConsented);
 
-        await _state.UserAccounts.UpdateOneAsync(
-            u => u.GoogleId == googleId,
-            update,
-            new UpdateOptions { IsUpsert = true }
-        );
-
+        await _state.UserAccounts.UpdateOneAsync(u => u.GoogleId == googleId, update, new UpdateOptions { IsUpsert = true });
         return true;
     }
 
-    // NEW: Secure Admin Endpoint for Emergency Access
     public async Task<UserProfileDto?> GetRiderEmergencyInfo(string targetGoogleId)
     {
-        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
         if (caller == null) return null;
 
-        // 1. Verify the target is actually in the caller's group
-        var targetSession = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == targetGoogleId);
+        var targetSession = await _state.GroupMembers.Find(m => m.GoogleId == targetGoogleId).FirstOrDefaultAsync();
         if (targetSession == null || targetSession.GroupName != caller.GroupName)
             throw new HubException("Target rider is not in your group.");
 
-        // 2. Verify the caller is the strict Admin of that group
-        var groupSession = await _state.ActiveGroups.Find(g => g.GroupName == caller.GroupName).FirstOrDefaultAsync();
+        var groupSession = await _state.GetGroupCachedAsync(caller.GroupName);
         if (groupSession == null || groupSession.AdminGoogleId != caller.GoogleId)
             throw new HubException("Access Denied: Only the Group Admin can view emergency information.");
 
-        // 3. Fetch and decrypt the profile
         var account = await _state.UserAccounts.Find(u => u.GoogleId == targetGoogleId).FirstOrDefaultAsync();
         if (account == null) return null;
 
@@ -130,60 +100,41 @@ public class CompassHub : Hub
 
     public async Task<string> RegisterOrUpdateUser(string currentGoogleId, string desiredUsername)
     {
-        string googleIdToUse = string.IsNullOrEmpty(currentGoogleId) ? throw new HubException("Google Id cannot be null or empty string."): currentGoogleId;
-
-        // 1. Check if user exists by Google ID
+        string googleIdToUse = string.IsNullOrEmpty(currentGoogleId) ? Guid.NewGuid().ToString() : currentGoogleId;
         var existingUser = await _state.UserAccounts.Find(u => u.GoogleId == googleIdToUse).FirstOrDefaultAsync();
 
         if (existingUser != null)
         {
-            // --- IF YES: User exists in the Database ---
-
-            // Check if the current username and the provided username are the same
             if (existingUser.Username.Equals(desiredUsername, StringComparison.OrdinalIgnoreCase))
-            {
-                return googleIdToUse; // Same name, no update needed!
-            }
+                return googleIdToUse;
 
-            // If they are different, check if the NEW username already exists for someone else
             bool nameExists = await _state.UserAccounts.Find(u => u.Username.ToLower() == desiredUsername.ToLower() && u.GoogleId != googleIdToUse).AnyAsync();
-
             if (!nameExists)
             {
-                // If the name is free, update it!
                 var update = Builders<UserAccount>.Update.Set(u => u.Username, desiredUsername);
                 await _state.UserAccounts.UpdateOneAsync(u => u.GoogleId == googleIdToUse, update);
             }
             else
             {
-                // We reject updates if a veteran user tries to steal another existing user's exact name
                 throw new HubException($"The username '{desiredUsername}' is already taken by another rider.");
             }
         }
         else
         {
-            // --- IF NO: Brand new user registration ---
-
             string finalUsername = desiredUsername;
-
-            // Check if the desired username is already taken by someone else
             bool nameExists = await _state.UserAccounts.Find(u => u.Username.ToLower() == finalUsername.ToLower()).AnyAsync();
 
             if (nameExists)
             {
-                // Generate a new username by adding numbers at the end (e.g. "Rider" -> "Rider4921")
                 var random = new Random();
                 while (true)
                 {
                     finalUsername = $"{desiredUsername}{random.Next(1000, 10000)}";
-
-                    // Double check the newly generated name isn't somehow taken too
                     bool stillTaken = await _state.UserAccounts.Find(u => u.Username.ToLower() == finalUsername.ToLower()).AnyAsync();
                     if (!stillTaken) break;
                 }
             }
 
-            // Save the brand new account to MongoDB
             var newAccount = new UserAccount { GoogleId = googleIdToUse, Username = finalUsername };
             await _state.UserAccounts.InsertOneAsync(newAccount);
         }
@@ -191,24 +142,6 @@ public class CompassHub : Hub
         return googleIdToUse;
     }
 
-    public async Task<List<ActiveGroupDto>> GetActiveGroups()
-    {
-        var list = new List<ActiveGroupDto>();
-        var allGroups = await _state.ActiveGroups.Find(_ => true).ToListAsync();
-
-        foreach (var session in allGroups)
-        {
-            list.Add(new ActiveGroupDto
-            {
-                GroupName = session.GroupName,
-                AdminGoogleId = session.AdminGoogleId,
-                MemberCount = _state.ConnectedRiders.Values.Count(r => r.GroupName == session.GroupName),
-                IsNavigating = session.CurrentState == Shared.Constants.GroupState.Navigating,
-                MaxGroupSize = session.Settings.MaxGroupSize
-            });
-        }
-        return list;
-    }
     public async Task<GroupDetailsDto> GetGroupDetails(string groupName)
     {
         var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
@@ -221,165 +154,182 @@ public class CompassHub : Hub
                 DestLat = session.DestLat,
                 DestLng = session.DestLng,
                 AdminGoogleId = session.AdminGoogleId,
-                GroupName = groupName
+                GroupName = groupName,
+                JoinCode = session.JoinCode
             };
         }
         return null;
     }
 
-    public async Task CreateGroup(string groupName, string userName, string googleId)
+    public async Task CreateGroup(string groupName, string username, string googleId, string joinCode, GroupSettingsDto initialSettings)
     {
-        if (_state.ConnectedRiders.Values.Any(r => r.GoogleId == googleId))
-            throw new HubException("You are already in a group. Please leave it first.");
+        var currentlyInGroup = await _state.GroupMembers.Find(m => m.GoogleId == googleId).AnyAsync();
+        if (currentlyInGroup) throw new HubException("You are already in a group. Please leave it first.");
 
-        var existingGroup = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
-        if (existingGroup != null) throw new HubException("Group already exists.");
+        var existing = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        if (existing != null) throw new HubException("Group name is already taken.");
 
-        var session = new GroupSession
+        var newGroup = new GroupSession
         {
             GroupName = groupName,
             AdminGoogleId = googleId,
-            CurrentState = GroupState.NotNavigating,
-            Settings = new GroupSettings 
-            { 
-                MaxGroupSize = 15, 
-                MaxLagDistanceMeters = 500, 
-                SplinterWarningDistanceMeters = 2000, 
-                ArrivalGeofenceMeters = 1000, 
-                LeadRiderGoogleId = googleId,
-                PitstopDistanceMeters = 100000, // Default 100km
-            }
+            JoinCode = joinCode,
+            Settings = new GroupSettings
+            {
+                MaxGroupSize = initialSettings.MaxGroupSize,
+                MaxLagDistanceMeters = initialSettings.MaxLagDistanceMeters,
+                SplinterWarningDistanceMeters = initialSettings.SplinterWarningDistanceMeters,
+                PitstopDistanceMeters = initialSettings.PitstopDistanceMeters
+            },
+            CurrentState = GroupState.NotNavigating
         };
+        await _state.ActiveGroups.InsertOneAsync(newGroup);
 
-        await _state.ActiveGroups.InsertOneAsync(session);
-
-        _state.ConnectedRiders[googleId] = new RiderSession { ConnectionId = Context.ConnectionId, UserName = userName, GoogleId = googleId, GroupName = groupName, Role = "Lead" };
-
-        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
-        await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
-    }
-
-    public async Task JoinGroup(string groupName, string userName, string googleId)
-    {
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
-        if (session == null) throw new HubException("Group not found.");
-
-        int currentMembers = _state.ConnectedRiders.Values.Count(r => r.GroupName == groupName);
-        if (currentMembers >= session.Settings.MaxGroupSize && session.AdminGoogleId != googleId)
-            throw new HubException("Group is full.");
-
-        _state.ConnectedRiders[googleId] = new RiderSession { ConnectionId = Context.ConnectionId, UserName = userName, GoogleId = googleId, GroupName = groupName, Role = "Rider" };
-
-        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
-
-        await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("UserJoinedAlert", userName);
-        await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
-
-        if (session.CurrentState == Shared.Constants.GroupState.Navigating)
+        var member = new GroupMember
         {
-            // IDEA 1: Roster Voice Announcement
-            await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"{userName} has joined the convoy.");
-            await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName);
-        }
-        else if (!string.IsNullOrEmpty(session.DestName))
-            await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
+            GroupName = groupName,
+            GoogleId = googleId,
+            Name = username,
+            Role = "Admin",
+            IsAdmin = true,
+            IsOnline = true,
+            ConnectionId = Context.ConnectionId,
+            JoinedAt = DateTime.UtcNow
+        };
+        await _state.GroupMembers.InsertOneAsync(member);
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
     }
 
-    // --- LOBBY VS GROUP LIFECYCLE ---
+    public async Task JoinGroup(string groupName, string username, string googleId, string pinCode = null)
+    {
+        var group = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        if (group == null) throw new HubException("Group not found.");
+
+        var existingMember = await _state.GroupMembers.Find(m => m.GroupName == groupName && m.GoogleId == googleId).FirstOrDefaultAsync();
+
+        if (existingMember == null)
+        {
+            if (group.JoinCode != pinCode)
+                throw new HubException("Incorrect Convoy PIN.");
+
+            long currentCount = await _state.GroupMembers.CountDocumentsAsync(m => m.GroupName == groupName);
+            if (currentCount >= group.Settings.MaxGroupSize)
+                throw new HubException("This convoy is currently full.");
+
+            var newMember = new GroupMember
+            {
+                GroupName = groupName,
+                GoogleId = googleId,
+                Name = username,
+                Role = "Rider",
+                IsAdmin = false,
+                IsOnline = true,
+                ConnectionId = Context.ConnectionId,
+                JoinedAt = DateTime.UtcNow
+            };
+            await _state.GroupMembers.InsertOneAsync(newMember);
+
+            await Clients.OthersInGroup(groupName).SendAsync("UserJoinedAlert", username);
+        }
+        else
+        {
+            var update = Builders<GroupMember>.Update
+                .Set(m => m.IsOnline, true)
+                .Set(m => m.ConnectionId, Context.ConnectionId);
+
+            await _state.GroupMembers.UpdateOneAsync(m => m.Id == existingMember.Id, update);
+        }
+
+        await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
+
+        var roster = await GetGroupRoster(groupName);
+        await Clients.Group(groupName).SendAsync("RosterUpdated", roster);
+    }
+
     public async Task LeaveLobby()
     {
-        var rider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
+        var rider = await _state.GroupMembers.Find(r => r.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
         if (rider != null)
         {
-            rider.ConnectionId = string.Empty;
-            await Clients.Group(rider.GroupName).SendAsync("UserOfflineAlert", rider.UserName);
+            var update = Builders<GroupMember>.Update
+                .Set(m => m.ConnectionId, string.Empty)
+                .Set(m => m.IsOnline, false);
+            await _state.GroupMembers.UpdateOneAsync(m => m.Id == rider.Id, update);
+
+            await Clients.Group(rider.GroupName).SendAsync("UserOfflineAlert", rider.Name);
             await Clients.Group(rider.GroupName).SendAsync("RosterUpdated", await GetGroupRoster(rider.GroupName));
+            await Clients.Group(rider.GroupName).SendAsync("ReceiveAlert", "VoicePrompt", $"Warning. {rider.Name} has lost connection.");
 
-            // Dead-zone Voice Announcement
-            await Clients.Group(rider.GroupName).SendAsync("ReceiveAlert", "VoicePrompt", $"Warning. {rider.UserName} has lost connection.");
-
-            var session = await _state.ActiveGroups.Find(g => g.GroupName == rider.GroupName).FirstOrDefaultAsync();
+            var session = await _state.GetGroupCachedAsync(rider.GroupName);
             if (session != null)
             {
-                if (_state.ActiveSpeakers.TryGetValue(rider.GroupName, out var activeSpeaker) && activeSpeaker == rider.UserName)
+                if (_state.ActiveSpeakers.TryGetValue(rider.GroupName, out var activeSpeaker) && activeSpeaker == rider.Name)
                 {
                     _state.ActiveSpeakers.TryRemove(rider.GroupName, out _);
                     await Clients.Group(rider.GroupName).SendAsync("PttReleased");
                 }
 
-                // --- NEW: AUTO-CLEANUP ROUTE IF GROUP IS EMPTY ---
-                // Check if there is ANYONE left in the group who still has an active connection
-                bool isAnyoneOnline = _state.ConnectedRiders.Values.Any(r => r.GroupName == rider.GroupName && !string.IsNullOrEmpty(r.ConnectionId));
-
+                bool isAnyoneOnline = await _state.GroupMembers.Find(m => m.GroupName == rider.GroupName && m.IsOnline).AnyAsync();
                 if (!isAnyoneOnline)
                 {
-                    // Everyone is offline! Wipe the active navigation state so the next ride starts fresh.
-                    var update = Builders<GroupSession>.Update
+                    var groupUpdate = Builders<GroupSession>.Update
                         .Set(g => g.CurrentState, string.IsNullOrEmpty(session.DestName) ? GroupState.NotNavigating : GroupState.DestinationSet);
 
-                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, update);
+                    await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == rider.GroupName, groupUpdate);
 
-                    // Optional: Scrub stale telemetry data for this group's riders from memory
-                    var groupRiderIds = _state.ConnectedRiders.Values.Where(r => r.GroupName == rider.GroupName).Select(r => r.GoogleId).ToList();
-                    foreach (var id in groupRiderIds)
+                    var allRiders = await _state.GroupMembers.Find(m => m.GroupName == rider.GroupName).ToListAsync();
+                    foreach (var member in allRiders)
                     {
-                        _telemetryStats.TryRemove(id, out _);
+                        _telemetryStats.TryRemove(member.GoogleId, out _);
                     }
                 }
             }
         }
     }
 
-    // UPDATE: Now requires googleId
     public async Task LeaveGroup(string googleId)
     {
-        // FIX: Look up rider directly by GoogleId
-        if (_state.ConnectedRiders.TryGetValue(googleId, out var rider))
+        var rider = await _state.GroupMembers.Find(m => m.GoogleId == googleId).FirstOrDefaultAsync();
+        if (rider != null)
         {
-            _state.ConnectedRiders.TryRemove(googleId, out _);
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, rider.GroupName);
+            await _state.GroupMembers.DeleteOneAsync(m => m.Id == rider.Id);
 
-            var session = await _state.ActiveGroups.Find(g => g.GroupName == rider.GroupName).FirstOrDefaultAsync();
-
+            var session = await _state.GetGroupCachedAsync(rider.GroupName);
             if (session != null && session.AdminGoogleId == rider.GoogleId)
             {
                 await Clients.Group(rider.GroupName).SendAsync("GroupDeleted");
                 await _state.ActiveGroups.DeleteOneAsync(g => g.GroupName == rider.GroupName);
-
-                var usersToRemove = _state.ConnectedRiders.Where(r => r.Value.GroupName == rider.GroupName).Select(r => r.Key).ToList();
-                foreach (var id in usersToRemove) _state.ConnectedRiders.TryRemove(id, out _);
+                await _state.GroupMembers.DeleteManyAsync(m => m.GroupName == rider.GroupName);
             }
             else
             {
-                await Clients.Group(rider.GroupName).SendAsync("UserLeftAlert", rider.UserName);
+                await Clients.Group(rider.GroupName).SendAsync("UserLeftAlert", rider.Name);
                 await Clients.Group(rider.GroupName).SendAsync("RosterUpdated", await GetGroupRoster(rider.GroupName));
             }
         }
     }
 
-    // UPDATE: Now requires googleId
     public async Task DeleteGroup(string groupName, string googleId)
     {
-        // FIX: Instant O(1) lookup using GoogleId
-        if (!_state.ConnectedRiders.TryGetValue(googleId, out var caller))
-            throw new HubException("Unauthenticated request.");
+        var caller = await _state.GroupMembers.Find(m => m.GoogleId == googleId && m.GroupName == groupName).FirstOrDefaultAsync();
+        if (caller == null) throw new HubException("Unauthenticated request.");
 
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
         if (session != null && session.AdminGoogleId == caller.GoogleId)
         {
             await Clients.Group(groupName).SendAsync("GroupDeleted");
             await _state.ActiveGroups.DeleteOneAsync(g => g.GroupName == groupName);
-
-            var usersToRemove = _state.ConnectedRiders.Where(r => r.Value.GroupName == groupName).Select(r => r.Key).ToList();
-            foreach (var id in usersToRemove) _state.ConnectedRiders.TryRemove(id, out _);
+            await _state.GroupMembers.DeleteManyAsync(m => m.GroupName == groupName);
         }
         else throw new HubException("Only the group admin can delete this group.");
     }
 
     public async Task SetDestination(string groupName, double destLat, double destLng, string destName)
     {
-        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
@@ -389,21 +339,25 @@ public class CompassHub : Hub
                 .Set(g => g.DestLng, destLng)
                 .Set(g => g.DestName, destName);
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
-            await Clients.Group(groupName).SendAsync("DestinationSet", destLat, destLng, destName);
 
-            // IDEA 2: Route Syncing Voice
+            await Clients.Group(groupName).SendAsync("DestinationSet", destLat, destLng, destName);
             await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"The Lead rider has set a new destination: {destName}.");
         }
     }
 
     public async Task StartNavigation(string groupName, double destLat, double destLng, string destName)
     {
-        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, Shared.Constants.GroupState.Navigating).Set(g => g.DestLat, destLat).Set(g => g.DestLng, destLng).Set(g => g.DestName, destName);
+            var update = Builders<GroupSession>.Update
+                .Set(g => g.CurrentState, GroupState.Navigating)
+                .Set(g => g.DestLat, destLat)
+                .Set(g => g.DestLng, destLng)
+                .Set(g => g.DestName, destName);
+
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
             await Clients.Group(groupName).SendAsync("NavigationStarted", destLat, destLng, destName, false);
         }
@@ -411,22 +365,17 @@ public class CompassHub : Hub
 
     public async Task CancelNavigation(string groupName)
     {
-        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.CurrentState, Shared.Constants.GroupState.NotNavigating));
+            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.CurrentState, GroupState.NotNavigating));
 
-            // --- NEW: Reset telemetry stats (speed, distance) for all riders in the group ---
-            var ridersInGroup = _state.ConnectedRiders.Values
-                .Where(r => r.GroupName == groupName)
-                .Select(r => r.GoogleId)
-                .ToList();
-
-            foreach (var googleId in ridersInGroup)
+            var ridersInGroup = await _state.GroupMembers.Find(m => m.GroupName == groupName).ToListAsync();
+            foreach (var r in ridersInGroup)
             {
-                _telemetryStats.TryRemove(googleId, out _);
+                _telemetryStats.TryRemove(r.GoogleId, out _);
             }
 
             await Clients.Group(groupName).SendAsync("NavigationCancelled");
@@ -435,21 +384,20 @@ public class CompassHub : Hub
 
     public async Task SendGroupAlert(string groupName, string alertType, string senderName)
     {
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
         if (session != null) await Clients.Group(groupName).SendAsync("ReceiveAlert", alertType, senderName);
     }
 
-    // --- UPGRADED: TELEMETRY ENGINE WITH FULL 4-PILLAR VOICE INTEGRATION ---
     public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading)
     {
         await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
 
-        var currentRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var allMembers = await _state.GroupMembers.Find(m => m.GroupName == groupName).ToListAsync();
+        var currentRider = allMembers.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
+        var session = await _state.GetGroupCachedAsync(groupName);
 
         if (session != null && currentRider != null)
         {
-            // 1. Calculate Real-Time Speed & Distance
             var telemetry = _telemetryStats.GetOrAdd(currentRider.GoogleId, new RiderTelemetry());
 
             if (currentRider.LastLat != 0)
@@ -465,14 +413,12 @@ public class CompassHub : Hub
 
                 int pitstopIntervalMeters = (session.Settings.PitstopDistanceMeters > 0 ? session.Settings.PitstopDistanceMeters : 100000);
 
-                // Pitstop Warning (Personal)
                 if (pitstopIntervalMeters > 0 && (int)(oldDistance / pitstopIntervalMeters) < (int)(telemetry.TotalDistanceMeters / pitstopIntervalMeters))
                 {
                     await Clients.Client(Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"You have traveled {(int)(telemetry.TotalDistanceMeters / 1000)} kilometers. Consider a rest stop.");
                 }
 
-                // Speed Delta Warning (Personal)
-                var activeRiders = _state.ConnectedRiders.Values.Where(r => r.GroupName == groupName).Select(r => r.GoogleId).ToList();
+                var activeRiders = allMembers.Select(r => r.GoogleId).ToList();
                 var groupSpeeds = _telemetryStats.Where(k => activeRiders.Contains(k.Key) && k.Value.CurrentSpeedKmh > 10).Select(k => k.Value.CurrentSpeedKmh).ToList();
 
                 if (groupSpeeds.Count > 1)
@@ -491,26 +437,33 @@ public class CompassHub : Hub
             }
 
             telemetry.LastUpdate = DateTime.UtcNow;
+
+            var updateCoords = Builders<GroupMember>.Update
+                .Set(m => m.LastLat, lat)
+                .Set(m => m.LastLng, lng)
+                .Set(m => m.Heading, heading)
+                .Set(m => m.LastUpdate, DateTime.UtcNow);
+
+            await _state.GroupMembers.UpdateOneAsync(m => m.Id == currentRider.Id, updateCoords);
+
             currentRider.LastLat = lat;
             currentRider.LastLng = lng;
 
-            // 2. PROXIMITY MATH (Ahead vs Behind)
             string leadGoogleId = session.Settings.LeadRiderGoogleId;
             if (string.IsNullOrEmpty(leadGoogleId)) leadGoogleId = session.AdminGoogleId;
 
             if (currentRider.GoogleId != leadGoogleId)
             {
-                var leadRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == leadGoogleId);
+                var leadRider = allMembers.FirstOrDefault(r => r.GoogleId == leadGoogleId);
                 if (leadRider != null && leadRider.LastLat != 0)
                 {
                     double lagDistance = 0;
                     bool isAhead = false;
                     bool isBehind = false;
 
-                    // Only calculate Lag if it is turned ON (> 0)
                     if (session.Settings.MaxLagDistanceMeters > 0)
                     {
-                        if (session.CurrentState == Shared.Constants.GroupState.Navigating)
+                        if (session.CurrentState == GroupState.Navigating)
                         {
                             double leadToDest = CalculateDistanceMeters(leadRider.LastLat, leadRider.LastLng, session.DestLat, session.DestLng);
                             double riderToDest = CalculateDistanceMeters(lat, lng, session.DestLat, session.DestLng);
@@ -548,19 +501,15 @@ public class CompassHub : Hub
 
                             string distText = lagDistance > 1000 ? $"{Math.Round(lagDistance / 1000.0, 1)} kilometers" : $"{Math.Round(lagDistance)} meters";
                             string statusText = isAhead ? "ahead of" : "behind";
-                            string broadcastMessage = session.CurrentState == Shared.Constants.GroupState.Navigating
+                            string broadcastMessage = session.CurrentState == GroupState.Navigating
                                 ? $"{userName} is {distText} {statusText} the Lead."
                                 : $"{userName} is separated from the Lead by {distText}.";
 
                             bool isLeadership = currentRider.GoogleId == session.AdminGoogleId ||
-                                                currentRider.Role == "Lead" ||
-                                                currentRider.Role == "Marshal" ||
-                                                currentRider.Role == "Tail";
+                                                currentRider.Role == "Lead" || currentRider.Role == "Marshal" || currentRider.Role == "Tail";
 
-                            // Send to Leadership (Excluding the rider themselves)
-                            var leadershipConns = _state.ConnectedRiders.Values
-                                .Where(r => r.GroupName == groupName && !string.IsNullOrEmpty(r.ConnectionId) &&
-                                            r.GoogleId != currentRider.GoogleId &&
+                            var leadershipConns = allMembers
+                                .Where(r => r.IsOnline && !string.IsNullOrEmpty(r.ConnectionId) && r.GoogleId != currentRider.GoogleId &&
                                            (r.GoogleId == session.AdminGoogleId || r.Role == "Lead" || r.Role == "Marshal" || r.Role == "Tail"))
                                 .Select(r => r.ConnectionId).ToList();
 
@@ -569,7 +518,6 @@ public class CompassHub : Hub
                                 await Clients.Client(connId).SendAsync("ReceiveAlert", "VoicePrompt", broadcastMessage);
                             }
 
-                            // Warn the standard rider directly
                             if (!isLeadership)
                             {
                                 string directMessage = isAhead
@@ -587,9 +535,8 @@ public class CompassHub : Hub
             }
             else
             {
-                // This is the Lead Rider - Calculate Splinter (Overall Spread of the Group)
                 double maxDist = 0;
-                foreach (var r in _state.ConnectedRiders.Values.Where(x => x.GroupName == groupName && x.GoogleId != leadGoogleId && x.LastLat != 0))
+                foreach (var r in allMembers.Where(x => x.GoogleId != leadGoogleId && x.LastLat != 0))
                 {
                     double d = CalculateDistanceMeters(lat, lng, r.LastLat, r.LastLng);
                     if (d > maxDist) maxDist = d;
@@ -597,7 +544,6 @@ public class CompassHub : Hub
 
                 string splinterKey = $"splinter_{groupName}";
 
-                // Only Splinter warn if enabled (> 0)
                 if (session.Settings.SplinterWarningDistanceMeters > 0 && maxDist > session.Settings.SplinterWarningDistanceMeters)
                 {
                     if (!_alertCooldowns.TryGetValue(splinterKey, out var lastAlert) || (DateTime.UtcNow - lastAlert).TotalMinutes >= 5)
@@ -608,8 +554,7 @@ public class CompassHub : Hub
                 }
                 else { _alertCooldowns.TryRemove(splinterKey, out _); }
 
-                // Arrival Detection
-                if (session.CurrentState == Shared.Constants.GroupState.Navigating)
+                if (session.CurrentState == GroupState.Navigating)
                 {
                     double distToDest = CalculateDistanceMeters(lat, lng, session.DestLat, session.DestLng);
                     if (distToDest < (session.Settings.ArrivalGeofenceMeters > 0 ? session.Settings.ArrivalGeofenceMeters : 1000))
@@ -625,17 +570,18 @@ public class CompassHub : Hub
             }
         }
     }
-    // --- NEW: LIVE TELEMETRY DASHBOARD ENDPOINT ---
+
     public async Task<List<TelemetryDto>> GetGroupTelemetry(string groupName)
     {
         var result = new List<TelemetryDto>();
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
         if (session == null) return result;
 
+        var allMembers = await _state.GroupMembers.Find(m => m.GroupName == groupName).ToListAsync();
         string leadGoogleId = string.IsNullOrEmpty(session.Settings.LeadRiderGoogleId) ? session.AdminGoogleId : session.Settings.LeadRiderGoogleId;
-        var leadRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GoogleId == leadGoogleId);
+        var leadRider = allMembers.FirstOrDefault(r => r.GoogleId == leadGoogleId);
 
-        foreach (var rider in _state.ConnectedRiders.Values.Where(r => r.GroupName == groupName))
+        foreach (var rider in allMembers)
         {
             double speed = _telemetryStats.TryGetValue(rider.GoogleId, out var stats) ? stats.CurrentSpeedKmh : 0;
             double lagDistance = 0;
@@ -643,7 +589,7 @@ public class CompassHub : Hub
 
             if (leadRider != null && rider.GoogleId != leadGoogleId && rider.LastLat != 0 && leadRider.LastLat != 0)
             {
-                if (session.CurrentState == Shared.Constants.GroupState.Navigating)
+                if (session.CurrentState == GroupState.Navigating)
                 {
                     double leadToDest = CalculateDistanceMeters(leadRider.LastLat, leadRider.LastLng, session.DestLat, session.DestLng);
                     double riderToDest = CalculateDistanceMeters(rider.LastLat, rider.LastLng, session.DestLat, session.DestLng);
@@ -669,15 +615,15 @@ public class CompassHub : Hub
             else if (rider.GoogleId == leadGoogleId) { status = "Lead Rider"; }
             else if (rider.LastLat == 0) { status = "Awaiting GPS"; }
 
-            result.Add(new TelemetryDto { Name = rider.UserName, SpeedKmh = speed, DistanceMeters = lagDistance, Status = status });
+            result.Add(new TelemetryDto { Name = rider.Name, SpeedKmh = speed, DistanceMeters = lagDistance, Status = status });
         }
 
         return result.OrderBy(r => r.Status == "Behind").ThenByDescending(r => r.DistanceMeters).ToList();
     }
-    // 2. NEW: Method to retrieve the current settings from the DB
+
     public async Task<GroupSettingsDto> GetGroupSettings(string groupName)
     {
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
         if (session != null)
         {
             return new GroupSettingsDto
@@ -691,68 +637,14 @@ public class CompassHub : Hub
         return null;
     }
 
-    public async Task RequestPtt(string groupName, string userName)
-    {
-        if (!_state.ActiveSpeakers.ContainsKey(groupName))
-        {
-            if (_state.ActiveSpeakers.TryAdd(groupName, userName))
-            {
-                await Clients.Group(groupName).SendAsync("PttLocked", userName);
-                return;
-            }
-        }
-
-        _state.ActiveSpeakers.TryGetValue(groupName, out var activeSpeaker);
-        await Clients.Caller.SendAsync("PttDenied", activeSpeaker);
-    }
-
-    public async Task ReleasePtt(string groupName, string userName)
-    {
-        if (_state.ActiveSpeakers.TryGetValue(groupName, out var currentSpeaker) && currentSpeaker == userName)
-        {
-            _state.ActiveSpeakers.TryRemove(groupName, out _);
-            await Clients.Group(groupName).SendAsync("PttReleased");
-        }
-    }
-
-    public async Task RestoreConnectionState(string googleId, string userName, string groupName)
-    {
-        var newConnectionId = Context.ConnectionId;
-        if (string.IsNullOrEmpty(groupName)) return;
-
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
-
-        if (_state.ConnectedRiders.TryGetValue(googleId, out var existingRider))
-        {
-            existingRider.ConnectionId = newConnectionId;
-            // IDEA 1: Reconnection Voice
-            await Clients.GroupExcept(groupName, newConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"{userName} has reconnected.");
-        }
-        else
-        {
-            _state.ConnectedRiders[googleId] = new RiderSession { ConnectionId = newConnectionId, UserName = userName, GoogleId = googleId, GroupName = groupName, Role = "Rider" };
-        }
-
-        await Groups.AddToGroupAsync(newConnectionId, groupName);
-        await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
-
-        if (session != null)
-        {
-            if (session.CurrentState == Shared.Constants.GroupState.Navigating)
-                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
-            else if (!string.IsNullOrEmpty(session.DestName))
-                await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
-        }
-    }
-
     public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDist, int maxSize, int pitstopDist)
     {
-        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            int currentMembers = _state.ConnectedRiders.Values.Count(r => r.GroupName == groupName);
+            long currentMembers = await _state.GroupMembers.CountDocumentsAsync(m => m.GroupName == groupName);
             if (maxSize < currentMembers)
                 throw new HubException($"Cannot reduce the maximum group size below the current active member count ({currentMembers}).");
 
@@ -760,7 +652,7 @@ public class CompassHub : Hub
                 .Set(g => g.Settings.MaxLagDistanceMeters, maxLag)
                 .Set(g => g.Settings.SplinterWarningDistanceMeters, splinterDist)
                 .Set(g => g.Settings.MaxGroupSize, maxSize)
-                .Set(g => g.Settings.PitstopDistanceMeters, pitstopDist); // Sync to Database
+                .Set(g => g.Settings.PitstopDistanceMeters, pitstopDist);
 
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
             await Clients.All.SendAsync("GroupsUpdated");
@@ -769,24 +661,18 @@ public class CompassHub : Hub
 
     public async Task AssignRole(string groupName, string targetGoogleId, string newRole)
     {
-        var caller = _state.ConnectedRiders.Values.FirstOrDefault(r => r.ConnectionId == Context.ConnectionId);
-        var session = await _state.ActiveGroups.Find(g => g.GroupName == groupName).FirstOrDefaultAsync();
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            // --- NEW: Enforce unique roles (Only ONE Lead, Tail, or Marshal per group) ---
             if (newRole == "Lead" || newRole == "Tail" || newRole == "Marshal")
             {
-                // Find anyone else who currently has this exact role and demote them
-                var existingHolders = _state.ConnectedRiders.Values
-                    .Where(r => r.GroupName == groupName && r.Role == newRole && r.GoogleId != targetGoogleId)
-                    .ToList();
+                var existingHolders = await _state.GroupMembers.Find(r => r.GroupName == groupName && r.Role == newRole && r.GoogleId != targetGoogleId).ToListAsync();
 
                 foreach (var oldHolder in existingHolders)
                 {
-                    oldHolder.Role = "Rider";
-
-                    // Voice prompt to let the previous holder know they were demoted
+                    await _state.GroupMembers.UpdateOneAsync(m => m.Id == oldHolder.Id, Builders<GroupMember>.Update.Set(m => m.Role, "Rider"));
                     if (!string.IsNullOrEmpty(oldHolder.ConnectionId))
                     {
                         await Clients.Client(oldHolder.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"Your role has been reassigned. You are now a Standard Rider.");
@@ -794,37 +680,66 @@ public class CompassHub : Hub
                 }
             }
 
-            // Assign the new role to the target rider
-            var targetRider = _state.ConnectedRiders.Values.FirstOrDefault(r => r.GroupName == groupName && r.GoogleId == targetGoogleId);
+            var targetRider = await _state.GroupMembers.Find(r => r.GroupName == groupName && r.GoogleId == targetGoogleId).FirstOrDefaultAsync();
             if (targetRider != null)
             {
-                targetRider.Role = newRole;
+                await _state.GroupMembers.UpdateOneAsync(m => m.Id == targetRider.Id, Builders<GroupMember>.Update.Set(m => m.Role, newRole));
 
-                // CRITICAL: If a new Lead is assigned, update the Database so the Telemetry Engine knows who to track!
                 if (newRole == "Lead")
                 {
                     var update = Builders<GroupSession>.Update.Set(g => g.Settings.LeadRiderGoogleId, targetGoogleId);
                     await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
                 }
 
-                // Voice prompt to let the newly promoted user know!
                 if (!string.IsNullOrEmpty(targetRider.ConnectionId) && targetRider.GoogleId != caller.GoogleId)
                 {
                     await Clients.Client(targetRider.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"You have been designated as the {newRole}.");
                 }
 
-                // Broadcast the visually updated roster to everyone
                 await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
             }
         }
     }
-    // --- NEW: PAUSE, RESUME, AND COMPLETE ---
+
+    public async Task RestoreConnectionState(string googleId, string userName, string groupName)
+    {
+        var newConnectionId = Context.ConnectionId;
+        if (string.IsNullOrEmpty(groupName)) return;
+
+        var session = await _state.GetGroupCachedAsync(groupName);
+        var existingRider = await _state.GroupMembers.Find(m => m.GoogleId == googleId).FirstOrDefaultAsync();
+
+        if (existingRider != null)
+        {
+            var update = Builders<GroupMember>.Update
+                .Set(m => m.ConnectionId, newConnectionId)
+                .Set(m => m.IsOnline, true)
+                .Set(m => m.Name, userName);
+
+            await _state.GroupMembers.UpdateOneAsync(m => m.Id == existingRider.Id, update);
+            await Clients.GroupExcept(groupName, newConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"{userName} has reconnected.");
+        }
+        else
+        {
+            var newRider = new GroupMember { ConnectionId = newConnectionId, Name = userName, GoogleId = googleId, GroupName = groupName, Role = "Rider", IsOnline = true };
+            await _state.GroupMembers.InsertOneAsync(newRider);
+        }
+
+        await Groups.AddToGroupAsync(newConnectionId, groupName);
+        await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
+
+        if (session != null)
+        {
+            if (session.CurrentState == GroupState.Navigating)
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
+            else if (!string.IsNullOrEmpty(session.DestName))
+                await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
+        }
+    }
 
     public async Task PauseNavigation(string groupName, string reason, string adminName)
     {
-        // Map the string reason from the frontend UI to the exact Backend Enum
         var pauseState = GroupStateHelper.GetBreakState(reason);
-
         var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, pauseState);
         await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
 
@@ -848,9 +763,9 @@ public class CompassHub : Hub
             .Set(g => g.DestName, string.Empty);
 
         await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
-
         await Clients.Group(groupName).SendAsync("ReceiveNavigationCompleted", adminName);
     }
+
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         await LeaveLobby();
@@ -869,5 +784,57 @@ public class CompassHub : Hub
 
         var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
         return earthRadiusMeters * c;
+    }
+
+    public async Task RequestPtt(string groupName, string userName)
+    {
+        if (!_state.ActiveSpeakers.ContainsKey(groupName))
+        {
+            if (_state.ActiveSpeakers.TryAdd(groupName, userName))
+            {
+                await Clients.Group(groupName).SendAsync("PttLocked", userName);
+                return;
+            }
+        }
+        _state.ActiveSpeakers.TryGetValue(groupName, out var activeSpeaker);
+        await Clients.Caller.SendAsync("PttDenied", activeSpeaker);
+    }
+
+    public async Task ReleasePtt(string groupName, string userName)
+    {
+        if (_state.ActiveSpeakers.TryGetValue(groupName, out var currentSpeaker) && currentSpeaker == userName)
+        {
+            _state.ActiveSpeakers.TryRemove(groupName, out _);
+            await Clients.Group(groupName).SendAsync("PttReleased");
+        }
+    }
+
+    // --- WEBRTC MULTI-PEER MESH SIGNALING HUB ---
+
+    public async Task SendOffer(string groupName, string targetGoogleId, string offerSdp)
+    {
+        var sender = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        if (sender != null)
+        {
+            await Clients.Group(groupName).SendAsync("ReceiveOffer", sender.GoogleId, offerSdp);
+        }
+    }
+
+    public async Task SendAnswer(string groupName, string targetGoogleId, string answerSdp)
+    {
+        var sender = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        if (sender != null)
+        {
+            await Clients.Group(groupName).SendAsync("ReceiveAnswer", sender.GoogleId, answerSdp);
+        }
+    }
+
+    public async Task SendIceCandidate(string groupName, string targetGoogleId, string candidateJson)
+    {
+        var sender = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        if (sender != null)
+        {
+            await Clients.Group(groupName).SendAsync("ReceiveIceCandidate", sender.GoogleId, candidateJson);
+        }
     }
 }

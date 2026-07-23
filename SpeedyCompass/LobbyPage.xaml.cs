@@ -124,6 +124,8 @@ public partial class LobbyPage : ContentPage
     private ILocationTracker? _locationTracker;
     // --- NEW: REROUTING VARIABLE ---
     private DateTime _lastRerouteTime = DateTime.MinValue;
+    // --- NEW: Expose the PIN for the UI to Bind to ---
+    public string ConvoyPin { get; set; } = "------";
 
     public LobbyPage(SignalRService signalRService, GroupDetailsDto groupDetails)
     {
@@ -137,7 +139,7 @@ public partial class LobbyPage : ContentPage
         this.groupDetails = groupDetails;
 
 #if ANDROID
-        MainActivity.OnPiPModeChangedEvent += HandlePiPModeChanged;
+        //MainActivity.OnPiPModeChangedEvent += HandlePiPModeChanged;
 #endif
 
 #if ANDROID
@@ -155,8 +157,8 @@ public partial class LobbyPage : ContentPage
         _myName = Preferences.Default.Get("username", "Unknown");
         _amIAdmin = this.groupDetails.AdminGoogleId == CurrentGoogleId;
 
-        CurrentUserNameLabel.Text = _myName;
-        CurrentUserRoleLabel.Text = _amIAdmin ? "Admin" : "Rider";
+        //CurrentUserNameLabel.Text = _myName;
+        //CurrentUserRoleLabel.Text = _amIAdmin ? "Admin" : "Rider";
 
         AdminSearchUI.IsVisible = _amIAdmin;
         AdminInstructionBanner.IsVisible = _amIAdmin;
@@ -307,14 +309,9 @@ public partial class LobbyPage : ContentPage
                 ActionDrawer.IsVisible = false;
                 FloatingMapControls.IsVisible = false;
                 MapView.IsVisible = false;
-
-                PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
-                PipSpeedLabel.Text = _myPinVm?.Speed ?? "0 mph";
-                PipOverlayGrid.IsVisible = true;
             }
             else
             {
-                PipOverlayGrid.IsVisible = false;
                 TabRoster.IsVisible = true;
                 TabMap.IsVisible = true;
                 DestinationSearchBar.IsVisible = true;
@@ -426,7 +423,7 @@ public partial class LobbyPage : ContentPage
                     _ = TextToSpeech.Default.SpeakAsync($"Navigation paused by {triggerUser} {spokenReason}. Tracking suspended.");
 
                     // Force open the Telemetry Dashboard tab
-                    ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
+                    ActionDrawer.TranslateToAsync(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
                     OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
 
                     break;
@@ -577,6 +574,11 @@ public partial class LobbyPage : ContentPage
 
             if (groupDetails != null)
             {
+                // --- NEW: Populate the PIN and show the Admin Card ---
+                ConvoyPin = groupDetails.JoinCode ?? "------";
+                OnPropertyChanged(nameof(ConvoyPin));
+                AdminPinCard.IsVisible = _amIAdmin;
+
                 if (groupDetails.CurrentState == GroupState.DestinationSet)
                 {
                     OnDestinationSet(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
@@ -597,11 +599,16 @@ public partial class LobbyPage : ContentPage
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
+            await DisplayAlertAsync("Error", $"Could not load lobby: {ex.Message}", "OK");
             await Navigation.PopAsync();
         }
     }
-
+    // --- NEW: Copy PIN Logic ---
+    private async void OnCopyPinClicked(object sender, EventArgs e)
+    {
+        await Clipboard.Default.SetTextAsync(ConvoyPin);
+        await DisplayAlertAsync("Copied", $"Convoy PIN '{ConvoyPin}' copied to clipboard!", "OK");
+    }
     // --- ADMIN SETTINGS ---
     private async void OnAdminSettingsClicked(object sender, EventArgs e)
     {
@@ -1135,7 +1142,7 @@ public partial class LobbyPage : ContentPage
         Riders = updatedRiders;
         RidersCollectionView.ItemsSource = Riders;
 
-        PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
+        //PipRiderCountLabel.Text = $"{Riders.Count(r => r.IsOnline)}/{Riders.Count} Riders";
             
         if (_locationTracker != null)
         {

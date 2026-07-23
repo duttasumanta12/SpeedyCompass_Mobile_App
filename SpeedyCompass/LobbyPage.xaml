@@ -6,278 +6,229 @@
                  x:Class="SpeedyCompass.LobbyPage"
                  x:Name="ThisPage"
                  Title="Ride Lobby">
-    <!-- Remove x:DataType from root, set BindingContext in code-behind instead -->
     <Grid RowDefinitions="Auto, *">
 
         <!-- ===================================================================== -->
-        <!-- 1. HEADER / TAB BAR -->
+        <!-- 1. MODERN HEADER & SEGMENTED TAB BAR -->
         <!-- ===================================================================== -->
-        <Grid Grid.Row="0" ZIndex="100" ColumnDefinitions="*,*, Auto, Auto" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#1E1E1E}" Padding="10">
-            <Button x:Name="TabRoster" Text="Roster" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold"/>
+        <Grid Grid.Row="0" ZIndex="100" ColumnDefinitions="Auto, *, Auto" BackgroundColor="{AppThemeBinding Light=White, Dark=#121212}" Padding="15,10,15,15" RowDefinitions="Auto, Auto">
+            <Grid.Shadow>
+                <Shadow Brush="Black" Offset="0,4" Opacity="0.05" Radius="10"/>
+            </Grid.Shadow>
 
-            <Grid Grid.Column="1">
-                <Button x:Name="TabMap" Text="Live Map" Clicked="OnTabClicked" CornerRadius="10" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}" FontAttributes="Bold" HorizontalOptions="Fill" VerticalOptions="Fill"/>
-                <Ellipse x:Name="MapTabStatusDot" WidthRequest="12" HeightRequest="12" Fill="Orange" HorizontalOptions="End" VerticalOptions="Start" Margin="8,5"/>
-            </Grid>
+            <!-- Top Row: Title & Leave Button -->
+            <Label Grid.Row="0" Grid.Column="0" Text="{Binding Source={x:Reference GroupNameLabel}, Path=Text}" FontSize="22" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#111, Dark=White}" VerticalOptions="Center"/>
 
-            <Button x:Name="AdminSettingsBtn" Grid.Column="2" Text="⚙️" BackgroundColor="Transparent" IsVisible="False" Clicked="OnAdminSettingsClicked" FontSize="20" Margin="5,0,0,0"/>
-            <Button Grid.Column="3" Text="🚪 Leave" BackgroundColor="Transparent" TextColor="Red" Clicked="OnLeaveGroupClicked" FontAttributes="Bold" Margin="5,0,0,0"/>
+            <StackLayout Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Spacing="10">
+                <Button x:Name="AdminSettingsBtn" Text="⚙️" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" CornerRadius="18" WidthRequest="36" HeightRequest="36" Padding="0" IsVisible="False" Clicked="OnAdminSettingsClicked" />
+                <Button Text="Leave" BackgroundColor="#FFEBEB" TextColor="#D32F2F" CornerRadius="18" HeightRequest="36" Padding="15,0" Clicked="OnLeaveGroupClicked" FontAttributes="Bold"/>
+            </StackLayout>
+
+            <!-- Bottom Row: Segmented Toggle -->
+            <Border Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3" Margin="0,15,0,0" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1E1E1E}" HeightRequest="45">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="22.5" />
+                </Border.StrokeShape>
+                <Grid ColumnDefinitions="*,*">
+                    <Button x:Name="TabRoster" Grid.Column="0" Text="Roster" Clicked="OnTabClicked" CornerRadius="22" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold" Margin="2"/>
+                    <Grid Grid.Column="1" Margin="2">
+                        <Button x:Name="TabMap" Text="Live Map" Clicked="OnTabClicked" CornerRadius="22" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=#666, Dark=#AAA}" FontAttributes="Bold" HorizontalOptions="Fill" VerticalOptions="Fill"/>
+                        <Ellipse x:Name="MapTabStatusDot" WidthRequest="10" HeightRequest="10" Fill="Orange" HorizontalOptions="End" VerticalOptions="Start" Margin="10,8"/>
+                    </Grid>
+                </Grid>
+            </Border>
         </Grid>
 
         <!-- ===================================================================== -->
         <!-- 2. ROSTER VIEW TAB -->
         <!-- ===================================================================== -->
-        <Grid x:Name="RosterView" Grid.Row="1" RowDefinitions="Auto, Auto, Auto, Auto, *" Padding="20">
-            <!-- Connection Status -->
-            <Frame Grid.Row="0" CornerRadius="8" Padding="10" Margin="0,0,0,15" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" BorderColor="Transparent" HasShadow="False">
-                <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="8">
-                    <BoxView x:Name="StatusDot" WidthRequest="12" HeightRequest="12" CornerRadius="6" BackgroundColor="Orange" VerticalOptions="Center"/>
-                    <Label x:Name="StatusLabel" Text="Connecting..." VerticalOptions="Center" FontSize="14" FontAttributes="Bold"/>
+        <ScrollView x:Name="RosterView" Grid.Row="1">
+            <VerticalStackLayout Padding="20" Spacing="15">
+
+                <!-- Connection Status -->
+                <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="8" Margin="0,0,0,5">
+                    <BoxView x:Name="StatusDot" WidthRequest="10" HeightRequest="10" CornerRadius="5" BackgroundColor="Orange" VerticalOptions="Center"/>
+                    <Label x:Name="StatusLabel" Text="Connecting..." VerticalOptions="Center" FontSize="13" FontAttributes="Bold" TextColor="Gray"/>
                 </StackLayout>
-            </Frame>
 
-            <!-- Group Header -->
-            <StackLayout Grid.Row="1" HorizontalOptions="Center" Margin="0,0,0,20">
-                <Label Text="Group ID" FontSize="14" TextColor="Gray" HorizontalOptions="Center"/>
-                <Label x:Name="GroupNameLabel" FontSize="28" FontAttributes="Bold" HorizontalOptions="Center" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-            </StackLayout>
+                <!-- ADMIN ONLY: SECURE CONVOY PIN CARD -->
+                <Border x:Name="AdminPinCard" IsVisible="False" StrokeThickness="0" Margin="0,0,0,10">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#0066CC" Offset="0.0" />
+                            <GradientStop Color="#003399" Offset="1.0" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="16" />
+                    </Border.StrokeShape>
+                    <Border.Shadow>
+                        <Shadow Brush="#0066CC" Offset="0,6" Opacity="0.3" Radius="12" />
+                    </Border.Shadow>
 
-            <!-- Current User Badge -->
-            <Frame Grid.Row="2" CornerRadius="12" HasShadow="True" Padding="15" Margin="0,0,0,20" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" BorderColor="Transparent">
-                <Grid ColumnDefinitions="*, Auto">
-                    <StackLayout Grid.Column="0">
-                        <Label Text="You" FontSize="12" TextColor="Gray"/>
-                        <Label x:Name="CurrentUserNameLabel" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                    <Grid ColumnDefinitions="*, Auto" Padding="20">
+                        <StackLayout Grid.Column="0" VerticalOptions="Center" Spacing="0">
+                            <Label Text="CONVOY PIN" FontSize="11" FontAttributes="Bold" TextColor="#AADDFF" CharacterSpacing="1"/>
+                            <Label Text="{Binding ConvoyPin}" FontSize="32" FontAttributes="Bold" TextColor="White" CharacterSpacing="4"/>
+                            <Label Text="Share this with riders to join" FontSize="12" TextColor="#AADDFF" Margin="0,2,0,0"/>
+                        </StackLayout>
+                        <Button Grid.Column="1" Text="📋 Copy" BackgroundColor="#33FFFFFF" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="45" Padding="15,0" Clicked="OnCopyPinClicked" VerticalOptions="Center"/>
+                    </Grid>
+                </Border>
+
+                <!-- Hidden Label to satisfy existing bindings -->
+                <Label x:Name="GroupNameLabel" IsVisible="False"/>
+
+                <!-- Pending Destination (Syncs with Search) -->
+                <Border x:Name="PendingDestinationFrame" StrokeThickness="1.5" Stroke="DarkOrange" BackgroundColor="{AppThemeBinding Light=#FFF3E0, Dark=#2D1A00}" IsVisible="False" Margin="0,0,0,10">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="16"/>
+                    </Border.StrokeShape>
+                    <StackLayout Padding="20">
+                        <Label Text="Target Destination" FontSize="12" TextColor="DarkOrange" FontAttributes="Bold" CharacterSpacing="1"/>
+                        <Label x:Name="PendingDestinationLabel" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" Margin="0,5,0,15"/>
+                        <Button x:Name="StartJourneyButton" Text="🚀 Start Navigation" BackgroundColor="DarkOrange" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" IsVisible="False" Clicked="OnStartJourneyClicked" />
                     </StackLayout>
-                    <Label x:Name="CurrentUserRoleLabel" Grid.Column="1" VerticalOptions="Center" FontAttributes="Bold" TextColor="DodgerBlue"/>
-                </Grid>
-            </Frame>
+                </Border>
 
-            <!-- Pending Destination (Syncs with Search) -->
-            <Frame x:Name="PendingDestinationFrame" Grid.Row="3" CornerRadius="12" HasShadow="True" Padding="15" Margin="0,0,0,20" BackgroundColor="{AppThemeBinding Light=#E3F2FD, Dark=#4A2C00}" BorderColor="DarkOrange" IsVisible="False">
-                <StackLayout>
-                    <Label Text="Target Destination" FontSize="12" TextColor="Gray"/>
-                    <Label x:Name="PendingDestinationLabel" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                    <Button x:Name="StartJourneyButton" Text="🚀 Start Journey" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="8" Margin="0,10,0,0" IsVisible="False" Clicked="OnStartJourneyClicked" />
-                </StackLayout>
-            </Frame>
+                <!-- Roster List -->
+                <Label Text="CONVOY MEMBERS" FontSize="12" FontAttributes="Bold" TextColor="Gray" CharacterSpacing="1" Margin="5,10,0,0"/>
 
-            <!-- Roster List -->
-            <CollectionView x:Name="RidersCollectionView" Grid.Row="4" SelectionMode="None">
-                <CollectionView.ItemTemplate>
-                    <DataTemplate x:DataType="local:Rider">
-                        <Frame CornerRadius="8" HasShadow="False" Padding="15" Margin="0,0,0,10" BackgroundColor="{Binding CardBackgroundColor}" BorderColor="Transparent">
-                            <Frame.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnRiderTapped" CommandParameter="{Binding .}" />
-                            </Frame.GestureRecognizers>
-                            <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="12">
-                                <Ellipse Grid.Column="0" WidthRequest="12" HeightRequest="12" VerticalOptions="Center" StrokeThickness="0">
-                                    <Ellipse.Triggers>
-                                        <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="True">
-                                            <Setter Property="Fill" Value="MediumSeaGreen" />
-                                        </DataTrigger>
-                                        <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="False">
-                                            <Setter Property="Fill" Value="Red" />
-                                        </DataTrigger>
-                                    </Ellipse.Triggers>
-                                </Ellipse>
-                                <Label Text="{Binding Name}" Grid.Column="1" VerticalOptions="Center" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                                <Frame Grid.Column="2" BackgroundColor="{Binding RoleColor}" CornerRadius="6" Padding="8,4" HasShadow="False">
-                                    <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="12" FontAttributes="Bold"/>
-                                </Frame>
-                            </Grid>
-                        </Frame>
-                    </DataTemplate>
-                </CollectionView.ItemTemplate>
-            </CollectionView>
-        </Grid>
+                <CollectionView x:Name="RidersCollectionView" SelectionMode="None">
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate x:DataType="local:Rider">
+                            <Border StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Margin="0,0,0,10">
+                                <Border.StrokeShape>
+                                    <RoundRectangle CornerRadius="14"/>
+                                </Border.StrokeShape>
+                                <Border.Shadow>
+                                    <Shadow Brush="Black" Offset="0,2" Opacity="0.05" Radius="6"/>
+                                </Border.Shadow>
+                                <Border.GestureRecognizers>
+                                    <TapGestureRecognizer Tapped="OnRiderTapped" CommandParameter="{Binding .}" />
+                                </Border.GestureRecognizers>
+
+                                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="15" Padding="15">
+                                    <Ellipse Grid.Column="0" WidthRequest="12" HeightRequest="12" VerticalOptions="Center" StrokeThickness="0">
+                                        <Ellipse.Triggers>
+                                            <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="True">
+                                                <Setter Property="Fill" Value="MediumSeaGreen" />
+                                            </DataTrigger>
+                                            <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="False">
+                                                <Setter Property="Fill" Value="Red" />
+                                            </DataTrigger>
+                                        </Ellipse.Triggers>
+                                    </Ellipse>
+
+                                    <Label Text="{Binding Name}" Grid.Column="1" VerticalOptions="Center" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#222, Dark=White}"/>
+
+                                    <Border Grid.Column="2" BackgroundColor="{Binding RoleColor}" StrokeThickness="0" Padding="10,5">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="8"/>
+                                        </Border.StrokeShape>
+                                        <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="11" FontAttributes="Bold" CharacterSpacing="1"/>
+                                    </Border>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+            </VerticalStackLayout>
+        </ScrollView>
 
         <!-- ===================================================================== -->
-        <!-- 3. LIVE MAP TAB (Unified Interface) -->
+        <!-- 3. LIVE MAP TAB -->
         <!-- ===================================================================== -->
         <Grid x:Name="MapView" Grid.Row="1" IsVisible="False">
 
-            <!-- Map Container bound to the ObservableCollection using MVVM -->
-            <controls:CustomMap x:Name="LiveMap" 
-                                Grid.Row="0" Grid.RowSpan="2"
-                                MapClicked="OnMapClicked" 
-                                IsShowingUser="False"
-                                IsTrafficEnabled="True"
-                                CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}"
-            />
+            <controls:CustomMap x:Name="LiveMap" Grid.Row="0" Grid.RowSpan="2" MapClicked="OnMapClicked" IsShowingUser="False" IsTrafficEnabled="True" CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}" />
 
-            <!-- STREAMING_CHUNK: Floating Map Buttons -->
-            <!-- ========================================== -->
-            <!-- 1. FLOATING MAP CONTROLS (Google Maps Style) -->
-            <!-- ========================================== -->
-            <VerticalStackLayout x:Name="FloatingMapControls" 
-                             Grid.Row="1"
-                             IsVisible="False"
-                             HorizontalOptions="End" 
-                             VerticalOptions="End" 
-                             Margin="0, 0, 15, 180"
-                             Spacing="15"
-                             ZIndex="30">
-
-                <!-- RECENTER BUTTON: Snaps to user without changing mode -->
-                <Button x:Name="RecenterMapButton" 
-        Text="🎯" 
-        FontSize="24"
-        BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" 
-        TextColor="DodgerBlue"
-        CornerRadius="27" 
-        WidthRequest="55" 
-        HeightRequest="55"
-        Clicked="OnRecenterMapClicked"
-        Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-
-                <!-- TOGGLE: 3D Follow Me (Hidden by default, shown when in Overview) -->
-                <Button x:Name="MapFollowButton" 
-        Text="📍" 
-        FontSize="24"
-        BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" 
-        TextColor="MediumSeaGreen"
-        CornerRadius="27" 
-        WidthRequest="55" 
-        HeightRequest="55"
-        Clicked="OnMapFollowClicked"
-        IsVisible="False"
-        Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
-
-                <!-- TOGGLE: 2D Overview (Shown by default) -->
-                <Button x:Name="OverviewButton" 
-        Text="🗺️" 
-        FontSize="24"
-        BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" 
-        TextColor="DodgerBlue"
-        CornerRadius="27" 
-        WidthRequest="55" 
-        HeightRequest="55"
-        Clicked="OnOverviewClicked"
-        Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.4, Radius=8}" />
+            <!-- FLOATING MAP CONTROLS -->
+            <VerticalStackLayout x:Name="FloatingMapControls" Grid.Row="1" IsVisible="False" HorizontalOptions="End" VerticalOptions="End" Margin="0, 0, 15, 180" Spacing="15" ZIndex="30">
+                <Button x:Name="RecenterMapButton" Text="🎯" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnRecenterMapClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
+                <Button x:Name="MapFollowButton" Text="📍" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="MediumSeaGreen" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnMapFollowClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
+                <Button x:Name="OverviewButton" Text="🗺️" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
             </VerticalStackLayout>
 
-            <!-- STREAMING_CHUNK: Bottom Swipeable Drawer -->
-            <!-- ========================================== -->
-            <!-- 2. SCROLLABLE BOTTOM SHEET DRAWER -->
-            <!-- ========================================== -->
-            <Border x:Name="ActionDrawer" 
-                Grid.Row="1"
-                IsVisible="False"
-                VerticalOptions="End" 
-                BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}"
-                StrokeThickness="0"
-                Margin="0,0,0,-40"
-                ZIndex="40">
-
-                <!-- THE FIX: We removed the Border.GestureRecognizers from here! -->
+            <!-- BOTTOM SHEET DRAWER -->
+            <Border x:Name="ActionDrawer" Grid.Row="1" IsVisible="False" VerticalOptions="End" BackgroundColor="{AppThemeBinding Light=White, Dark=#1A1A1A}" StrokeThickness="0" Margin="0,0,0,-40" ZIndex="40">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="30,30,0,0" />
+                </Border.StrokeShape>
+                <Border.Shadow>
+                    <Shadow Brush="Black" Offset="0,-4" Opacity="0.1" Radius="15"/>
+                </Border.Shadow>
 
                 <Grid RowDefinitions="Auto, Auto, *">
-
-                    <!-- NEW: DRAG HANDLE AREA (Larger touch target with Gestures attached!) -->
                     <Grid Grid.Row="0" Padding="0,15,0,15" BackgroundColor="Transparent">
                         <Grid.GestureRecognizers>
                             <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
                             <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
                         </Grid.GestureRecognizers>
-
-                        <BoxView HeightRequest="5" 
-                         WidthRequest="40" 
-                         CornerRadius="2.5" 
-                         BackgroundColor="Gray" 
-                         HorizontalOptions="Center" />
+                        <BoxView HeightRequest="5" WidthRequest="40" CornerRadius="2.5" BackgroundColor="{AppThemeBinding Light=#E0E0E0, Dark=#444}" HorizontalOptions="Center" />
                     </Grid>
 
                     <!-- DRAWER TABS -->
+                    <Border Grid.Row="1" Margin="20,0,20,10" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#222}" HeightRequest="45">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="22.5" />
+                        </Border.StrokeShape>
+                        <Grid ColumnDefinitions="*, *, *">
+                            <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Actions" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="22" Margin="2" Clicked="OnDrawerTabClicked" FontAttributes="Bold" FontSize="13"/>
+                            <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Stats" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="22" Margin="2" Clicked="OnDrawerTabClicked" FontAttributes="Bold" FontSize="13"/>
+                            <Button x:Name="TabAdminBtn" Grid.Column="2" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="22" Margin="2" Clicked="OnDrawerTabClicked" FontAttributes="Bold" FontSize="13"/>
+                        </Grid>
+                    </Border>
 
-                    <!-- DRAWER TABS (THE FIX: Added Grid.Column properties!) -->
-                    <Grid Grid.Row="1" ColumnDefinitions="*, *, *" Margin="10,0,10,10">
-                        <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Actions" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Ride Stats" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <Button x:Name="TabAdminBtn" Grid.Column="2" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                    </Grid>
-
-                    <!-- STREAMING_CHUNK: Drawer Content Tabs -->
-                    <!-- SCROLLABLE CONTENT AREA -->
+                    <!-- SCROLLABLE CONTENT -->
                     <ScrollView Grid.Row="2" Padding="20,10,20,50">
                         <Grid>
-                            <!-- TAB 1: SAFETY & ACTIONS -->
+                            <!-- TAB 1: ACTIONS -->
                             <VerticalStackLayout x:Name="DrawerActionsTab" Spacing="15">
-                                <!-- 1. PTT (PRIMARY COMMS) - Styled like tactical hardware -->
-                                <Border HeightRequest="80" 
-        StrokeThickness="0" 
-        BackgroundColor="{AppThemeBinding Light=#2C3E50, Dark=#1A1C1E}">
+                                <!-- PTT BUTTON -->
+                                <Border HeightRequest="80" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=#2C3E50, Dark=#181A1C}">
                                     <Border.StrokeShape>
                                         <RoundRectangle CornerRadius="20" />
                                     </Border.StrokeShape>
-                                    <Border.Shadow>
-                                        <Shadow Brush="Black" Offset="0,6" Opacity="0.2" Radius="10" />
-                                    </Border.Shadow>
-
                                     <Grid ColumnDefinitions="Auto, *, Auto" Padding="20,0">
-                                        <!-- Glowing Mic Icon Box -->
                                         <Frame Grid.Column="0" WidthRequest="45" HeightRequest="45" CornerRadius="22.5" BackgroundColor="#27AE60" HasShadow="False" Padding="0" VerticalOptions="Center">
                                             <Label Text="🎤" HorizontalOptions="Center" VerticalOptions="Center" FontSize="20"/>
                                         </Frame>
-
-                                        <!-- Title & Subtitle -->
                                         <StackLayout Grid.Column="1" VerticalOptions="Center" Margin="15,0,0,0" Spacing="2">
-                                            <Label Text="PUSH TO TALK" FontSize="18" FontAttributes="Bold" TextColor="White" />
-                                            <Label Text="Global Convoy Channel" FontSize="12" TextColor="#B0BEC5" />
+                                            <Label Text="PUSH TO TALK" FontSize="16" FontAttributes="Bold" TextColor="White" CharacterSpacing="1"/>
+                                            <Label Text="Global Convoy Channel" FontSize="12" TextColor="#90A4AE" />
                                         </StackLayout>
-
-                                        <!-- Online Status Dot -->
                                         <BoxView Grid.Column="2" WidthRequest="10" HeightRequest="10" CornerRadius="5" BackgroundColor="#27AE60" VerticalOptions="Center"/>
                                     </Grid>
                                 </Border>
 
-                                <!-- 2. UTILITY ROW (REFUEL / REST) - Clean, adaptive modern cards -->
                                 <Grid ColumnDefinitions="*, *" ColumnSpacing="15">
-
-                                    <!-- Refuel Card -->
-                                    <Border Grid.Column="0" HeightRequest="70" 
-            StrokeThickness="1" 
-            Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" 
-            BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}">
+                                    <Border Grid.Column="0" HeightRequest="70" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#222}">
                                         <Border.StrokeShape>
                                             <RoundRectangle CornerRadius="16"/>
                                         </Border.StrokeShape>
                                         <Border.GestureRecognizers>
                                             <TapGestureRecognizer Tapped="OnRefuelStopClicked" />
                                         </Border.GestureRecognizers>
-                                        <Border.Shadow>
-                                            <Shadow Brush="Black" Offset="0,2" Opacity="0.05" Radius="5" />
-                                        </Border.Shadow>
-
                                         <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="10">
-                                            <Label Text="⛽" FontSize="22" VerticalOptions="Center"/>
-                                            <Label Text="Refuel" FontSize="17" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333333, Dark=White}" VerticalOptions="Center"/>
+                                            <Label Text="⛽" FontSize="20" VerticalOptions="Center"/>
+                                            <Label Text="Refuel" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" VerticalOptions="Center"/>
                                         </StackLayout>
                                     </Border>
-
-                                    <!-- Rest Card -->
-                                    <Border Grid.Column="1" HeightRequest="70" 
-            StrokeThickness="1" 
-            Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" 
-            BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}">
+                                    <Border Grid.Column="1" HeightRequest="70" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#222}">
                                         <Border.StrokeShape>
                                             <RoundRectangle CornerRadius="16"/>
                                         </Border.StrokeShape>
                                         <Border.GestureRecognizers>
                                             <TapGestureRecognizer Tapped="OnRestStopClicked" />
                                         </Border.GestureRecognizers>
-                                        <Border.Shadow>
-                                            <Shadow Brush="Black" Offset="0,2" Opacity="0.05" Radius="5" />
-                                        </Border.Shadow>
-
                                         <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="10">
-                                            <Label Text="☕" FontSize="22" VerticalOptions="Center"/>
-                                            <Label Text="Rest" FontSize="17" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333333, Dark=White}" VerticalOptions="Center"/>
+                                            <Label Text="☕" FontSize="20" VerticalOptions="Center"/>
+                                            <Label Text="Rest" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" VerticalOptions="Center"/>
                                         </StackLayout>
                                     </Border>
                                 </Grid>
 
-                                <!-- 3. EMERGENCY STOP (CRITICAL) - Deep red gradient with glowing shadow -->
                                 <Border HeightRequest="70" StrokeThickness="0">
                                     <Border.Background>
                                         <LinearGradientBrush EndPoint="1,0">
@@ -291,31 +242,22 @@
                                     <Border.GestureRecognizers>
                                         <TapGestureRecognizer Tapped="OnEmergencyStopClicked" />
                                     </Border.GestureRecognizers>
-                                    <Border.Shadow>
-                                        <Shadow Brush="Red" Offset="0,4" Opacity="0.25" Radius="10" />
-                                    </Border.Shadow>
-
                                     <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
-                                        <Label Text="⚠️" FontSize="22" VerticalOptions="Center"/>
-                                        <Label Text="EMERGENCY STOP" FontSize="18" FontAttributes="Bold" TextColor="White" VerticalOptions="Center" CharacterSpacing="1"/>
+                                        <Label Text="⚠️" FontSize="20" VerticalOptions="Center"/>
+                                        <Label Text="EMERGENCY STOP" FontSize="16" FontAttributes="Bold" TextColor="White" VerticalOptions="Center" CharacterSpacing="1"/>
                                     </StackLayout>
                                 </Border>
 
-                                <!-- 4. OPEN NATIVE GPS (UTILITY) - Ghost button style -->
-                                <Border x:Name="StartNavButton" HeightRequest="65" 
-        StrokeThickness="1.5" 
-        Stroke="#0F9D58" 
-        BackgroundColor="{AppThemeBinding Light=#F1FAF4, Dark=#15261B}">
+                                <Border x:Name="StartNavButton" HeightRequest="65" StrokeThickness="1.5" Stroke="#0F9D58" BackgroundColor="{AppThemeBinding Light=#F1FAF4, Dark=#15261B}">
                                     <Border.StrokeShape>
                                         <RoundRectangle CornerRadius="16"/>
                                     </Border.StrokeShape>
                                     <Border.GestureRecognizers>
                                         <TapGestureRecognizer Tapped="OnLaunchNativeNavClicked" />
                                     </Border.GestureRecognizers>
-
                                     <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
                                         <Label Text="🗺️" FontSize="20" VerticalOptions="Center"/>
-                                        <Label Text="OPEN NATIVE GPS" FontSize="16" FontAttributes="Bold" TextColor="#0F9D58" VerticalOptions="Center" CharacterSpacing="1"/>
+                                        <Label Text="OPEN NATIVE GPS" FontSize="15" FontAttributes="Bold" TextColor="#0F9D58" VerticalOptions="Center" CharacterSpacing="1"/>
                                     </StackLayout>
                                 </Border>
                             </VerticalStackLayout>
@@ -323,20 +265,22 @@
                             <!-- TAB 2: TELEMETRY -->
                             <VerticalStackLayout x:Name="DrawerStatsTab" IsVisible="False" Spacing="15">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <Label Text="Live Convoy Telemetry" VerticalOptions="Center" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                                    <Button Grid.Column="1" Text="Refresh" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="10" HeightRequest="35" FontAttributes="Bold" Clicked="OnRefreshTelemetryClicked" />
+                                    <Label Text="Live Telemetry" VerticalOptions="Center" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                                    <Button Grid.Column="1" Text="↻ Refresh" BackgroundColor="{AppThemeBinding Light=#E3F2FD, Dark=#1A2633}" TextColor="DodgerBlue" CornerRadius="10" HeightRequest="35" FontAttributes="Bold" Clicked="OnRefreshTelemetryClicked" />
                                 </Grid>
-
                                 <CollectionView x:Name="TelemetryCollectionView" HeightRequest="250">
                                     <CollectionView.ItemTemplate>
                                         <DataTemplate>
-                                            <Frame CornerRadius="10" Padding="12" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#2A2A2A}" HasShadow="False" BorderColor="Transparent">
+                                            <Border Padding="15" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1C1C1C}" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}">
+                                                <Border.StrokeShape>
+                                                    <RoundRectangle CornerRadius="12" />
+                                                </Border.StrokeShape>
                                                 <Grid ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto">
                                                     <Label Grid.Row="0" Grid.Column="0" Text="{Binding Name}" FontAttributes="Bold" FontSize="16" TextColor="{AppThemeBinding Light=Black, Dark=White}" />
                                                     <Label Grid.Row="0" Grid.Column="1" Text="{Binding SpeedDisplay}" FontAttributes="Bold" TextColor="DodgerBlue" FontSize="16" />
-                                                    <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding StatusDisplay}" TextColor="{Binding StatusColor}" FontSize="14" FontAttributes="Bold" Margin="0,4,0,0" />
+                                                    <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding StatusDisplay}" TextColor="{Binding StatusColor}" FontSize="13" FontAttributes="Bold" Margin="0,6,0,0" />
                                                 </Grid>
-                                            </Frame>
+                                            </Border>
                                         </DataTemplate>
                                     </CollectionView.ItemTemplate>
                                 </CollectionView>
@@ -344,25 +288,35 @@
 
                             <!-- TAB 3: ADMIN CONTROLS -->
                             <VerticalStackLayout x:Name="DrawerAdminTab" IsVisible="False" Spacing="15">
-                                <Label Text="Ride Management" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-
-                                <Button x:Name="PauseNavBtn" Text="⏸ Pause Ride" BackgroundColor="Goldenrod" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnPauseNavClicked" />
-                                <Button x:Name="ResumeNavBtn" Text="▶️ Resume Ride" IsVisible="False" BackgroundColor="MediumSeaGreen" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnResumeJourneyClicked" />
-                                <Button Text="⚙️ Group Settings" BackgroundColor="DimGray" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
-                                <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
+                                <Button x:Name="PauseNavBtn" Text="⏸ Pause Ride" BackgroundColor="Goldenrod" TextColor="White" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnPauseNavClicked" />
+                                <Button x:Name="ResumeNavBtn" Text="▶️ Resume Ride" IsVisible="False" BackgroundColor="MediumSeaGreen" TextColor="White" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnResumeJourneyClicked" />
+                                <Button Text="⚙️ Convoy Settings" BackgroundColor="{AppThemeBinding Light=#E0E0E0, Dark=#333}" TextColor="{AppThemeBinding Light=#333, Dark=White}" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
+                                <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
                             </VerticalStackLayout>
                         </Grid>
                     </ScrollView>
                 </Grid>
             </Border>
 
-            <!-- OVERLAYS: Admin Search UI (Floats over the map) -->
-            <Grid x:Name="AdminSearchUI" ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto" Margin="15,15,15,10" VerticalOptions="Start" IsVisible="False" ZIndex="20">
-                <Frame Grid.Row="0" Grid.Column="0" Padding="0" CornerRadius="25" HasShadow="True" BorderColor="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
-                    <SearchBar x:Name="DestinationSearchBar" TextChanged="OnSearchTextChanged" Placeholder="Search or tap map..." SearchButtonPressed="OnSearchPressed" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                </Frame>
+            <!-- OVERLAYS: Admin Search UI -->
+            <Grid x:Name="AdminSearchUI" ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto" Margin="20,20,20,10" VerticalOptions="Start" IsVisible="False" ZIndex="20">
+                <Border Grid.Row="0" Grid.Column="0" Padding="0" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="25"/>
+                    </Border.StrokeShape>
+                    <Border.Shadow>
+                        <Shadow Brush="Black" Offset="0,4" Opacity="0.1" Radius="10"/>
+                    </Border.Shadow>
+                    <SearchBar x:Name="DestinationSearchBar" TextChanged="OnSearchTextChanged" Placeholder="Search destination..." SearchButtonPressed="OnSearchPressed" BackgroundColor="Transparent" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                </Border>
 
-                <Frame x:Name="SuggestionsFrame" Grid.Row="1" Grid.ColumnSpan="2" VerticalOptions="Start" Margin="15,10,15,15" Padding="0" CornerRadius="12" HasShadow="True" BorderColor="Transparent" IsVisible="False" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
+                <Border x:Name="SuggestionsFrame" Grid.Row="1" Grid.ColumnSpan="2" VerticalOptions="Start" Margin="0,10,0,15" Padding="0" StrokeThickness="0" IsVisible="False" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="16"/>
+                    </Border.StrokeShape>
+                    <Border.Shadow>
+                        <Shadow Brush="Black" Offset="0,4" Opacity="0.1" Radius="10"/>
+                    </Border.Shadow>
                     <ListView x:Name="SuggestionsListView" SelectionMode="Single" ItemSelected="OnSuggestionSelected" BackgroundColor="Transparent" SeparatorColor="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" MaximumHeightRequest="250">
                         <ListView.ItemTemplate>
                             <DataTemplate>
@@ -374,19 +328,20 @@
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
-                </Frame>
-                <Button x:Name="ConfirmDestButton" Grid.Row="0" Grid.Column="1" Text="✔️" Clicked="OnConfirmDestinationClicked" Margin="10,0,0,0" WidthRequest="50" HeightRequest="50" CornerRadius="25" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold" IsEnabled="False" VerticalOptions="Center" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
-                <Button x:Name="ResetDestButton" Grid.Row="0" Grid.Column="1" Text="✖️" IsVisible="False" Clicked="OnResetDestinationClicked" Margin="10,0,0,0" WidthRequest="50" HeightRequest="50" CornerRadius="25" BackgroundColor="Red" TextColor="White" FontAttributes="Bold" VerticalOptions="Center" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.3, Radius=8}"/>
+                </Border>
+                <Button x:Name="ConfirmDestButton" Grid.Row="0" Grid.Column="1" Text="✔️" Clicked="OnConfirmDestinationClicked" Margin="10,0,0,0" WidthRequest="50" HeightRequest="50" CornerRadius="25" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" IsEnabled="False" VerticalOptions="Center" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}"/>
+                <Button x:Name="ResetDestButton" Grid.Row="0" Grid.Column="1" Text="✖️" IsVisible="False" Clicked="OnResetDestinationClicked" Margin="10,0,0,0" WidthRequest="50" HeightRequest="50" CornerRadius="25" BackgroundColor="Red" TextColor="White" FontAttributes="Bold" VerticalOptions="Center" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}"/>
             </Grid>
 
-            <!-- Admin Instruction Hint -->
-            <Frame x:Name="AdminInstructionBanner" VerticalOptions="Start" HorizontalOptions="Center" Margin="0,85,0,0" Padding="15,10" CornerRadius="20" BackgroundColor="#CC000000" BorderColor="Transparent" IsVisible="False" ZIndex="20">
-                <Label Text="Tap the map or search to set a destination" TextColor="White" FontAttributes="Bold" FontSize="14"/>
-            </Frame>
+            <Border x:Name="AdminInstructionBanner" VerticalOptions="Start" HorizontalOptions="Center" Margin="0,90,0,0" Padding="20,10" StrokeThickness="0" BackgroundColor="#E6000000" IsVisible="False" ZIndex="20">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="20"/>
+                </Border.StrokeShape>
+                <Label Text="Search above to set the Convoy destination" TextColor="White" FontAttributes="Bold" FontSize="13"/>
+            </Border>
         </Grid>
 
-        <!-- STREAMING_CHUNK: Overlays -->
-        <!-- FULL SCREEN SENSORY ALERT OVERLAY -->
+        <!-- OVERLAYS -->
         <Grid x:Name="SensoryAlertOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="Red" Opacity="0" IsVisible="False" InputTransparent="True" ZIndex="999">
             <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
                 <Label x:Name="AlertIconLabel" Text="🛑" FontSize="100" HorizontalTextAlignment="Center" />
@@ -395,66 +350,55 @@
             </StackLayout>
         </Grid>
 
-        <!-- PICTURE-IN-PICTURE (PiP) SQUARE DASHBOARD OVERLAY -->
-        <Grid x:Name="PipOverlayGrid" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#121212" IsVisible="False" ZIndex="1500" Padding="15">
-            <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
-                <StackLayout Orientation="Horizontal" Spacing="5" HorizontalOptions="Center">
-                    <BoxView Color="MediumSeaGreen" WidthRequest="12" HeightRequest="12" CornerRadius="6" VerticalOptions="Center"/>
-                    <Label Text="Route Active" TextColor="White" FontSize="14" FontAttributes="Bold" VerticalOptions="Center"/>
-                </StackLayout>
-                <Label x:Name="PipSpeedLabel" Text="0 mph" TextColor="DodgerBlue" FontSize="36" FontAttributes="Bold" HorizontalOptions="Center"/>
-                <Label x:Name="PipRiderCountLabel" Text="Connecting..." TextColor="LightGray" FontSize="14" HorizontalOptions="Center"/>
-            </StackLayout>
-        </Grid>
-
-        <!-- PUSH-TO-TALK (PTT) OVERLAY -->
-        <Grid x:Name="PttOverlay" Grid.RowSpan="2" BackgroundColor="#CC000000" IsVisible="False" ZIndex="2000" Padding="20">
+        <Grid x:Name="PttOverlay" Grid.RowSpan="2" BackgroundColor="#E6000000" IsVisible="False" ZIndex="2000" Padding="20">
             <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="15">
-                <Image x:Name="PttIcon" Source="mic_icon.png" WidthRequest="60" HeightRequest="60" HorizontalOptions="Center" />
-                <Label x:Name="PttStatusLabel" Text="Mic Open" TextColor="MediumSeaGreen" FontSize="24" FontAttributes="Bold" HorizontalOptions="Center"/>
+                <Label Text="🎤" FontSize="80" HorizontalOptions="Center" />
+                <Label x:Name="PttStatusLabel" Text="Mic Open" TextColor="MediumSeaGreen" FontSize="28" FontAttributes="Bold" HorizontalOptions="Center" CharacterSpacing="1"/>
                 <Label x:Name="PttSpeakerLabel" Text="You can now speak to the group." TextColor="White" FontSize="16" HorizontalOptions="Center"/>
                 <Label x:Name="PttCountdownLabel" Text="Closing in 30s..." TextColor="LightCoral" FontSize="14" FontAttributes="Bold" HorizontalOptions="Center" IsVisible="False"/>
             </StackLayout>
         </Grid>
 
-        <!-- FULL SCREEN LOCATION DISABLED OVERLAY -->
-        <Grid x:Name="LocationDisabledOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#E6000000" IsVisible="False" InputTransparent="False" ZIndex="1000">
+        <Grid x:Name="LocationDisabledOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#F2000000" IsVisible="False" InputTransparent="False" ZIndex="1000">
             <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20" Padding="30">
                 <Label Text="📍" FontSize="80" HorizontalTextAlignment="Center"/>
-                <Label Text="Location Services Disabled" TextColor="White" FontSize="24" FontAttributes="Bold" HorizontalTextAlignment="Center"/>
+                <Label Text="Location Required" TextColor="White" FontSize="24" FontAttributes="Bold" HorizontalTextAlignment="Center"/>
                 <Label Text="SpeedyCompass requires your location to track your ride. Please enable GPS and location permissions to continue." TextColor="LightGray" FontSize="16" HorizontalTextAlignment="Center"/>
-                <Button Text="Open Settings" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="8" HeightRequest="50" FontAttributes="Bold" Clicked="OnOpenSettingsClicked" Margin="0,20,0,0"/>
-                <Button Text="I've Enabled It (Retry)" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="8" HeightRequest="50" FontAttributes="Bold" Clicked="OnRetryLocationClicked"/>
+                <Button Text="Open Settings" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="12" HeightRequest="50" FontAttributes="Bold" Clicked="OnOpenSettingsClicked" Margin="0,20,0,0"/>
+                <Button Text="I've Enabled It (Retry)" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="12" HeightRequest="50" FontAttributes="Bold" Clicked="OnRetryLocationClicked"/>
             </StackLayout>
         </Grid>
 
-        <!-- FULL SCREEN ADMIN SETTINGS MODAL -->
         <Grid x:Name="AdminSettingsOverlay" Grid.RowSpan="2" BackgroundColor="#CC000000" IsVisible="False" ZIndex="2500" Padding="20">
-            <Frame VerticalOptions="Center" CornerRadius="20" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" BorderColor="Transparent" Padding="20">
+            <Border VerticalOptions="Center" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1A1A1A}" Padding="25">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="24"/>
+                </Border.StrokeShape>
                 <StackLayout Spacing="15">
-                    <Label Text="Group Telemetry Settings" FontSize="20" FontAttributes="Bold" HorizontalOptions="Center"/>
-                    <StackLayout Spacing="5" Margin="0,15,0,0">
+                    <Label Text="Convoy Settings" FontSize="22" FontAttributes="Bold" HorizontalOptions="Center"/>
+                    <Label Text="Adjust live telemetry rules." FontSize="13" TextColor="Gray" HorizontalOptions="Center" Margin="0,-10,0,10"/>
+                    <StackLayout Spacing="5" Margin="0,10,0,0">
                         <Grid ColumnDefinitions="*, Auto">
                             <Label Text="Max Lag Distance" FontAttributes="Bold" VerticalOptions="Center"/>
                             <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="DodgerBlue" FontAttributes="Bold"/>
                         </Grid>
-                        <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="12" TextColor="Gray"/>
+                        <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="11" TextColor="Gray"/>
                         <Slider x:Name="LagSlider" Minimum="100" Maximum="2000" Value="500" ValueChanged="OnLagSliderChanged" MinimumTrackColor="DodgerBlue"/>
                     </StackLayout>
-                    <StackLayout Spacing="5" Margin="0,10,0,10">
+                    <StackLayout Spacing="5" Margin="0,10,0,0">
                         <Grid ColumnDefinitions="*, Auto">
                             <Label Text="Splinter Warning" FontAttributes="Bold" VerticalOptions="Center"/>
-                            <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="DodgerBlue" FontAttributes="Bold"/>
+                            <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="Orange" FontAttributes="Bold"/>
                         </Grid>
-                        <Label Text="Alerts the Lead if the convoy stretches too thin." FontSize="12" TextColor="Gray"/>
+                        <Label Text="Alerts the Lead if the convoy stretches too thin." FontSize="11" TextColor="Gray"/>
                         <Slider x:Name="SplinterSlider" Minimum="500" Maximum="5000" Value="2000" ValueChanged="OnSplinterSliderChanged" MinimumTrackColor="Orange"/>
                     </StackLayout>
-                    <StackLayout Spacing="5" Margin="0,10,0,10">
+                    <StackLayout Spacing="5" Margin="0,10,0,0">
                         <Grid ColumnDefinitions="*, Auto">
                             <Label Text="Max Group Size" FontAttributes="Bold" VerticalOptions="Center"/>
                             <Label x:Name="SizeValueLabel" Grid.Column="1" Text="15 Riders" TextColor="MediumSeaGreen" FontAttributes="Bold"/>
                         </Grid>
-                        <Label Text="Cap the total number of allowed riders." FontSize="12" TextColor="Gray"/>
+                        <Label Text="Cap the total number of allowed riders." FontSize="11" TextColor="Gray"/>
                         <Slider x:Name="SizeSlider" Minimum="2" Maximum="20" Value="15" ValueChanged="OnSizeSliderChanged" MinimumTrackColor="MediumSeaGreen"/>
                     </StackLayout>
                     <StackLayout Spacing="5" Margin="0,10,0,15">
@@ -462,16 +406,17 @@
                             <Label Text="Pitstop Reminder" FontAttributes="Bold" VerticalOptions="Center"/>
                             <Label x:Name="PitstopValueLabel" Grid.Column="1" Text="100 km" TextColor="DodgerBlue" FontAttributes="Bold"/>
                         </Grid>
-                        <Label Text="Voice reminder for a rest stop (0 to turn off)." FontSize="12" TextColor="Gray"/>
+                        <Label Text="Voice reminder for a rest stop (0 to turn off)." FontSize="11" TextColor="Gray"/>
                         <Slider x:Name="PitstopSlider" Minimum="0" Maximum="300" Value="100" ValueChanged="OnPitstopSliderChanged" MinimumTrackColor="DodgerBlue"/>
                     </StackLayout>
-                    <Button Text="Save Settings" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="10" HeightRequest="50" Clicked="OnSaveSettingsClicked" Margin="0,15,0,0"/>
-                    <Button Text="Cancel" BackgroundColor="Transparent" TextColor="Gray" FontAttributes="Bold" Clicked="OnCloseSettingsClicked"/>
+                    <Grid ColumnDefinitions="*,*" ColumnSpacing="15" Margin="0,10,0,0">
+                        <Button Grid.Column="0" Text="Cancel" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#333}" TextColor="{AppThemeBinding Light=#333, Dark=White}" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnCloseSettingsClicked"/>
+                        <Button Grid.Column="1" Text="Save" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnSaveSettingsClicked"/>
+                    </Grid>
                 </StackLayout>
-            </Frame>
+            </Border>
         </Grid>
 
-        <!-- ===================================================================== -->
         <Grid x:Name="LoadingOverlay" Grid.Row="0" Grid.RowSpan="2" BackgroundColor="#CC000000" IsVisible="False" InputTransparent="False" ZIndex="9999">
             <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20">
                 <ActivityIndicator IsRunning="{Binding Source={x:Reference LoadingOverlay}, Path=IsVisible}" Color="DodgerBlue" WidthRequest="60" HeightRequest="60" />

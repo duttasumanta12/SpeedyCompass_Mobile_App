@@ -17,6 +17,7 @@ public class GroupSession
     // --- NEW: Tracks who holds the microphone ---
     public string ActiveSpeaker { get; set; } = string.Empty;
     public GroupSettings Settings { get; set; } = new GroupSettings();
+    public string JoinCode { get; internal set; }
 }
 // --- NEW: THE SETTINGS SCHEMA ---
 public class GroupSettings
