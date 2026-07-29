@@ -35,6 +35,13 @@ public class SignalRService
     public event Action<string, string> NavigationPaused; // Reason, AdminName
     public event Action<string> NavigationResumed; // AdminName
     public event Action<string> NavigationCompleted; // AdminName
+    public event Action<string> LeadRouteUpdated;
+    public event Action<string> RouteDeviationAlert;
+    public event Action<double, double> MeetupPointSet;
+    // ==========================================================
+    // --- NEW: DYNAMIC ROUTING, MEETUPS & SETTINGS EVENTS ---
+    // ==========================================================
+    public event Action<GroupSettingsDto> GroupSettingsUpdated;
 
     public SignalRService()
     {
@@ -43,8 +50,8 @@ public class SignalRService
             // Switch to HTTPS and standard ASP.NET Core HTTPS ports (e.g., 5001 or 7001)
             // Note: Check your backend's launchSettings.json to ensure the https port is correct
             string baseUrl = DeviceInfo.Platform == DevicePlatform.Android
-            ? //"https://10.0.2.2:7219" 
-             "https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
+            ? "https://10.0.2.2:7219" 
+             //"https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"  // Android emulator maps 10.0.2.2 to the host machine
                 : "https://localhost:5001"; // iOS Simulator and Windows/Mac use standard localhost
 
             // IMPORTANT: If testing on PHYSICAL devices on your local Wi-Fi, 
@@ -206,6 +213,10 @@ public class SignalRService
         _hubConnection.On<string, string>("ReceiveNavigationPaused", (reason, adminName) => NavigationPaused?.Invoke(reason, adminName));
         _hubConnection.On<string>("ReceiveNavigationResumed", (adminName) => NavigationResumed?.Invoke(adminName));
         _hubConnection.On<string>("ReceiveNavigationCompleted", (adminName) => NavigationCompleted?.Invoke(adminName));
+        _hubConnection.On<string>("ReceiveNewLeadRoute", (poly) => LeadRouteUpdated?.Invoke(poly));
+        _hubConnection.On<string>("ReceiveRouteDeviation", (user) => RouteDeviationAlert?.Invoke(user));
+        _hubConnection.On<double, double>("ReceiveMeetupPoint", (lat, lng) => MeetupPointSet?.Invoke(lat, lng));
+        _hubConnection.On<GroupSettingsDto>("ReceiveGroupSettings", (settings) => GroupSettingsUpdated?.Invoke(settings));
     }
 
     // Explicit Hub Commands with Global Exception Handling
@@ -267,9 +278,9 @@ public class SignalRService
         catch (Exception ex) { LogException(nameof(AssignRole), ex); }
     }
     // UPDATE: Add pitstopDist to the parameter list
-    public async Task UpdateGroupSettings(string groupName, int maxLag, int splinterDistance, int maxGroupSize, int pitstopDist)
+    public async Task UpdateGroupSettings(string groupName, GroupSettingsDto settings)
     {
-        try { await _hubConnection.InvokeAsync("UpdateGroupSettings", groupName, maxLag, splinterDistance, maxGroupSize, pitstopDist); }
+        try { await _hubConnection.InvokeAsync("UpdateGroupSettings", groupName, settings); }
         catch (Exception ex) { LogException(nameof(UpdateGroupSettings), ex); }
     }
 
@@ -433,6 +444,7 @@ public class SignalRService
     private string _activeGoogleId = string.Empty;
     private string _activeUserName = string.Empty;
     private string _activeGroupName = string.Empty;
+
     // Inside SignalRService, update Create and Join and add new wrappers:
     public async Task<List<ActiveGroupDto>> GetActiveGroups()
         => await _hubConnection.InvokeAsync<List<ActiveGroupDto>>("GetActiveGroups");
@@ -508,5 +520,49 @@ public class SignalRService
     {
         if (_hubConnection?.State == HubConnectionState.Connected)
             await _hubConnection.InvokeAsync("CompleteNavigation", groupName, adminName);
+    }
+    // --- NEW: DYNAMIC ROUTING & MEETUPS ---
+    public async Task BroadcastLeadRoute(string groupName, string encodedPolyline)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("UpdateGroupRoute", groupName, encodedPolyline);
+    }
+
+    public async Task ReportRouteDeviation(string groupName, string userName)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("NotifyRouteDeviation", groupName, userName);
+    }
+
+    public async Task SetGroupMeetupPoint(string groupName, double lat, double lng)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("SetMeetupPoint", groupName, lat, lng);
+    }
+    // ==========================================================
+    // --- NEW: EDGE TELEMETRY TRIGGERS ---
+    // ==========================================================
+    public async Task SendLagWarning(string groupName, string userName, double distanceMeters, bool isAhead)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("RelayLagWarning", groupName, userName, distanceMeters, isAhead);
+    }
+
+    public async Task SendSplinterWarning(string groupName)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("RelaySplinterWarning", groupName);
+    }
+
+    public async Task SendPitstopReminder(string groupName, double distanceKm)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("RelayPitstopReminder", groupName, distanceKm);
+    }
+
+    public async Task SendArrivalAlert(string groupName)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("RelayArrivalAlert", groupName);
     }
 }

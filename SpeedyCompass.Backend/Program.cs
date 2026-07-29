@@ -17,8 +17,8 @@ builder.Services.AddSingleton<CompassStateManager>();
 builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
 {
     options.EnableDetailedErrors = true;
-})
-                .AddAzureSignalR();
+});
+                //.AddAzureSignalR();
 
 builder.Services.AddMemoryCache();
 

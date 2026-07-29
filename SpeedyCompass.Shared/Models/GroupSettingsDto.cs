@@ -11,5 +11,11 @@ namespace SpeedyCompass.Shared.Models
         public int SplinterWarningDistanceMeters { get; set; }
         public int MaxGroupSize { get; set; }
         public int PitstopDistanceMeters { get; set; }
+        public bool EnableDynamicRouting { get; set; }
+        public int ArrivalGeofenceMeters { get; set; }
+        public string? LeadRiderGoogleId { get; set; }
+        // --- NEW: Dynamic Telemetry Throttle Range ---
+        public int MinUpdateDistanceMeters { get; set; } = 10;
+        public int MaxUpdateDistanceMeters { get; set; } = 100;
     }
 }

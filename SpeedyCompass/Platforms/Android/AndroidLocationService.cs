@@ -41,6 +41,9 @@ public class AndroidLocationService : Service, ILocationListener
 
         _signalRService = IPlatformApplication.Current?.Services.GetService<SignalRService>();
 
+        // --- THE FIX: Native GPS now respects the Gatekeeper! ---
+        var rideCache = IPlatformApplication.Current?.Services.GetService<RideStateService>();
+
         int count = intent?.GetIntExtra("NumberOfOnlineRiders", 0) ?? 0;
         var notification = CreateNotification(count);
 
@@ -115,7 +118,7 @@ public class AndroidLocationService : Service, ILocationListener
             if (tracker != null && tracker.IsSimulating) return;
 
             var mauiLocation = new Microsoft.Maui.Devices.Sensors.Location(location.Latitude, location.Longitude);
-            double speedMph = location.HasSpeed ? location.Speed * 2.23694 : 0;
+            double speedMph = location.HasSpeed ? location.Speed : 0;
             double heading = location.HasBearing ? location.Bearing : 0;
 
             AndroidLocationTracker.NotifyLocation(mauiLocation, speedMph, heading);

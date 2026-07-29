@@ -18,6 +18,9 @@ public class GroupSession
     public string ActiveSpeaker { get; set; } = string.Empty;
     public GroupSettings Settings { get; set; } = new GroupSettings();
     public string JoinCode { get; internal set; }
+    public double MeetupLat { get; set; }
+    public double MeetupLng { get; set; }
+    public bool IsMeetupActive { get; set; }
 }
 // --- NEW: THE SETTINGS SCHEMA ---
 public class GroupSettings
@@ -31,4 +34,7 @@ public class GroupSettings
     public int MaxGroupSize { get; set; } = 15;
     // NEW: Configurable Pitstop Reminder Distance (Default 100km)
     public int PitstopDistanceMeters { get; set; } = 100000;
+    public bool EnableDynamicRouting { get; set; } = true;
+    public int MinUpdateDistanceMeters { get; internal set; }
+    public int MaxUpdateDistanceMeters { get; internal set; }
 }

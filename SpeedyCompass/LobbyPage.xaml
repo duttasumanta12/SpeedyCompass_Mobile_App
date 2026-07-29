@@ -145,65 +145,128 @@
 
             <!-- FLOATING MAP CONTROLS -->
             <VerticalStackLayout x:Name="FloatingMapControls" Grid.Row="1" IsVisible="False" HorizontalOptions="End" VerticalOptions="End" Margin="0, 0, 15, 180" Spacing="15" ZIndex="30">
+                <Button x:Name="ClearPoisBtn" 
+                        IsVisible="False"
+                        Text="🧹 Clear POIs" 
+                        BackgroundColor="#D32F2F" 
+                        TextColor="White" 
+                        CornerRadius="25" 
+                        HeightRequest="50"
+                        WidthRequest="120"
+                        FontAttributes="Bold"
+                        FontSize="12"
+                        Margin="0,0,0,10"
+                        Clicked="OnClearPoisClicked">
+                    <Button.Shadow>
+                        <Shadow Brush="Black" Offset="0,4" Opacity="0.3" Radius="5" />
+                    </Button.Shadow>
+                </Button>
+                <!-- NEW: SIMULATION SPEED SLIDER (Hidden by default, enabled by C# #if DEBUG) -->
+                <Frame x:Name="SimSpeedFrame" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="0" CornerRadius="10" IsVisible="False" HasShadow="True" WidthRequest="40" HeightRequest="150" HorizontalOptions="Center">
+                    <Slider x:Name="SimSpeedSlider" Minimum="0" Maximum="140" Value="60" Rotation="-90" VerticalOptions="Center" HorizontalOptions="Center" WidthRequest="130" ValueChanged="OnSimSpeedSliderChanged" MinimumTrackColor="DodgerBlue" />
+                </Frame>
                 <Button x:Name="RecenterMapButton" Text="🎯" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnRecenterMapClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
                 <Button x:Name="MapFollowButton" Text="📍" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="MediumSeaGreen" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnMapFollowClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
                 <Button x:Name="OverviewButton" Text="🗺️" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
             </VerticalStackLayout>
 
-            <!-- BOTTOM SHEET DRAWER -->
-            <Border x:Name="ActionDrawer" Grid.Row="1" IsVisible="False" VerticalOptions="End" BackgroundColor="{AppThemeBinding Light=White, Dark=#1A1A1A}" StrokeThickness="0" Margin="0,0,0,-40" ZIndex="40">
-                <Border.StrokeShape>
-                    <RoundRectangle CornerRadius="30,30,0,0" />
-                </Border.StrokeShape>
+            <!-- STREAMING_CHUNK: Bottom Swipeable Drawer -->
+            <!-- ========================================== -->
+            <!-- 2. SCROLLABLE BOTTOM SHEET DRAWER -->
+            <!-- ========================================== -->
+            <Border x:Name="ActionDrawer" 
+                Grid.Row="1"
+                IsVisible="False"
+                VerticalOptions="End" 
+                BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}"
+                StrokeThickness="0"
+                Margin="0,0,0,-40"
+                ZIndex="40">
                 <Border.Shadow>
-                    <Shadow Brush="Black" Offset="0,-4" Opacity="0.1" Radius="15"/>
+                    <Shadow Brush="Black" Offset="0,-4" Opacity="0.15" Radius="15" />
                 </Border.Shadow>
 
-                <Grid RowDefinitions="Auto, Auto, *">
-                    <Grid Grid.Row="0" Padding="0,15,0,15" BackgroundColor="Transparent">
+                <Grid RowDefinitions="Auto, Auto, Auto, *">
+
+                    <!-- ============================================================== -->
+                    <!-- NEW: STICKY TELEMETRY HEADER (Always visible in Peek State)    -->
+                    <!-- ============================================================== -->
+                    <Grid Grid.Row="0" ColumnDefinitions="*, *, *, *" Padding="10,10,10,5" BackgroundColor="Transparent">
+                        <Grid.GestureRecognizers>
+                            <!-- Tapping the numbers themselves will also expand/collapse the drawer -->
+                            <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
+                            <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
+                        </Grid.GestureRecognizers>
+
+                        <!-- Metric 1: Speed -->
+                        <StackLayout Grid.Column="0" HorizontalOptions="Center" VerticalOptions="Center">
+                            <Label Text="Speed" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
+                            <Label x:Name="MySpeedLabel" Text="0" FontSize="18" FontAttributes="Bold" TextColor="DodgerBlue" HorizontalOptions="Center"/>
+                        </StackLayout>
+
+                        <!-- Metric 2: Covered -->
+                        <StackLayout Grid.Column="1" HorizontalOptions="Center" VerticalOptions="Center">
+                            <Label Text="Covered" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
+                            <Label x:Name="MyTotalTraveledLabel" Text="0.0 km" FontSize="18" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="Center"/>
+                        </StackLayout>
+
+                        <!-- Metric 3: Remaining -->
+                        <StackLayout Grid.Column="2" HorizontalOptions="Center" VerticalOptions="Center">
+                            <Label Text="Remaining" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
+                            <Label x:Name="MyDistanceLabel" Text="-- km" FontSize="18" FontAttributes="Bold" TextColor="MediumSeaGreen" HorizontalOptions="Center"/>
+                        </StackLayout>
+
+                        <!-- Metric 4: Total Route -->
+                        <StackLayout Grid.Column="3" HorizontalOptions="Center" VerticalOptions="Center">
+                            <Label Text="Total Dist" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
+                            <Label x:Name="MyTotalRouteLabel" Text="-- km" FontSize="18" FontAttributes="Bold" TextColor="MediumPurple" HorizontalOptions="Center"/>
+                        </StackLayout>
+                    </Grid>
+
+                    <!-- DRAG HANDLE AREA -->
+                    <Grid Grid.Row="1" Padding="0,5,0,15" BackgroundColor="Transparent">
                         <Grid.GestureRecognizers>
                             <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
                             <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
                         </Grid.GestureRecognizers>
-                        <BoxView HeightRequest="5" WidthRequest="40" CornerRadius="2.5" BackgroundColor="{AppThemeBinding Light=#E0E0E0, Dark=#444}" HorizontalOptions="Center" />
+                        <BoxView HeightRequest="5" WidthRequest="40" CornerRadius="2.5" BackgroundColor="LightGray" HorizontalOptions="Center" />
                     </Grid>
 
-                    <!-- DRAWER TABS -->
-                    <Border Grid.Row="1" Margin="20,0,20,10" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#222}" HeightRequest="45">
-                        <Border.StrokeShape>
-                            <RoundRectangle CornerRadius="22.5" />
-                        </Border.StrokeShape>
-                        <Grid ColumnDefinitions="*, *, *">
-                            <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Actions" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="22" Margin="2" Clicked="OnDrawerTabClicked" FontAttributes="Bold" FontSize="13"/>
-                            <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Stats" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="22" Margin="2" Clicked="OnDrawerTabClicked" FontAttributes="Bold" FontSize="13"/>
-                            <Button x:Name="TabAdminBtn" Grid.Column="2" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="22" Margin="2" Clicked="OnDrawerTabClicked" FontAttributes="Bold" FontSize="13"/>
-                        </Grid>
-                    </Border>
+                    <!-- DRAWER TABS (Removed the "My Ride" tab since it's always at the top now!) -->
+                    <Grid Grid.Row="2" ColumnDefinitions="*, *, *" Margin="10,0,10,10">
+                        <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Safety" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                        <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Convoy Stats" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                        <Button x:Name="TabAdminBtn" Grid.Column="2" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                    </Grid>
 
-                    <!-- SCROLLABLE CONTENT -->
-                    <ScrollView Grid.Row="2" Padding="20,10,20,50">
+                    <!-- SCROLLABLE CONTENT AREA -->
+                    <ScrollView Grid.Row="3" Padding="20,10,20,50">
                         <Grid>
-                            <!-- TAB 1: ACTIONS -->
+                            <!-- TAB 1: SAFETY & ACTIONS -->
                             <VerticalStackLayout x:Name="DrawerActionsTab" Spacing="15">
-                                <!-- PTT BUTTON -->
-                                <Border HeightRequest="80" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=#2C3E50, Dark=#181A1C}">
+                                <!-- 1. PTT (PRIMARY COMMS) -->
+                                <Border HeightRequest="80" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=#2C3E50, Dark=#1A1C1E}">
                                     <Border.StrokeShape>
                                         <RoundRectangle CornerRadius="20" />
                                     </Border.StrokeShape>
+                                    <Border.Shadow>
+                                        <Shadow Brush="Black" Offset="0,6" Opacity="0.2" Radius="10" />
+                                    </Border.Shadow>
                                     <Grid ColumnDefinitions="Auto, *, Auto" Padding="20,0">
                                         <Frame Grid.Column="0" WidthRequest="45" HeightRequest="45" CornerRadius="22.5" BackgroundColor="#27AE60" HasShadow="False" Padding="0" VerticalOptions="Center">
                                             <Label Text="🎤" HorizontalOptions="Center" VerticalOptions="Center" FontSize="20"/>
                                         </Frame>
                                         <StackLayout Grid.Column="1" VerticalOptions="Center" Margin="15,0,0,0" Spacing="2">
-                                            <Label Text="PUSH TO TALK" FontSize="16" FontAttributes="Bold" TextColor="White" CharacterSpacing="1"/>
-                                            <Label Text="Global Convoy Channel" FontSize="12" TextColor="#90A4AE" />
+                                            <Label Text="PUSH TO TALK" FontSize="18" FontAttributes="Bold" TextColor="White" />
+                                            <Label Text="Global Convoy Channel" FontSize="12" TextColor="#B0BEC5" />
                                         </StackLayout>
                                         <BoxView Grid.Column="2" WidthRequest="10" HeightRequest="10" CornerRadius="5" BackgroundColor="#27AE60" VerticalOptions="Center"/>
                                     </Grid>
                                 </Border>
 
+                                <!-- 2. UTILITY ROW (REFUEL / REST) -->
                                 <Grid ColumnDefinitions="*, *" ColumnSpacing="15">
-                                    <Border Grid.Column="0" HeightRequest="70" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#222}">
+                                    <Border Grid.Column="0" HeightRequest="70" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}">
                                         <Border.StrokeShape>
                                             <RoundRectangle CornerRadius="16"/>
                                         </Border.StrokeShape>
@@ -211,11 +274,11 @@
                                             <TapGestureRecognizer Tapped="OnRefuelStopClicked" />
                                         </Border.GestureRecognizers>
                                         <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="10">
-                                            <Label Text="⛽" FontSize="20" VerticalOptions="Center"/>
-                                            <Label Text="Refuel" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" VerticalOptions="Center"/>
+                                            <Label Text="⛽" FontSize="22" VerticalOptions="Center"/>
+                                            <Label Text="Refuel" FontSize="17" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333333, Dark=White}" VerticalOptions="Center"/>
                                         </StackLayout>
                                     </Border>
-                                    <Border Grid.Column="1" HeightRequest="70" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#222}">
+                                    <Border Grid.Column="1" HeightRequest="70" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}">
                                         <Border.StrokeShape>
                                             <RoundRectangle CornerRadius="16"/>
                                         </Border.StrokeShape>
@@ -223,12 +286,13 @@
                                             <TapGestureRecognizer Tapped="OnRestStopClicked" />
                                         </Border.GestureRecognizers>
                                         <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="10">
-                                            <Label Text="☕" FontSize="20" VerticalOptions="Center"/>
-                                            <Label Text="Rest" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" VerticalOptions="Center"/>
+                                            <Label Text="☕" FontSize="22" VerticalOptions="Center"/>
+                                            <Label Text="Rest" FontSize="17" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333333, Dark=White}" VerticalOptions="Center"/>
                                         </StackLayout>
                                     </Border>
                                 </Grid>
 
+                                <!-- 3. EMERGENCY STOP -->
                                 <Border HeightRequest="70" StrokeThickness="0">
                                     <Border.Background>
                                         <LinearGradientBrush EndPoint="1,0">
@@ -242,12 +306,16 @@
                                     <Border.GestureRecognizers>
                                         <TapGestureRecognizer Tapped="OnEmergencyStopClicked" />
                                     </Border.GestureRecognizers>
+                                    <Border.Shadow>
+                                        <Shadow Brush="Red" Offset="0,4" Opacity="0.25" Radius="10" />
+                                    </Border.Shadow>
                                     <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
-                                        <Label Text="⚠️" FontSize="20" VerticalOptions="Center"/>
-                                        <Label Text="EMERGENCY STOP" FontSize="16" FontAttributes="Bold" TextColor="White" VerticalOptions="Center" CharacterSpacing="1"/>
+                                        <Label Text="⚠️" FontSize="22" VerticalOptions="Center"/>
+                                        <Label Text="EMERGENCY STOP" FontSize="18" FontAttributes="Bold" TextColor="White" VerticalOptions="Center" CharacterSpacing="1"/>
                                     </StackLayout>
                                 </Border>
 
+                                <!-- 4. OPEN NATIVE GPS -->
                                 <Border x:Name="StartNavButton" HeightRequest="65" StrokeThickness="1.5" Stroke="#0F9D58" BackgroundColor="{AppThemeBinding Light=#F1FAF4, Dark=#15261B}">
                                     <Border.StrokeShape>
                                         <RoundRectangle CornerRadius="16"/>
@@ -257,7 +325,7 @@
                                     </Border.GestureRecognizers>
                                     <StackLayout Orientation="Horizontal" HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
                                         <Label Text="🗺️" FontSize="20" VerticalOptions="Center"/>
-                                        <Label Text="OPEN NATIVE GPS" FontSize="15" FontAttributes="Bold" TextColor="#0F9D58" VerticalOptions="Center" CharacterSpacing="1"/>
+                                        <Label Text="OPEN NATIVE GPS" FontSize="16" FontAttributes="Bold" TextColor="#0F9D58" VerticalOptions="Center" CharacterSpacing="1"/>
                                     </StackLayout>
                                 </Border>
                             </VerticalStackLayout>
@@ -265,22 +333,19 @@
                             <!-- TAB 2: TELEMETRY -->
                             <VerticalStackLayout x:Name="DrawerStatsTab" IsVisible="False" Spacing="15">
                                 <Grid ColumnDefinitions="*,Auto">
-                                    <Label Text="Live Telemetry" VerticalOptions="Center" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                                    <Button Grid.Column="1" Text="↻ Refresh" BackgroundColor="{AppThemeBinding Light=#E3F2FD, Dark=#1A2633}" TextColor="DodgerBlue" CornerRadius="10" HeightRequest="35" FontAttributes="Bold" Clicked="OnRefreshTelemetryClicked" />
+                                    <Label Text="Live Convoy Spread" VerticalOptions="Center" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                                    <Button Grid.Column="1" Text="Refresh" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="10" HeightRequest="35" FontAttributes="Bold" Clicked="OnRefreshTelemetryClicked" />
                                 </Grid>
                                 <CollectionView x:Name="TelemetryCollectionView" HeightRequest="250">
                                     <CollectionView.ItemTemplate>
                                         <DataTemplate>
-                                            <Border Padding="15" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1C1C1C}" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}">
-                                                <Border.StrokeShape>
-                                                    <RoundRectangle CornerRadius="12" />
-                                                </Border.StrokeShape>
+                                            <Frame CornerRadius="10" Padding="12" Margin="0,0,0,10" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#2A2A2A}" HasShadow="False" BorderColor="Transparent">
                                                 <Grid ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto">
                                                     <Label Grid.Row="0" Grid.Column="0" Text="{Binding Name}" FontAttributes="Bold" FontSize="16" TextColor="{AppThemeBinding Light=Black, Dark=White}" />
                                                     <Label Grid.Row="0" Grid.Column="1" Text="{Binding SpeedDisplay}" FontAttributes="Bold" TextColor="DodgerBlue" FontSize="16" />
-                                                    <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding StatusDisplay}" TextColor="{Binding StatusColor}" FontSize="13" FontAttributes="Bold" Margin="0,6,0,0" />
+                                                    <Label Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Text="{Binding StatusDisplay}" TextColor="{Binding StatusColor}" FontSize="14" FontAttributes="Bold" Margin="0,4,0,0" />
                                                 </Grid>
-                                            </Border>
+                                            </Frame>
                                         </DataTemplate>
                                     </CollectionView.ItemTemplate>
                                 </CollectionView>
@@ -288,10 +353,13 @@
 
                             <!-- TAB 3: ADMIN CONTROLS -->
                             <VerticalStackLayout x:Name="DrawerAdminTab" IsVisible="False" Spacing="15">
-                                <Button x:Name="PauseNavBtn" Text="⏸ Pause Ride" BackgroundColor="Goldenrod" TextColor="White" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnPauseNavClicked" />
-                                <Button x:Name="ResumeNavBtn" Text="▶️ Resume Ride" IsVisible="False" BackgroundColor="MediumSeaGreen" TextColor="White" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnResumeJourneyClicked" />
-                                <Button Text="⚙️ Convoy Settings" BackgroundColor="{AppThemeBinding Light=#E0E0E0, Dark=#333}" TextColor="{AppThemeBinding Light=#333, Dark=White}" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
-                                <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="16" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
+                                <Label Text="Ride Management" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+
+                                <Button x:Name="PauseNavBtn" Text="⏸ Pause Ride" BackgroundColor="Goldenrod" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnPauseNavClicked" />
+                                <Button x:Name="ResumeNavBtn" Text="▶️ Resume Ride" IsVisible="False" BackgroundColor="MediumSeaGreen" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnResumeJourneyClicked" />
+                                <Button x:Name="MeetupPointBtn" Text="📍 Generate Meetup Point" BackgroundColor="DarkViolet" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnGenerateMeetupClicked" />
+                                <Button Text="⚙️ Group Settings" BackgroundColor="DimGray" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
+                                <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
                             </VerticalStackLayout>
                         </Grid>
                     </ScrollView>
@@ -370,50 +438,96 @@
         </Grid>
 
         <Grid x:Name="AdminSettingsOverlay" Grid.RowSpan="2" BackgroundColor="#CC000000" IsVisible="False" ZIndex="2500" Padding="20">
-            <Border VerticalOptions="Center" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1A1A1A}" Padding="25">
+            <Border Margin="20" VerticalOptions="Center" MaximumHeightRequest="600" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="25">
                 <Border.StrokeShape>
-                    <RoundRectangle CornerRadius="24"/>
+                    <RoundRectangle CornerRadius="25"/>
                 </Border.StrokeShape>
-                <StackLayout Spacing="15">
-                    <Label Text="Convoy Settings" FontSize="22" FontAttributes="Bold" HorizontalOptions="Center"/>
-                    <Label Text="Adjust live telemetry rules." FontSize="13" TextColor="Gray" HorizontalOptions="Center" Margin="0,-10,0,10"/>
-                    <StackLayout Spacing="5" Margin="0,10,0,0">
-                        <Grid ColumnDefinitions="*, Auto">
-                            <Label Text="Max Lag Distance" FontAttributes="Bold" VerticalOptions="Center"/>
-                            <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                        </Grid>
-                        <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="11" TextColor="Gray"/>
-                        <Slider x:Name="LagSlider" Minimum="100" Maximum="2000" Value="500" ValueChanged="OnLagSliderChanged" MinimumTrackColor="DodgerBlue"/>
-                    </StackLayout>
-                    <StackLayout Spacing="5" Margin="0,10,0,0">
-                        <Grid ColumnDefinitions="*, Auto">
-                            <Label Text="Splinter Warning" FontAttributes="Bold" VerticalOptions="Center"/>
-                            <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="Orange" FontAttributes="Bold"/>
-                        </Grid>
-                        <Label Text="Alerts the Lead if the convoy stretches too thin." FontSize="11" TextColor="Gray"/>
-                        <Slider x:Name="SplinterSlider" Minimum="500" Maximum="5000" Value="2000" ValueChanged="OnSplinterSliderChanged" MinimumTrackColor="Orange"/>
-                    </StackLayout>
-                    <StackLayout Spacing="5" Margin="0,10,0,0">
-                        <Grid ColumnDefinitions="*, Auto">
-                            <Label Text="Max Group Size" FontAttributes="Bold" VerticalOptions="Center"/>
-                            <Label x:Name="SizeValueLabel" Grid.Column="1" Text="15 Riders" TextColor="MediumSeaGreen" FontAttributes="Bold"/>
-                        </Grid>
-                        <Label Text="Cap the total number of allowed riders." FontSize="11" TextColor="Gray"/>
-                        <Slider x:Name="SizeSlider" Minimum="2" Maximum="20" Value="15" ValueChanged="OnSizeSliderChanged" MinimumTrackColor="MediumSeaGreen"/>
-                    </StackLayout>
-                    <StackLayout Spacing="5" Margin="0,10,0,15">
-                        <Grid ColumnDefinitions="*, Auto">
-                            <Label Text="Pitstop Reminder" FontAttributes="Bold" VerticalOptions="Center"/>
-                            <Label x:Name="PitstopValueLabel" Grid.Column="1" Text="100 km" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                        </Grid>
-                        <Label Text="Voice reminder for a rest stop (0 to turn off)." FontSize="11" TextColor="Gray"/>
-                        <Slider x:Name="PitstopSlider" Minimum="0" Maximum="300" Value="100" ValueChanged="OnPitstopSliderChanged" MinimumTrackColor="DodgerBlue"/>
-                    </StackLayout>
-                    <Grid ColumnDefinitions="*,*" ColumnSpacing="15" Margin="0,10,0,0">
+
+                <!-- THE FIX: Header, ScrollView, and Buttons are now DIRECT children of this Grid -->
+                <Grid RowDefinitions="Auto, *, Auto" RowSpacing="20">
+
+                    <!-- HEADER (Row 0) -->
+                    <VerticalStackLayout Grid.Row="0" Spacing="5">
+                        <Label Text="Convoy Settings" FontSize="22" FontAttributes="Bold" HorizontalOptions="Center"/>
+                        <Label Text="Adjust live telemetry rules." FontSize="13" TextColor="Gray" HorizontalOptions="Center"/>
+                    </VerticalStackLayout>
+
+                    <!-- SCROLLABLE CONTENT (Row 1 - The '*' ensures it takes exactly the remaining space) -->
+                    <ScrollView Grid.Row="1" VerticalScrollBarVisibility="Always">
+                        <VerticalStackLayout Spacing="15" Padding="0,5,15,5">
+
+                            <StackLayout Spacing="5">
+                                <Grid ColumnDefinitions="*, Auto">
+                                    <Label Text="Max Lag Distance" FontAttributes="Bold" VerticalOptions="Center"/>
+                                    <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="DodgerBlue" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="11" TextColor="Gray"/>
+                                <Slider x:Name="LagSlider" Minimum="100" Maximum="2000" Value="500" ValueChanged="OnLagSliderChanged" MinimumTrackColor="DodgerBlue"/>
+                            </StackLayout>
+
+                            <StackLayout Spacing="5">
+                                <Grid ColumnDefinitions="*, Auto">
+                                    <Label Text="Splinter Warning" FontAttributes="Bold" VerticalOptions="Center"/>
+                                    <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="Orange" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Alerts if the convoy stretches too far from front to back." FontSize="11" TextColor="Gray"/>
+                                <Slider x:Name="SplinterSlider" Minimum="500" Maximum="5000" Value="2000" ValueChanged="OnSplinterSliderChanged" MinimumTrackColor="Orange"/>
+                            </StackLayout>
+
+                            <StackLayout Spacing="5">
+                                <Grid ColumnDefinitions="*, Auto">
+                                    <Label Text="Max Group Size" FontAttributes="Bold" VerticalOptions="Center"/>
+                                    <Label x:Name="SizeValueLabel" Grid.Column="1" Text="15 Riders" TextColor="MediumSeaGreen" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Cap the total number of allowed riders." FontSize="11" TextColor="Gray"/>
+                                <Slider x:Name="SizeSlider" Minimum="2" Maximum="20" Value="15" ValueChanged="OnSizeSliderChanged" MinimumTrackColor="MediumSeaGreen"/>
+                            </StackLayout>
+
+                            <StackLayout Spacing="5">
+                                <Grid ColumnDefinitions="*, Auto">
+                                    <Label Text="Pitstop Reminder" FontAttributes="Bold" VerticalOptions="Center"/>
+                                    <Label x:Name="PitstopValueLabel" Grid.Column="1" Text="100 km" TextColor="DodgerBlue" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Voice reminder for a rest stop (0 to turn off)." FontSize="11" TextColor="Gray"/>
+                                <Slider x:Name="PitstopSlider" Minimum="0" Maximum="300" Value="100" ValueChanged="OnPitstopSliderChanged" MinimumTrackColor="DodgerBlue"/>
+                            </StackLayout>
+
+                            <StackLayout Orientation="Horizontal" Spacing="10" Margin="0,5,0,5">
+                                <Switch x:Name="DynamicRoutingSwitch" OnColor="MediumSeaGreen" IsToggled="True" VerticalOptions="Center"/>
+                                <StackLayout VerticalOptions="Center">
+                                    <Label Text="Dynamic Group Routing" FontAttributes="Bold" FontSize="14"/>
+                                    <Label Text="Sync the Lead's route to the whole group." FontSize="12" TextColor="Gray"/>
+                                </StackLayout>
+                            </StackLayout>
+
+                            <StackLayout Spacing="5">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Min Broadcast Distance" FontAttributes="Bold" FontSize="14"/>
+                                    <Label x:Name="MinUpdateValueLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                                </Grid>
+                                <Label Text="Updates at low speeds." FontSize="11" TextColor="Gray"/>
+                                <Slider x:Name="MinUpdateSlider" Minimum="5" Maximum="50" Value="10" MinimumTrackColor="DodgerBlue" ValueChanged="OnMinUpdateSliderChanged"/>
+                            </StackLayout>
+
+                            <StackLayout Spacing="5">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Max Broadcast Distance" FontAttributes="Bold" FontSize="14"/>
+                                    <Label x:Name="MaxUpdateValueLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                                </Grid>
+                                <Label Text="Expands the update gap at high speeds to save battery." FontSize="11" TextColor="Gray"/>
+                                <Slider x:Name="MaxUpdateSlider" Minimum="50" Maximum="500" Value="100" MinimumTrackColor="DodgerBlue" ValueChanged="OnMaxUpdateSliderChanged"/>
+                            </StackLayout>
+
+                        </VerticalStackLayout>
+                    </ScrollView>
+
+                    <!-- FOOTER BUTTONS (Row 2) -->
+                    <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="15">
                         <Button Grid.Column="0" Text="Cancel" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#333}" TextColor="{AppThemeBinding Light=#333, Dark=White}" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnCloseSettingsClicked"/>
                         <Button Grid.Column="1" Text="Save" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnSaveSettingsClicked"/>
                     </Grid>
-                </StackLayout>
+
+                </Grid>
             </Border>
         </Grid>
 
@@ -422,6 +536,61 @@
                 <ActivityIndicator IsRunning="{Binding Source={x:Reference LoadingOverlay}, Path=IsVisible}" Color="DodgerBlue" WidthRequest="60" HeightRequest="60" />
                 <Label x:Name="LoadingText" Text="Calculating Route..." TextColor="White" FontAttributes="Bold" FontSize="18" HorizontalOptions="Center" />
             </StackLayout>
+        </Grid>
+
+        <Grid x:Name="RideSummaryOverlay" Grid.RowSpan="2" BackgroundColor="#E6000000" IsVisible="False" ZIndex="3000" Padding="20">
+            <Border VerticalOptions="Center" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="25">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="25"/>
+                </Border.StrokeShape>
+
+                <VerticalStackLayout Spacing="20">
+
+                    <StackLayout Spacing="5" HorizontalOptions="Center">
+                        <Label Text="🏁 Ride Complete!" FontSize="26" FontAttributes="Bold" HorizontalOptions="Center" TextColor="MediumSeaGreen"/>
+                        <Label x:Name="SummaryDestLabel" Text="Target Destination" FontSize="16" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
+                    </StackLayout>
+
+                    <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" Margin="0,5"/>
+
+                    <Grid RowDefinitions="Auto, Auto, Auto" ColumnDefinitions="*, *" RowSpacing="20" ColumnSpacing="15">
+
+                        <!-- Distance -->
+                        <VerticalStackLayout Grid.Row="0" Grid.Column="0" HorizontalOptions="Center" Spacing="2">
+                            <Label Text="TOTAL DISTANCE" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
+                            <Label x:Name="SummaryDistLabel" Text="0.0 km" FontSize="22" FontAttributes="Bold" TextColor="DodgerBlue" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
+
+                        <!-- Moving Time -->
+                        <VerticalStackLayout Grid.Row="0" Grid.Column="1" HorizontalOptions="Center" Spacing="2">
+                            <Label Text="MOVING TIME" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
+                            <Label x:Name="SummaryMovingTimeLabel" Text="00:00:00" FontSize="22" FontAttributes="Bold" TextColor="DodgerBlue" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
+
+                        <!-- Avg Speed -->
+                        <VerticalStackLayout Grid.Row="1" Grid.Column="0" HorizontalOptions="Center" Spacing="2">
+                            <Label Text="AVG SPEED" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
+                            <Label x:Name="SummaryAvgSpeedLabel" Text="0.0 km/h" FontSize="22" FontAttributes="Bold" TextColor="MediumPurple" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
+
+                        <!-- Top Speed -->
+                        <VerticalStackLayout Grid.Row="1" Grid.Column="1" HorizontalOptions="Center" Spacing="2">
+                            <Label Text="TOP SPEED" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
+                            <Label x:Name="SummaryTopSpeedLabel" Text="0.0 km/h" FontSize="22" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
+
+                        <!-- Total Time -->
+                        <VerticalStackLayout Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" HorizontalOptions="Center" Spacing="2">
+                            <Label Text="TOTAL ELAPSED TIME (WITH STOPS)" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
+                            <Label x:Name="SummaryTotalTimeLabel" Text="00:00:00" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
+
+                    </Grid>
+
+                    <Button Text="Awesome!" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnCloseRideSummaryClicked" Margin="0,15,0,0"/>
+
+                </VerticalStackLayout>
+            </Border>
         </Grid>
     </Grid>
 </ContentPage>

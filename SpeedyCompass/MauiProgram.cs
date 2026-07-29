@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Maui.Maps.Handlers;
 using SpeedyCompass.Controls;
 using SpeedyCompass.Services;
+using System.Net.Http;
 
 namespace SpeedyCompass
 {
@@ -34,13 +35,21 @@ namespace SpeedyCompass
 
             // 1. Register the Services (Singletons live forever)
             builder.Services.AddSingleton<MsalAuthService>();
+            builder.Services.AddSingleton<RideStateService>();
             builder.Services.AddSingleton<SignalRService>();
 
             // --- NEW: Register HttpClientFactory and your Page ---
             builder.Services.AddHttpClient("CompassBackend", client =>
             {
-                client.BaseAddress = new Uri("https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"); // Centralized URL config
+                client.BaseAddress = new Uri("https://10.0.2.2:7219"); // Centralized URL config
                 client.Timeout = TimeSpan.FromSeconds(30);
+            }).ConfigurePrimaryHttpMessageHandler(() =>
+            {
+                return new HttpClientHandler
+                {
+                    ServerCertificateCustomValidationCallback =
+                                (message, cert, chain, errors) => { return true; }
+                };
             });
 
             // Register OS-Specific Location Tracker
