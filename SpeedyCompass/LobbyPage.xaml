@@ -141,7 +141,7 @@
         <!-- ===================================================================== -->
         <Grid x:Name="MapView" Grid.Row="1" IsVisible="False">
 
-            <controls:CustomMap x:Name="LiveMap" Grid.Row="0" Grid.RowSpan="2" MapClicked="OnMapClicked" IsShowingUser="False" IsTrafficEnabled="True" CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}" />
+            <controls:CustomMap x:Name="LiveMap" Grid.Row="0" Grid.RowSpan="2" MapClicked="OnMapClicked" IsShowingUser="False" CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}" />
 
             <!-- FLOATING MAP CONTROLS -->
             <VerticalStackLayout x:Name="FloatingMapControls" Grid.Row="1" IsVisible="False" HorizontalOptions="End" VerticalOptions="End" Margin="0, 0, 15, 180" Spacing="15" ZIndex="30">
@@ -165,6 +165,7 @@
                 <Frame x:Name="SimSpeedFrame" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="0" CornerRadius="10" IsVisible="False" HasShadow="True" WidthRequest="40" HeightRequest="150" HorizontalOptions="Center">
                     <Slider x:Name="SimSpeedSlider" Minimum="0" Maximum="140" Value="60" Rotation="-90" VerticalOptions="Center" HorizontalOptions="Center" WidthRequest="130" ValueChanged="OnSimSpeedSliderChanged" MinimumTrackColor="DodgerBlue" />
                 </Frame>
+                <Button x:Name="HeadingUpButton" Text="🧭" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnHeadingUpClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
                 <Button x:Name="RecenterMapButton" Text="🎯" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnRecenterMapClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
                 <Button x:Name="MapFollowButton" Text="📍" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="MediumSeaGreen" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnMapFollowClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
                 <Button x:Name="OverviewButton" Text="🗺️" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
@@ -198,10 +199,19 @@
                             <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
                         </Grid.GestureRecognizers>
 
-                        <!-- Metric 1: Speed -->
+                        <!-- Metric 1: Speed & Limit -->
                         <StackLayout Grid.Column="0" HorizontalOptions="Center" VerticalOptions="Center">
                             <Label Text="Speed" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
-                            <Label x:Name="MySpeedLabel" Text="0" FontSize="18" FontAttributes="Bold" TextColor="DodgerBlue" HorizontalOptions="Center"/>
+                            <StackLayout Orientation="Horizontal" Spacing="4" HorizontalOptions="Center">
+                                <Label x:Name="MySpeedLabel" Text="0" FontSize="18" FontAttributes="Bold" TextColor="DodgerBlue" VerticalOptions="Center"/>
+                                <!-- NEW: The Speed Limit Badge -->
+                                <Border x:Name="SpeedLimitBadge" IsVisible="False" BackgroundColor="White" Stroke="Red" StrokeThickness="2" WidthRequest="22" HeightRequest="22" VerticalOptions="Center">
+                                    <Border.StrokeShape>
+                                        <RoundRectangle CornerRadius="4"/>
+                                    </Border.StrokeShape>
+                                    <Label x:Name="SpeedLimitLabel" Text="60" TextColor="Black" FontSize="9" FontAttributes="Bold" HorizontalOptions="Center" VerticalOptions="Center"/>
+                                </Border>
+                            </StackLayout>
                         </StackLayout>
 
                         <!-- Metric 2: Covered -->
@@ -210,12 +220,13 @@
                             <Label x:Name="MyTotalTraveledLabel" Text="0.0 km" FontSize="18" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="Center"/>
                         </StackLayout>
 
-                        <!-- Metric 3: Remaining -->
+                        <!-- Metric 3: Remaining & ETA -->
                         <StackLayout Grid.Column="2" HorizontalOptions="Center" VerticalOptions="Center">
                             <Label Text="Remaining" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
-                            <Label x:Name="MyDistanceLabel" Text="-- km" FontSize="18" FontAttributes="Bold" TextColor="MediumSeaGreen" HorizontalOptions="Center"/>
+                            <Label x:Name="MyDistanceLabel" Text="-- km" FontSize="18" FontAttributes="Bold" TextColor="MediumSeaGreen" HorizontalOptions="Center" Margin="0,0,0,-4"/>
+                            <!-- NEW: The ETA Tracker -->
+                            <Label x:Name="MyEtaLabel" Text="ETA --:--" FontSize="10" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="Center" IsVisible="False"/>
                         </StackLayout>
-
                         <!-- Metric 4: Total Route -->
                         <StackLayout Grid.Column="3" HorizontalOptions="Center" VerticalOptions="Center">
                             <Label Text="Total Dist" FontSize="10" TextColor="Gray" HorizontalOptions="Center" FontAttributes="Bold" TextTransform="Uppercase"/>
@@ -233,10 +244,12 @@
                     </Grid>
 
                     <!-- DRAWER TABS (Removed the "My Ride" tab since it's always at the top now!) -->
-                    <Grid Grid.Row="2" ColumnDefinitions="*, *, *" Margin="10,0,10,10">
+                    <Grid Grid.Row="2" ColumnDefinitions="*, *, *, *" Margin="10,0,10,10">
                         <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Safety" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Convoy Stats" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <Button x:Name="TabAdminBtn" Grid.Column="2" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                        <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Convoy" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                        <!-- NEW: Map Settings Tab -->
+                        <Button x:Name="TabMapSettingsBtn" Grid.Column="2" Text="Map" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                        <Button x:Name="TabAdminBtn" Grid.Column="3" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
                     </Grid>
 
                     <!-- SCROLLABLE CONTENT AREA -->
@@ -360,6 +373,57 @@
                                 <Button x:Name="MeetupPointBtn" Text="📍 Generate Meetup Point" BackgroundColor="DarkViolet" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnGenerateMeetupClicked" />
                                 <Button Text="⚙️ Group Settings" BackgroundColor="DimGray" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
                                 <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
+                            </VerticalStackLayout>
+                            <!-- TAB 4: MAP SETTINGS -->
+                            <VerticalStackLayout x:Name="DrawerMapSettingsTab" IsVisible="False" Spacing="15">
+                                <Label Text="Map &amp; Navigation" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+
+                                <!-- Map Type Selector -->
+                                <StackLayout Spacing="5">
+                                    <Label Text="Map Style" FontAttributes="Bold" FontSize="14"/>
+                                    <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1E1E1E}" HeightRequest="45">
+                                        <Border.StrokeShape>
+                                            <RoundRectangle CornerRadius="22.5" />
+                                        </Border.StrokeShape>
+                                        <Grid ColumnDefinitions="*,*,*">
+                                            <Button x:Name="MapStyleStreetBtn" Grid.Column="0" Text="Street" Clicked="OnMapStyleClicked" CornerRadius="20" BackgroundColor="DodgerBlue" TextColor="White" FontSize="12" FontAttributes="Bold" Margin="2"/>
+                                            <Button x:Name="MapStyleSatBtn" Grid.Column="1" Text="Satellite" Clicked="OnMapStyleClicked" CornerRadius="20" BackgroundColor="Transparent" TextColor="Gray" FontSize="12" FontAttributes="Bold" Margin="2"/>
+                                            <Button x:Name="MapStyleTerBtn" Grid.Column="2" Text="Hybrid" Clicked="OnMapStyleClicked" CornerRadius="20" BackgroundColor="Transparent" TextColor="Gray" FontSize="12" FontAttributes="Bold" Margin="2"/>
+                                        </Grid>
+                                    </Border>
+                                </StackLayout>
+
+                                <!-- Layers & Overlays -->
+                                <StackLayout Spacing="10" Margin="0,10,0,0">
+                                    <Label Text="Layers &amp; Context" FontAttributes="Bold" FontSize="14"/>
+                                    <Grid ColumnDefinitions="*, Auto">
+                                        <Label Text="Live Traffic Layer" VerticalOptions="Center"/>
+                                        <Switch x:Name="TrafficSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnMapSettingChanged" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*, Auto">
+                                        <Label Text="Speed Limit Alerts" VerticalOptions="Center"/>
+                                        <Switch x:Name="SpeedLimitSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnMapSettingChanged" />
+                                    </Grid>
+                                </StackLayout>
+
+                                <!-- Camera Physics -->
+                                <StackLayout Spacing="10" Margin="0,10,0,0">
+                                    <Label Text="Camera Physics" FontAttributes="Bold" FontSize="14"/>
+                                    <Grid ColumnDefinitions="*, Auto">
+                                        <StackLayout Grid.Column="0" VerticalOptions="Center">
+                                            <Label Text="Speed-Based Auto-Zoom" />
+                                            <Label Text="Zooms out on highways, in on streets." FontSize="11" TextColor="Gray"/>
+                                        </StackLayout>
+                                        <Switch x:Name="AutoZoomSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnMapSettingChanged" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*, Auto">
+                                        <StackLayout Grid.Column="0" VerticalOptions="Center">
+                                            <Label Text="Auto-Tilt (3D Horizon)" />
+                                            <Label Text="Tilts map at high speeds for visibility." FontSize="11" TextColor="Gray"/>
+                                        </StackLayout>
+                                        <Switch x:Name="AutoTiltSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnMapSettingChanged" />
+                                    </Grid>
+                                </StackLayout>
                             </VerticalStackLayout>
                         </Grid>
                     </ScrollView>

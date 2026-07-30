@@ -200,6 +200,8 @@ public class CompassHub : Hub
         await _state.GroupMembers.InsertOneAsync(member);
 
         await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
+
+        await Clients.Caller.SendAsync("RosterUpdated", await GetGroupRoster(groupName));
     }
 
     public async Task JoinGroup(string groupName, string username, string googleId, string pinCode = null)

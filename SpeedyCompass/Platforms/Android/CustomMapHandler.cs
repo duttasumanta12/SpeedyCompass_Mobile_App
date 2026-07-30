@@ -219,6 +219,12 @@ namespace SpeedyCompass.Platforms.Android
                 {
                     // Smoothly teleport marker to new GPS coordinate
                     entry.Marker.Position = new LatLng(pin.Location.Latitude, pin.Location.Longitude);
+
+                    // THE FIX: Move the camera even if we are driving perfectly straight!
+                    if (pin.Username == "You" && pin.IsAutoCentering)
+                    {
+                        UpdateCameraBearing(pin);
+                    }
                 }
                 else if (e.PropertyName == nameof(RiderPin.Speed))
                 {
@@ -231,7 +237,7 @@ namespace SpeedyCompass.Platforms.Android
                         entry.Marker.ShowInfoWindow();
                     }
                 }
-                else if(e.PropertyName == nameof(RiderPin.Heading))
+                else if (e.PropertyName == nameof(RiderPin.Heading))
                 {
                     // 1. Move the marker
                     entry.Marker.Position = new LatLng(pin.Location.Latitude, pin.Location.Longitude);
@@ -273,12 +279,56 @@ namespace SpeedyCompass.Platforms.Android
         {
             if (Map == null) return;
 
-            // Build a new camera position
+            int screenHeight = Context.Resources.DisplayMetrics.HeightPixels;
+            float density = Context.Resources.DisplayMetrics.Density;
+
+            // Pad the top by 40% of the screen height (pushes the center down)
+            int topPadding = (int)(screenHeight * 0.40);
+
+            // Pad the bottom by 180dp (protects the pin from hiding behind the Action Drawer)
+            int bottomPadding = (int)(180 * density);
+
+            // Apply the padding to the native Android map engine
+            Map.SetPadding(0, topPadding, 0, bottomPadding);
+
+            // 1. Read the live preferences directly from the device storage
+            bool autoTilt = Preferences.Default.Get("Map_AutoTilt", true);
+            bool autoZoom = Preferences.Default.Get("Map_AutoZoom", true);
+            bool headingUp = Preferences.Default.Get("Map_HeadingUp", false);
+
+            // 2. Extract speed number from the UI string (e.g. "120 km/h" -> 120)
+            double speedKmh = 0;
+            if (!string.IsNullOrEmpty(pin.Speed))
+            {
+                var speedStr = pin.Speed.Replace(" km/h", "").Replace(" mph", "").Trim();
+                double.TryParse(speedStr, out speedKmh);
+            }
+
+            // 3. Dynamic Auto-Zoom (Google Maps uses Zoom Levels ~10 to 21 instead of miles)
+            float targetZoom = Map.CameraPosition.Zoom;
+            if (autoZoom)
+            {
+                if (speedKmh > 100) targetZoom = 16f;       // Highway (Zoomed out to see far ahead)
+                else if (speedKmh > 60) targetZoom = 17f;   // Arterial/City
+                else targetZoom = 18f;                      // Slow/Turning (Zoomed in tight)
+            }
+
+            // 4. Dynamic Auto-Tilt
+            float targetTilt = 0f;
+            if (autoTilt && speedKmh > 30)
+            {
+                targetTilt = 45f; // 3D Horizon view when moving
+            }
+
+            // 5. Dynamic Rotation
+            float targetBearing = headingUp ? (float)pin.Heading : 0f;
+
+            // Build the Native Google Maps Camera Position
             var cameraPosition = new CameraPosition.Builder()
-                .Target(new LatLng(pin.Location.Latitude, pin.Location.Longitude)) // Keep user centered
-                .Bearing((float)pin.Heading)                                       // Rotate the map!
-                .Zoom(Map.CameraPosition.Zoom)                                     // Maintain current zoom level
-                .Tilt(45f)                                                         // Optional: Give it that angled 3D GPS look
+                .Target(new LatLng(pin.Location.Latitude, pin.Location.Longitude))
+                .Bearing(targetBearing)
+                .Zoom(targetZoom)
+                .Tilt(targetTilt)
                 .Build();
 
             // Use AnimateCamera for a smooth transition (MoveCamera is instant/choppy)

@@ -53,6 +53,30 @@ public class PlaceResult
     [JsonPropertyName("rating")] public double Rating { get; set; }
 }
 public class DisplayName { [JsonPropertyName("text")] public string Text { get; set; } }
+public class SpeedLimitsResponse
+{
+    [JsonPropertyName("speedLimits")]
+    public List<SpeedLimitData> SpeedLimits { get; set; }
+}
+
+public class SpeedLimitData
+{
+    [JsonPropertyName("speedLimit")]
+    public int SpeedLimit { get; set; }
+
+    [JsonPropertyName("units")]
+    public string Units { get; set; }
+}
+public class SearchTextRequest
+{
+    [JsonPropertyName("textQuery")] public string TextQuery { get; set; }
+    [JsonPropertyName("searchAlongRouteParameters")] public SearchAlongRouteParameters SearchAlongRouteParameters { get; set; }
+}
+
+public class SearchAlongRouteParameters
+{
+    [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; }
+}
 
 // MVVM Model for the Map Pins
 public class MapPinViewModel : System.ComponentModel.INotifyPropertyChanged
@@ -136,6 +160,9 @@ public partial class LobbyPage : ContentPage
     private ILocationTracker? _locationTracker;
 
     public string ConvoyPin { get; set; } = "------";
+    private bool _isHeadingUp = false;
+    private DateTime _lastSpeedLimitFetch = DateTime.MinValue;
+    private int _currentSpeedLimit = 0;
 
     public LobbyPage(SignalRService signalRService,  GroupDetailsDto groupDetails)
     {
@@ -194,6 +221,7 @@ public partial class LobbyPage : ContentPage
             _hwButtonService.PttPressed += OnHardwarePttPressed;
             _hwButtonService.PttReleased += OnHardwarePttReleased;
         }
+        LoadLocalMapSettings();
     }
 
     protected override async void OnAppearing()
@@ -330,6 +358,13 @@ public partial class LobbyPage : ContentPage
             Riders = updatedRiders;
             RidersCollectionView.ItemsSource = Riders;
 
+            // 3. Lock down UI based on admin status
+            AdminSearchUI.IsVisible = _amIAdmin;
+            AdminInstructionBanner.IsVisible = _amIAdmin;
+            AdminSettingsBtn.IsVisible = _amIAdmin;
+            AdminPinCard.IsVisible = _amIAdmin;
+            TabAdminBtn.IsVisible = _amIAdmin;
+
             _locationTracker?.UpdateRiderCount(Riders.Count(r => r.IsOnline));
         });
     }
@@ -355,7 +390,77 @@ public partial class LobbyPage : ContentPage
             await TrimRouteVisuals(e.Location);
             double speedKmh = e.SpeedMph * 1.60934; // Convert mph back to kmh for the telemetry engine
             await EvaluateEdgeTelemetry(e.Location, speedKmh);
+            // NEW: Fire the Speed Limit Engine and Camera Physics
+            _ = EvaluateSpeedLimitAsync(e.Location, speedKmh);
         }
+    }
+    private async Task EvaluateSpeedLimitAsync(Location loc, double currentSpeedKmh)
+    {
+        if (!Preferences.Default.Get("Map_SpeedLimits", true))
+        {
+            MainThread.BeginInvokeOnMainThread(() => SpeedLimitBadge.IsVisible = false);
+            return;
+        }
+
+        // To protect billing and avoid rate limits, we fetch the limit every 5 minutes.
+        // In a production app, you might also trigger this via a background Geofence when the road name changes!
+        if ((DateTime.Now - _lastSpeedLimitFetch).TotalMinutes > 5)
+        {
+            try
+            {
+                // Reset limit while fetching to prevent showing stale highway limits on small dirt roads
+                _currentSpeedLimit = 0;
+
+                string latStr = loc.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                string lngStr = loc.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+                // The Roads API allows you to pass raw coordinates directly to the 'path' parameter
+                var requestUri = $"https://roads.googleapis.com/v1/speedLimits?path={latStr},{lngStr}&units=KPH&key={_googleApiKey}";
+
+                var response = await _httpClient.GetAsync(requestUri);
+                if (response.IsSuccessStatusCode)
+                {
+                    var responseBody = await response.Content.ReadAsStringAsync();
+                    var result = JsonSerializer.Deserialize<SpeedLimitsResponse>(responseBody);
+
+                    if (result?.SpeedLimits != null && result.SpeedLimits.Any())
+                    {
+                        int fetchedLimit = result.SpeedLimits.First().SpeedLimit;
+                        if (fetchedLimit > 0)
+                        {
+                            _currentSpeedLimit = fetchedLimit;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Speed Limit API Error: {ex.Message}");
+            }
+
+            _lastSpeedLimitFetch = DateTime.Now;
+        }
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (_currentSpeedLimit > 0)
+            {
+                SpeedLimitBadge.IsVisible = true;
+                SpeedLimitLabel.Text = _currentSpeedLimit.ToString();
+
+                // 15% tolerance rule for red text
+                if (currentSpeedKmh > _currentSpeedLimit * 1.15)
+                {
+                    MySpeedLabel.TextColor = Colors.Red;
+                    SpeedLimitBadge.Stroke = Colors.Red;
+                }
+                else
+                {
+                    MySpeedLabel.TextColor = Colors.DodgerBlue;
+                    SpeedLimitBadge.Stroke = Colors.Gray;
+                }
+            }
+        });
     }
 
     private async Task TrimRouteVisuals(Location currentLocation)
@@ -464,6 +569,15 @@ public partial class LobbyPage : ContentPage
 
                 // Total Route will now remain highly stable
                 MyTotalRouteLabel.Text = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km";
+
+                // NEW: Dynamic ETA Math
+                double currentSpeed = (currentLocation?.Speed ?? 0) * 3.6;
+                double movingAvg = Math.Max(currentSpeed, 40); // Assume min 40km/h average if stuck in traffic
+                double hoursLeft = distLeft / movingAvg;
+                DateTime eta = DateTime.Now.AddHours(hoursLeft);
+
+                MyEtaLabel.Text = $"ETA {eta:HH:mm}";
+                MyEtaLabel.IsVisible = true;
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Stats Update Error: {ex.Message}"); }
         });
@@ -938,10 +1052,12 @@ public partial class LobbyPage : ContentPage
     {
         TabActionsBtn.BackgroundColor = Colors.Transparent; TabActionsBtn.TextColor = Colors.Gray;
         TabStatsBtn.BackgroundColor = Colors.Transparent; TabStatsBtn.TextColor = Colors.Gray;
+        TabMapSettingsBtn.BackgroundColor = Colors.Transparent; TabMapSettingsBtn.TextColor = Colors.Gray;
         TabAdminBtn.BackgroundColor = Colors.Transparent; TabAdminBtn.TextColor = Colors.Gray;
 
         DrawerActionsTab.IsVisible = false;
         DrawerStatsTab.IsVisible = false;
+        DrawerMapSettingsTab.IsVisible = false;
         DrawerAdminTab.IsVisible = false;
 
         if (sender == TabActionsBtn && groupDetails.CurrentState > GroupState.DestinationSet) 
@@ -952,7 +1068,7 @@ public partial class LobbyPage : ContentPage
         }
         else if (sender == TabStatsBtn && groupDetails.CurrentState > GroupState.DestinationSet) { TabStatsBtn.BackgroundColor = Colors.DodgerBlue; TabStatsBtn.TextColor = Colors.White; DrawerStatsTab.IsVisible = true; _ = RefreshTelemetryData(); }
         else if (sender == TabAdminBtn && groupDetails.CurrentState > GroupState.DestinationSet) { TabAdminBtn.BackgroundColor = Colors.DodgerBlue; TabAdminBtn.TextColor = Colors.White; DrawerAdminTab.IsVisible = true; }
-
+        else if (sender == TabMapSettingsBtn) { TabMapSettingsBtn.BackgroundColor = Colors.DodgerBlue; TabMapSettingsBtn.TextColor = Colors.White; DrawerMapSettingsTab.IsVisible = true; }
         if (ActionDrawer.TranslationY >= (_drawerFullHeight - _drawerPeekHeight) - 10)
             ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
     }
@@ -1105,7 +1221,9 @@ public partial class LobbyPage : ContentPage
     {
         _rideCache.ActiveDestination = new Location(destLat, destLng);
         _rideCache.ActiveDestinationName = destName;
+        _isSelectingLocation = true;
         DestinationSearchBar.Text = destName;
+        _isSelectingLocation = false;
 
         _rideCache.ResetTelemetryState();
 
@@ -1388,7 +1506,7 @@ public partial class LobbyPage : ContentPage
     }
     private async void OnConfirmDestinationClicked(object sender, EventArgs e)
     {
-        if (_pendingDestination == null || _lastKnownLocation == null) return;
+        if (_pendingDestination == null || _lastKnownLocation == null || string.IsNullOrEmpty(DestinationSearchBar.Text)) return;
 
         ConfirmDestButton.IsVisible = false;
         ResetDestButton.IsVisible = true;
@@ -1537,6 +1655,7 @@ public partial class LobbyPage : ContentPage
         if (confirm)
         {
             _isLeavingGroupPermanently = true;
+            _rideCache.HardResetAll();
             await _signalRService.LeaveGroup(CurrentGoogleId);
             await Navigation.PopAsync();
         }
@@ -1913,9 +2032,14 @@ public partial class LobbyPage : ContentPage
 
         if (string.IsNullOrWhiteSpace(query) || query.Length < 3)
         {
-            MainThread.BeginInvokeOnMainThread(() => SuggestionsFrame.IsVisible = false);
+            MainThread.BeginInvokeOnMainThread(() => {
+                SuggestionsFrame.IsVisible = false;
+                AdminInstructionBanner.IsVisible = true;
+            });
             return;
         }
+
+        AdminInstructionBanner.IsVisible = false;
 
         _debounceCts?.Cancel();
         _debounceCts = new CancellationTokenSource();
@@ -2258,6 +2382,9 @@ public partial class LobbyPage : ContentPage
             await TrimRouteVisuals(point);
             await EvaluateEdgeTelemetry(point, speedKmh);
 
+            // NEW: Fire the Speed Limit Engine and Camera Physics
+            _ = EvaluateSpeedLimitAsync(point, speedKmh);
+
             await Task.Delay(delayMs);
             currentIndex++;
         }
@@ -2287,7 +2414,7 @@ public partial class LobbyPage : ContentPage
     }
     private List<Pin> _temporaryPoiPins = new();
     // =====================================================================
-    // --- UPDATED: CONTEXTUAL POI INJECTION ---
+    // --- UPDATED: SEARCH-ALONG-ROUTE POI INJECTION ---
     // =====================================================================
     private async Task ShowPoisTemporarilyAsync(List<string> placeTypes, string emoji)
     {
@@ -2296,43 +2423,74 @@ public partial class LobbyPage : ContentPage
 
         try
         {
-            var requestBody = new NearbySearchRequest
-            {
-                IncludedTypes = placeTypes,
-                MaxResultCount = 10,
-                LocationRestriction = new LocationRestriction
-                {
-                    Circle = new SearchCircle
-                    {
-                        Center = new RouteLatLng { Latitude = currentLoc.Latitude, Longitude = currentLoc.Longitude },
-                        Radius = 10000.0 // 10,000 meters = 10 km radius (+- 10km)
-                    }
-                }
-            };
+            var activePoints = _rideCache?.CurrentRoutePoints;
+            bool hasActiveRoute = activePoints != null && activePoints.Count > 2;
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:searchNearby");
+            HttpRequestMessage request;
+
+            // 1. DYNAMIC API ROUTING
+            if (hasActiveRoute)
+            {
+                // Convert list (e.g., ["gas_station"]) to natural text ("gas station") for the new API
+                string textQuery = string.Join(" OR ", placeTypes.Select(t => t.Replace("_", " ")));
+
+                // Grab up to the next 500 GPS nodes (roughly 50-80 km of upcoming curves)
+                var upcomingPath = activePoints.Take(500).ToList();
+                string encodedPath = EncodeLocationList(upcomingPath);
+
+                var requestBody = new SearchTextRequest
+                {
+                    TextQuery = textQuery,
+                    SearchAlongRouteParameters = new SearchAlongRouteParameters
+                    {
+                        Polyline = new RoutePolyline { EncodedPolyline = encodedPath }
+                    }
+                };
+
+                request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:searchText");
+                request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
+            }
+            else
+            {
+                // Fallback: If no route is active, search in a 10km circle
+                var requestBody = new NearbySearchRequest
+                {
+                    IncludedTypes = placeTypes,
+                    MaxResultCount = 10,
+                    LocationRestriction = new LocationRestriction
+                    {
+                        Circle = new SearchCircle
+                        {
+                            Center = new RouteLatLng { Latitude = currentLoc.Latitude, Longitude = currentLoc.Longitude },
+                            Radius = 10000.0
+                        }
+                    }
+                };
+
+                request = new HttpRequestMessage(HttpMethod.Post, "https://places.googleapis.com/v1/places:searchNearby");
+                request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
+            }
+
+            // 2. EXECUTE THE CALL
             request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
             request.Headers.Add("X-Goog-FieldMask", "places.displayName,places.location,places.rating");
-            request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
 
             var response = await _httpClient.SendAsync(request);
             if (response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync();
+
+                // Both APIs thankfully return the identical '{ places: [...] }' schema!
                 var result = JsonSerializer.Deserialize<NearbySearchResponse>(responseBody);
 
                 if (result?.Places != null)
                 {
                     MainThread.BeginInvokeOnMainThread(() =>
                     {
-                        // 1. Clear any existing temporary pins
-                        foreach (var oldPin in _temporaryPoiPins)
-                        {
-                            LiveMap.Pins.Remove(oldPin);
-                        }
+                        // 3. Clear existing & drop new pins
+                        foreach (var oldPin in _temporaryPoiPins) LiveMap.Pins.Remove(oldPin);
                         _temporaryPoiPins.Clear();
 
-                        // 2. Add the new ones
                         foreach (var place in result.Places)
                         {
                             string ratingText = place.Rating > 0 ? $"{place.Rating} ⭐" : "No reviews";
@@ -2348,11 +2506,10 @@ public partial class LobbyPage : ContentPage
                             LiveMap.Pins.Add(pin);
                         }
 
-                        // 3. Show the manual "Clear POIs" button
                         ClearPoisBtn.IsVisible = true;
                     });
 
-                    // 4. Automatically wipe them off the map after 10 minutes
+                    // 4. Auto-clean after 10 mins
                     _ = Task.Run(async () =>
                     {
                         await Task.Delay(TimeSpan.FromMinutes(10));
@@ -2423,5 +2580,100 @@ public partial class LobbyPage : ContentPage
         // The name parameter uniquely identifies the animation.
         // If a new ping comes in, starting a new animation with the same name automatically safely kills the old one!
         animation.Commit(this, $"PinAnim_{pin.Username}", length: durationMs, easing: Easing.Linear);
+    }
+    // =====================================================================
+    // --- NEW: LOCAL MAP SETTINGS MANAGEMENT ---
+    // =====================================================================
+    private void LoadLocalMapSettings()
+    {
+        TrafficSwitch.IsToggled = Preferences.Default.Get("Map_Traffic", true);
+        SpeedLimitSwitch.IsToggled = Preferences.Default.Get("Map_SpeedLimits", true);
+        AutoZoomSwitch.IsToggled = Preferences.Default.Get("Map_AutoZoom", true);
+        AutoTiltSwitch.IsToggled = Preferences.Default.Get("Map_AutoTilt", true);
+
+        LiveMap.IsTrafficEnabled = TrafficSwitch.IsToggled;
+
+        int mapType = Preferences.Default.Get("Map_Style", (int)Microsoft.Maui.Maps.MapType.Street);
+        LiveMap.MapType = (Microsoft.Maui.Maps.MapType)mapType;
+        UpdateMapStyleButtons(mapType);
+
+        // THE FIX: Load the Compass button state!
+        _isHeadingUp = Preferences.Default.Get("Map_HeadingUp", false);
+        HeadingUpButton.BackgroundColor = _isHeadingUp ? Colors.DodgerBlue : (Application.Current.RequestedTheme == AppTheme.Dark ? Color.FromArgb("#333333") : Colors.White);
+        HeadingUpButton.TextColor = _isHeadingUp ? Colors.White : Colors.DodgerBlue;
+    }
+    private void OnMapSettingChanged(object sender, ToggledEventArgs e)
+    {
+        Preferences.Default.Set("Map_Traffic", TrafficSwitch.IsToggled);
+        Preferences.Default.Set("Map_SpeedLimits", SpeedLimitSwitch.IsToggled);
+        Preferences.Default.Set("Map_AutoZoom", AutoZoomSwitch.IsToggled);
+        Preferences.Default.Set("Map_AutoTilt", AutoTiltSwitch.IsToggled);
+
+        LiveMap.IsTrafficEnabled = TrafficSwitch.IsToggled;
+    }
+    private void OnMapStyleClicked(object sender, EventArgs e)
+    {
+        int mapType = (int)MapType.Street;
+        if (sender == MapStyleSatBtn) mapType = (int)MapType.Satellite;
+        if (sender == MapStyleTerBtn) mapType = (int)MapType.Hybrid; // Excellent for Moto trips!
+
+        LiveMap.MapType = (MapType)mapType;
+        Preferences.Default.Set("Map_Style", mapType);
+        UpdateMapStyleButtons(mapType);
+    }
+    private void UpdateMapStyleButtons(int activeType)
+    {
+        MapStyleStreetBtn.BackgroundColor = activeType == (int)MapType.Street ? Colors.DodgerBlue : Colors.Transparent;
+        MapStyleStreetBtn.TextColor = activeType == (int)MapType.Street ? Colors.White : Colors.Gray;
+        MapStyleSatBtn.BackgroundColor = activeType == (int)MapType.Satellite ? Colors.DodgerBlue : Colors.Transparent;
+        MapStyleSatBtn.TextColor = activeType == (int)MapType.Satellite ? Colors.White : Colors.Gray;
+        MapStyleTerBtn.BackgroundColor = activeType == (int)MapType.Hybrid ? Colors.DodgerBlue : Colors.Transparent;
+        MapStyleTerBtn.TextColor = activeType == (int)MapType.Hybrid ? Colors.White : Colors.Gray;
+    }
+    private void OnHeadingUpClicked(object sender, EventArgs e)
+    {
+        _isHeadingUp = !_isHeadingUp;
+
+        // THE FIX: Save it so the Android Handler can read it instantly
+        Preferences.Default.Set("Map_HeadingUp", _isHeadingUp);
+
+        HeadingUpButton.BackgroundColor = _isHeadingUp ? Colors.DodgerBlue : (Application.Current.RequestedTheme == AppTheme.Dark ? Color.FromArgb("#333333") : Colors.White);
+        HeadingUpButton.TextColor = _isHeadingUp ? Colors.White : Colors.DodgerBlue;
+
+        // Re-trigger the pin heading event to force the camera to rotate immediately
+        if (_myPinVm != null)
+        {
+            _myPinVm.Heading = _myPinVm.Heading;
+        }
+    }
+    // =====================================================================
+    // --- NEW: POLYLINE ENCODER FOR SEARCH-ALONG-ROUTE ---
+    // =====================================================================
+    private string EncodeLocationList(List<Location> points)
+    {
+        var str = new System.Text.StringBuilder();
+        int prevLat = 0, prevLng = 0;
+        foreach (var point in points)
+        {
+            int lat = (int)Math.Round(point.Latitude * 1e5);
+            int lng = (int)Math.Round(point.Longitude * 1e5);
+            EncodeDifference(str, lat - prevLat);
+            EncodeDifference(str, lng - prevLng);
+            prevLat = lat;
+            prevLng = lng;
+        }
+        return str.ToString();
+    }
+
+    private void EncodeDifference(System.Text.StringBuilder str, int diff)
+    {
+        int shifted = diff << 1;
+        if (diff < 0) shifted = ~shifted;
+        while (shifted >= 0x20)
+        {
+            str.Append((char)((0x20 | (shifted & 0x1f)) + 63));
+            shifted >>= 5;
+        }
+        str.Append((char)(shifted + 63));
     }
 }
