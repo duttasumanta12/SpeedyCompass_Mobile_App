@@ -126,7 +126,6 @@ public partial class MainPage : ContentPage
             HideLoading();
         }
     }
-
     private async Task ProcessLoginFlow(string googleId)
     {
         await ConnectSignalR(3);
@@ -477,6 +476,40 @@ public partial class MainPage : ContentPage
                 await _signalRService.StopAsync();
                 await LoadGroupsAsync();
             }
+        }
+    }
+    private async void OnLogoutClicked(object sender, EventArgs e)
+    {
+        bool confirm = await DisplayAlert("Sign Out", "Are you sure you want to log out?", "Yes", "Cancel");
+        if (!confirm) return;
+
+        ShowLoading("Signing out...");
+        try
+        {
+
+            await _authService.LogoutAsync();
+           
+            // 2. Wipe Local Device Storage (so silent login fails next time)
+            Preferences.Default.Remove("GoogleId");
+            Preferences.Default.Remove("username");
+            Preferences.Default.Remove("EmergencyContact");
+            Preferences.Default.Remove("VehicleNumber");
+            Preferences.Default.Remove("BloodGroup");
+            Preferences.Default.Remove("HasConsented");
+
+            // 3. Clear UI State
+            AvailableGroups.Clear();
+            ProfileModalOverlay.IsVisible = false;
+            DashboardView.IsVisible = false;
+            LoginView.IsVisible = true;
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Error", $"Logout Failed: {ex.Message}", "OK");
+        }
+        finally
+        {
+            HideLoading();
         }
     }
 

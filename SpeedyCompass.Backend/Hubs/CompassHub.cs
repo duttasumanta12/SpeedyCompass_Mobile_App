@@ -542,7 +542,8 @@ public class CompassHub : Hub
                 LeadRiderGoogleId = session.Settings.LeadRiderGoogleId,
                 // --- NEW ---
                 MinUpdateDistanceMeters = session.Settings.MinUpdateDistanceMeters,
-                MaxUpdateDistanceMeters = session.Settings.MaxUpdateDistanceMeters
+                MaxUpdateDistanceMeters = session.Settings.MaxUpdateDistanceMeters,
+                GroupName = session.GroupName
             };
         }
         return null;

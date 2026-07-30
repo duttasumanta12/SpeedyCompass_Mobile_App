@@ -235,6 +235,10 @@ public partial class LobbyPage : ContentPage
 
             if (groupDetails?.Settings != null)
             {
+                if(_rideCache.CurrentSettings.GroupName != groupDetails.Settings.GroupName)
+                {
+                    _rideCache.HardResetAll();
+                }
                 _rideCache.CurrentSettings = groupDetails.Settings;
             }
 
