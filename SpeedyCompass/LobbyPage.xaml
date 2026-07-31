@@ -164,6 +164,7 @@
                 <!-- NEW: SIMULATION SPEED SLIDER (Hidden by default, enabled by C# #if DEBUG) -->
                 <Frame x:Name="SimSpeedFrame" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="0" CornerRadius="10" IsVisible="False" HasShadow="True" WidthRequest="40" HeightRequest="150" HorizontalOptions="Center">
                     <Slider x:Name="SimSpeedSlider" Minimum="0" Maximum="140" Value="60" Rotation="-90" VerticalOptions="Center" HorizontalOptions="Center" WidthRequest="130" ValueChanged="OnSimSpeedSliderChanged" MinimumTrackColor="DodgerBlue" />
+                    <Button Text="Force Reroute" BackgroundColor="DarkRed" TextColor="White" Clicked="OnForceRerouteClicked" />
                 </Frame>
                 <Button x:Name="HeadingUpButton" Text="🧭" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnHeadingUpClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
                 <Button x:Name="RecenterMapButton" Text="🎯" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnRecenterMapClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
@@ -533,7 +534,7 @@
                                     <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="DodgerBlue" FontAttributes="Bold"/>
                                 </Grid>
                                 <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="11" TextColor="Gray"/>
-                                <Slider x:Name="LagSlider" Minimum="100" Maximum="2000" Value="500" ValueChanged="OnLagSliderChanged" MinimumTrackColor="DodgerBlue"/>
+                                <Slider x:Name="LagSlider" Minimum="0" Maximum="5000" Value="500" ValueChanged="OnLagSliderChanged" MinimumTrackColor="DodgerBlue"/>
                             </StackLayout>
 
                             <StackLayout Spacing="5">
@@ -542,7 +543,7 @@
                                     <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="Orange" FontAttributes="Bold"/>
                                 </Grid>
                                 <Label Text="Alerts if the convoy stretches too far from front to back." FontSize="11" TextColor="Gray"/>
-                                <Slider x:Name="SplinterSlider" Minimum="500" Maximum="5000" Value="2000" ValueChanged="OnSplinterSliderChanged" MinimumTrackColor="Orange"/>
+                                <Slider x:Name="SplinterSlider" Minimum="0" Maximum="10000" Value="2000" ValueChanged="OnSplinterSliderChanged" MinimumTrackColor="Orange"/>
                             </StackLayout>
 
                             <StackLayout Spacing="5">

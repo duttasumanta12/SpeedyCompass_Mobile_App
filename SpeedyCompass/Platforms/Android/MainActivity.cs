@@ -93,7 +93,7 @@ public class MainActivity : MauiAppCompatActivity
         // ONLY shrink to PiP if we are actively navigating a route!
         if (IsInNavigationMode)
         {
-            EnterPipMode();
+            //EnterPipMode();
         }
     }
 

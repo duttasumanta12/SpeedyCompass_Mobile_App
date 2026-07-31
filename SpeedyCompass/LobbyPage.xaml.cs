@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Maui.Controls.Maps;
 using Microsoft.Maui.Maps;
 using SpeedyCompass.Controls;
+using SpeedyCompass.Engines;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared;
@@ -22,114 +23,8 @@ using Easing = Microsoft.Maui.Easing;
 #endif
 
 namespace SpeedyCompass;
-
-// Google Routes API Models
-public class RoutesRequest
-{
-    [JsonPropertyName("origin")] public RouteWaypoint Origin { get; set; }
-    [JsonPropertyName("destination")] public RouteWaypoint Destination { get; set; }
-    [JsonPropertyName("intermediates")] public List<RouteWaypoint> Intermediates { get; set; }
-    [JsonPropertyName("travelMode")] public string TravelMode { get; set; } = "DRIVE";
-    // ==========================================
-    // THE FIX: Force the API to return English
-    // ==========================================
-    [JsonPropertyName("languageCode")] public string LanguageCode { get; set; } = "en-US";
-}
-public class RouteWaypoint { [JsonPropertyName("location")] public RouteLocation Location { get; set; } }
-public class RouteLocation { [JsonPropertyName("latLng")] public RouteLatLng LatLng { get; set; } }
-public class RouteLatLng { [JsonPropertyName("latitude")] public double Latitude { get; set; } [JsonPropertyName("longitude")] public double Longitude { get; set; } }
-public class RoutesResponse { [JsonPropertyName("routes")] public List<RouteData> Routes { get; set; } }
-public class RouteData
-{
-    [JsonPropertyName("distanceMeters")] public int DistanceMeters { get; set; }
-    [JsonPropertyName("duration")] public string Duration { get; set; }
-    [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; }
-    // NEW: Add Legs to get the turn-by-turn steps
-    [JsonPropertyName("legs")] public List<RouteLeg> Legs { get; set; }
-}
-public class RouteLeg { [JsonPropertyName("steps")] public List<RouteStepApi> Steps { get; set; } }
-public class RoutePolyline { [JsonPropertyName("encodedPolyline")] public string EncodedPolyline { get; set; } }
-public class NearbySearchRequest
-{
-    [JsonPropertyName("includedTypes")] public List<string> IncludedTypes { get; set; }
-    [JsonPropertyName("maxResultCount")] public int MaxResultCount { get; set; }
-    [JsonPropertyName("locationRestriction")] public LocationRestriction LocationRestriction { get; set; }
-}
-public class LocationRestriction { [JsonPropertyName("circle")] public SearchCircle Circle { get; set; } }
-public class SearchCircle { [JsonPropertyName("center")] public RouteLatLng Center { get; set; } [JsonPropertyName("radius")] public double Radius { get; set; } }
-public class NearbySearchResponse { [JsonPropertyName("places")] public List<PlaceResult> Places { get; set; } }
-public class PlaceResult
-{
-    [JsonPropertyName("displayName")] public DisplayName DisplayName { get; set; }
-    [JsonPropertyName("location")] public RouteLatLng Location { get; set; }
-    [JsonPropertyName("rating")] public double Rating { get; set; }
-}
-public class RouteStepApi
-{
-    [JsonPropertyName("startLocation")] public RouteLocation StartLocation { get; set; }
-    [JsonPropertyName("navigationInstruction")] public RouteNavigationInstruction NavigationInstruction { get; set; }
-}
-public class RouteNavigationInstruction { [JsonPropertyName("instructions")] public string Instructions { get; set; } }
-public class DisplayName { [JsonPropertyName("text")] public string Text { get; set; } }
-public class SpeedLimitsResponse
-{
-    [JsonPropertyName("speedLimits")]
-    public List<SpeedLimitData> SpeedLimits { get; set; }
-}
-
-public class SpeedLimitData
-{
-    [JsonPropertyName("speedLimit")]
-    public int SpeedLimit { get; set; }
-
-    [JsonPropertyName("units")]
-    public string Units { get; set; }
-}
-public class SearchTextRequest
-{
-    [JsonPropertyName("textQuery")] public string TextQuery { get; set; }
-    [JsonPropertyName("searchAlongRouteParameters")] public SearchAlongRouteParameters SearchAlongRouteParameters { get; set; }
-    [JsonPropertyName("languageCode")] public string LanguageCode { get; set; } = "en-US";
-}
-
-public class SearchAlongRouteParameters
-{
-    [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; }
-}
-
 // MVVM Model for the Map Pins
-public class MapPinViewModel : System.ComponentModel.INotifyPropertyChanged
-{
-    private Location _location;
-    private string _speed;
-    private string _username;
-    private Color _pinColor;
 
-    public bool IsDestination { get; set; } = false;
-
-    public Location Location { get => _location; set { _location = value; OnPropertyChanged(); } }
-    public string Speed { get => _speed; set { _speed = value; OnPropertyChanged(); } }
-    public string Username { get => _username; set { _username = value; OnPropertyChanged(); } }
-    public Color PinColor { get => _pinColor; set { _pinColor = value; OnPropertyChanged(); } }
-
-    public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
-    protected void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string propertyName = null)
-    {
-        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
-    }
-}
-
-public class MapPinTemplateSelector : DataTemplateSelector
-{
-    public DataTemplate RiderTemplate { get; set; }
-    public DataTemplate DestinationTemplate { get; set; }
-
-    protected override DataTemplate OnSelectTemplate(object item, BindableObject container)
-    {
-        if (item is MapPinViewModel vm && vm.IsDestination) return DestinationTemplate;
-        return RiderTemplate;
-    }
-}
 
 public class TabClickedEventArgs : EventArgs { public bool FromNavigationStarted { get; set; } }
 
@@ -150,7 +45,6 @@ public partial class LobbyPage : ContentPage
     public ObservableCollection<Rider> Riders { get; set; } = new();
     public ObservableCollection<RiderPin> MapPins { get; } = new ObservableCollection<RiderPin>();
 
-    private bool _isTracking = false;
     private Location _lastKnownLocation; // Used primarily for UI/Map snapping
     private RiderPin _myPinVm;
     private Location _pendingDestination;
@@ -160,7 +54,6 @@ public partial class LobbyPage : ContentPage
     private readonly Random _randomColorGen = new();
 
     private bool _isSimulating = false;
-    private int _autocompleteApiHits = 0;
     private CancellationTokenSource _debounceCts;
 
     private bool _isLeavingGroupPermanently = false;
@@ -180,8 +73,10 @@ public partial class LobbyPage : ContentPage
 
     public string ConvoyPin { get; set; } = "------";
     private bool _isHeadingUp = false;
-    private DateTime _lastSpeedLimitFetch = DateTime.MinValue;
-    private int _currentSpeedLimit = 0;
+
+    private readonly IVoiceCopilotEngine _voiceEngine;
+    private readonly IRoutingEngine _routingEngine;
+    private readonly ITelemetryEngine _telemetryEngine;
 
     public LobbyPage(SignalRService signalRService,  GroupDetailsDto groupDetails)
     {
@@ -191,7 +86,11 @@ public partial class LobbyPage : ContentPage
         DeviceDisplay.Current.KeepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
 
         _signalRService = signalRService;
+        _voiceEngine = IPlatformApplication.Current?.Services.GetService<IVoiceCopilotEngine>();
         _rideCache = IPlatformApplication.Current?.Services.GetService<RideStateService>();
+        _routingEngine = IPlatformApplication.Current?.Services.GetService<IRoutingEngine>();
+        _telemetryEngine = IPlatformApplication.Current?.Services.GetService<ITelemetryEngine>();
+
         this.groupDetails = groupDetails;
 
 #if ANDROID
@@ -328,7 +227,6 @@ public partial class LobbyPage : ContentPage
             _hwButtonService.PttReleased -= OnHardwarePttReleased;
         }
 
-        _isTracking = false;
         _isSimulating = false;
         _locationTracker?.StopTracking();
 
@@ -395,16 +293,20 @@ public partial class LobbyPage : ContentPage
     // --- LOCATION PROCESSING & TELEMETRY ---
     private async void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        // 1. SKIP UI UPDATE IF LOCKED
+        if (!_rideCache.RunningInBackground)
         {
-            LocationDisabledOverlay.IsVisible = false;
-            if (_myPinVm != null)
+            MainThread.BeginInvokeOnMainThread(() =>
             {
-                _myPinVm.Location = e.Location;
-                _myPinVm.Speed = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
-                _myPinVm.Heading = e.Heading;
-            }
-        });
+                LocationDisabledOverlay.IsVisible = false;
+                if (_myPinVm != null)
+                {
+                    _myPinVm.Location = e.Location;
+                    _myPinVm.Speed = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
+                    _myPinVm.Heading = e.Heading;
+                }
+            });
+        }
 
         _lastKnownLocation = e.Location;
 
@@ -412,154 +314,130 @@ public partial class LobbyPage : ContentPage
         {
             await TrimRouteVisuals(e.Location);
             double speedKmh = e.SpeedMph * 1.60934; // Convert mph back to kmh for the telemetry engine
-            await EvaluateEdgeTelemetry(e.Location, speedKmh);
+            await _telemetryEngine.EvaluateEdgeTelemetryAsync(e.Location, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
             // NEW: Fire the Speed Limit Engine and Camera Physics
-            _ = EvaluateSpeedLimitAsync(e.Location, speedKmh);
-
-            ProcessVoiceNavigation(e.Location);
-        }
-    }
-    private async Task EvaluateSpeedLimitAsync(Location loc, double currentSpeedKmh)
-    {
-        if (!Preferences.Default.Get("Map_SpeedLimits", true))
-        {
-            MainThread.BeginInvokeOnMainThread(() => SpeedLimitBadge.IsVisible = false);
-            return;
-        }
-
-        // To protect billing and avoid rate limits, we fetch the limit every 5 minutes.
-        // In a production app, you might also trigger this via a background Geofence when the road name changes!
-        if ((DateTime.Now - _lastSpeedLimitFetch).TotalMinutes > 5)
-        {
-            try
+            _ = _telemetryEngine.EvaluateSpeedLimitAsync(e.Location, speedKmh, (limit, isSpeeding) =>
             {
-                // Reset limit while fetching to prevent showing stale highway limits on small dirt roads
-                _currentSpeedLimit = 0;
-
-                string latStr = loc.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                string lngStr = loc.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture);
-
-                // The Roads API allows you to pass raw coordinates directly to the 'path' parameter
-                var requestUri = $"https://roads.googleapis.com/v1/speedLimits?path={latStr},{lngStr}&units=KPH&key={_googleApiKey}";
-
-                var response = await _httpClient.GetAsync(requestUri);
-                if (response.IsSuccessStatusCode)
+                if (!_rideCache.RunningInBackground)
                 {
-                    var responseBody = await response.Content.ReadAsStringAsync();
-                    var result = JsonSerializer.Deserialize<SpeedLimitsResponse>(responseBody);
-
-                    if (result?.SpeedLimits != null && result.SpeedLimits.Any())
+                    MainThread.BeginInvokeOnMainThread(() =>
                     {
-                        int fetchedLimit = result.SpeedLimits.First().SpeedLimit;
-                        if (fetchedLimit > 0)
+                        if (limit == 0)
                         {
-                            _currentSpeedLimit = fetchedLimit;
+                            SpeedLimitBadge.IsVisible = false;
+                            return;
                         }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Speed Limit API Error: {ex.Message}");
-            }
 
-            _lastSpeedLimitFetch = DateTime.Now;
+                        SpeedLimitBadge.IsVisible = true;
+                        SpeedLimitLabel.Text = limit.ToString();
+                        MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
+                        SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
+                    });
+                }
+            });
+
+            _voiceEngine?.ProcessTurnByTurn(e.Location, _activeRouteSteps);
         }
-
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            if (_currentSpeedLimit > 0)
-            {
-                SpeedLimitBadge.IsVisible = true;
-                SpeedLimitLabel.Text = _currentSpeedLimit.ToString();
-
-                // 15% tolerance rule for red text
-                if (currentSpeedKmh > _currentSpeedLimit * 1.15)
-                {
-                    MySpeedLabel.TextColor = Colors.Red;
-                    SpeedLimitBadge.Stroke = Colors.Red;
-                }
-                else
-                {
-                    MySpeedLabel.TextColor = Colors.DodgerBlue;
-                    SpeedLimitBadge.Stroke = Colors.Gray;
-                }
-            }
-        });
     }
 
     private async Task TrimRouteVisuals(Location currentLocation)
     {
         if (_activeRouteLine == null || _rideCache.ActiveDestination == null || _rideCache.CurrentRoutePoints.Count < 2) return;
 
-        // --- Calculate cumulative distance using the CACHE ---
-        if (_rideCache.LastOdometerLocation != null)
-        {
-            double stepDistance = Location.CalculateDistance(_rideCache.LastOdometerLocation, currentLocation, DistanceUnits.Kilometers);
-            if (stepDistance > 0 && stepDistance < 20) // FIX: Increased from 1 to 20 to allow for long straight highway segments!
-            {
-                _rideCache.CumulativeDistanceKm += stepDistance;
-            }
-        }
-        _rideCache.LastOdometerLocation = currentLocation;
+        // Snapshot the route points to safely read them on a background thread
+        var currentRouteSnapshot = _rideCache.CurrentRoutePoints.ToList();
 
-        // --- LOCAL TELEMETRY & PITSTOP TRACKING (Using Cache) ---
-        if (currentLocation?.Speed != null)
+        // 1. OFFLOAD ALL MATH AND TELEMETRY TO BACKGROUND
+        var telemetryData = await Task.Run(() =>
         {
-            double speedKmh = (currentLocation?.Speed ?? 0) * 3.6;
-            if (speedKmh > _rideCache.MaxSpeedKmh) _rideCache.MaxSpeedKmh = speedKmh;
-
-            if (speedKmh < 2) // Stopped
+            // --- Odometer & Speed Telemetry Math ---
+            if (_rideCache.LastOdometerLocation != null)
             {
-                if (_rideCache.LastStopTime == null) _rideCache.LastStopTime = DateTime.Now;
+                double stepDistance = Location.CalculateDistance(_rideCache.LastOdometerLocation, currentLocation, DistanceUnits.Kilometers);
+                if (stepDistance > 0 && stepDistance < 20) _rideCache.CumulativeDistanceKm += stepDistance;
             }
-            else // Moving
+
+            if (currentLocation?.Speed != null)
             {
-                if (_rideCache.LastStopTime != null)
+                double spdKmh = (currentLocation.Speed.Value) * 3.6;
+                if (spdKmh > _rideCache.MaxSpeedKmh) _rideCache.MaxSpeedKmh = spdKmh;
+
+                if (spdKmh < 2) { if (_rideCache.LastStopTime == null) _rideCache.LastStopTime = DateTime.Now; }
+                else if (_rideCache.LastStopTime != null)
                 {
                     _rideCache.TotalStoppedTime += (DateTime.Now - _rideCache.LastStopTime.Value);
                     _rideCache.LastStopTime = null;
                 }
             }
-        }
 
-        double minDistance = double.MaxValue;
-        int closestIndex = 0;
+            // --- THE SLIDING WINDOW (Closest Point & Off-Route Math) ---
+            // Start searching 5 points behind where we were last seen (in case of GPS drift/reversing)
+            int startIndex = Math.Max(0, _rideCache.CurrentRouteIndex - 5);
 
-        int searchRange = Math.Min(20, _rideCache.CurrentRoutePoints.Count);
-        for (int i = 0; i < searchRange; i++)
-        {
-            double dist = Location.CalculateDistance(currentLocation, _rideCache.CurrentRoutePoints[i], DistanceUnits.Kilometers);
-            if (dist < minDistance)
+            // Search up to 50 GPS points ahead of us
+            int searchRange = Math.Min(currentRouteSnapshot.Count - startIndex, 50);
+
+            double minDistance = double.MaxValue;
+            int closestActualIndex = startIndex;
+
+            for (int i = 0; i < searchRange; i++)
             {
-                minDistance = dist;
-                closestIndex = i;
+                int checkIndex = startIndex + i;
+                double dist = Location.CalculateDistance(currentLocation, currentRouteSnapshot[checkIndex], DistanceUnits.Kilometers);
+                if (dist < minDistance)
+                {
+                    minDistance = dist;
+                    closestActualIndex = checkIndex;
+                }
             }
-        }
 
-        // OFF ROUTE DETECTION (> 100 meters)
-        if (minDistance > 0.1)
+            // --- ETA & Distance Remaining Math ---
+            double distLeft = 0;
+            if (currentRouteSnapshot.Count > 1 && closestActualIndex < currentRouteSnapshot.Count)
+            {
+                // Measure from Rider -> Closest Point
+                distLeft += Location.CalculateDistance(currentLocation, currentRouteSnapshot[closestActualIndex], DistanceUnits.Kilometers);
+
+                // Measure from Closest Point -> End of Route
+                for (int j = closestActualIndex; j < currentRouteSnapshot.Count - 1; j++)
+                {
+                    distLeft += Location.CalculateDistance(currentRouteSnapshot[j], currentRouteSnapshot[j + 1], DistanceUnits.Kilometers);
+                }
+            }
+            else distLeft = Location.CalculateDistance(currentLocation, _rideCache.ActiveDestination, DistanceUnits.Kilometers);
+
+            double currentSpeed = (currentLocation?.Speed ?? 0) * 3.6;
+            double movingAvg = Math.Max(currentSpeed, 40);
+            double hoursLeft = distLeft / movingAvg;
+            DateTime eta = DateTime.Now.AddHours(hoursLeft);
+
+            // Return all the calculated strings and values safely
+            return new
+            {
+                IsOffRoute = minDistance > 0.1,
+                NewRouteIndex = closestActualIndex, // Save our progress instead of deleting points!
+                DistLeftStr = $"{Math.Round(distLeft, 1)} km",
+                TotalTravelStr = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)} km",
+                TotalRouteStr = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km",
+                EtaStr = $"ETA {eta:HH:mm}"
+            };
+        });
+
+        // 2. HANDLE REROUTING LOGIC
+        if (telemetryData.IsOffRoute)
         {
             if ((DateTime.Now - _rideCache.LastRerouteTime).TotalSeconds > 15)
             {
                 _rideCache.LastRerouteTime = DateTime.Now;
-
                 _ = Task.Run(async () => {
                     string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination, _rideCache.ActiveMeetupPoint);
-
                     if (!string.IsNullOrEmpty(newPolyline))
                     {
                         var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
                         if (settings != null && settings.EnableDynamicRouting)
                         {
-                            if (_amIAdmin)
-                            {
-                                await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
-                            }
-                            else
-                            {
-                                await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
-                            }
+                            if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
+                            else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
                         }
                     }
                 });
@@ -567,169 +445,23 @@ public partial class LobbyPage : ContentPage
             return;
         }
 
-        // --- THE MY RIDE UI UPDATER ---
+        // 3. UPDATE THE CACHE WITH OUR PROGRESS
+        _rideCache.CurrentRouteIndex = telemetryData.NewRouteIndex;
+        _rideCache.LastOdometerLocation = currentLocation;
+
+        // 4. BATCH ALL UI UPDATES TO MAIN THREAD
         MainThread.BeginInvokeOnMainThread(() => {
             try
             {
                 if (_myPinVm != null) MySpeedLabel.Text = _myPinVm.Speed;
-
-                // FIX: Calculate distance along the polyline path instead of a straight line!
-                double distLeft = 0;
-                var currentPoints = _rideCache.CurrentRoutePoints;
-                if (currentPoints.Count > 1)
-                {
-                    distLeft += Location.CalculateDistance(currentLocation, currentPoints[0], DistanceUnits.Kilometers);
-                    for (int j = 0; j < currentPoints.Count - 1; j++)
-                    {
-                        distLeft += Location.CalculateDistance(currentPoints[j], currentPoints[j + 1], DistanceUnits.Kilometers);
-                    }
-                }
-                else
-                {
-                    distLeft = Location.CalculateDistance(currentLocation, _rideCache.ActiveDestination, DistanceUnits.Kilometers);
-                }
-
-                MyDistanceLabel.Text = $"{Math.Round(distLeft, 1)} km";
-                MyTotalTraveledLabel.Text = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)} km";
-
-                // Total Route will now remain highly stable
-                MyTotalRouteLabel.Text = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km";
-
-                // NEW: Dynamic ETA Math
-                double currentSpeed = (currentLocation?.Speed ?? 0) * 3.6;
-                double movingAvg = Math.Max(currentSpeed, 40); // Assume min 40km/h average if stuck in traffic
-                double hoursLeft = distLeft / movingAvg;
-                DateTime eta = DateTime.Now.AddHours(hoursLeft);
-
-                MyEtaLabel.Text = $"ETA {eta:HH:mm}";
+                MyDistanceLabel.Text = telemetryData.DistLeftStr;
+                MyTotalTraveledLabel.Text = telemetryData.TotalTravelStr;
+                MyTotalRouteLabel.Text = telemetryData.TotalRouteStr;
+                MyEtaLabel.Text = telemetryData.EtaStr;
                 MyEtaLabel.IsVisible = true;
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Stats Update Error: {ex.Message}"); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"UI Stats Update Error: {ex.Message}"); }
         });
-
-        if (closestIndex > 0)
-        {
-            int logicalPointsToRemove = Math.Min(closestIndex, _rideCache.CurrentRoutePoints.Count - 2);
-            if (logicalPointsToRemove > 0)
-            {
-                _rideCache.CurrentRoutePoints.RemoveRange(0, logicalPointsToRemove);
-            }
-        }
-    }
-
-    private async Task EvaluateEdgeTelemetry(Location myLoc, double mySpeedKmh)
-    {
-        var settings = _rideCache.CurrentSettings;
-        if (settings == null) return;
-
-        bool amILead = _rideCache.MyRole == "Lead" || (_amIAdmin && string.IsNullOrEmpty(settings.LeadRiderGoogleId));
-
-        var activeSpeeds = _rideCache.OtherRiderSpeeds.Values.Where(s => s > 10).ToList();
-        if (activeSpeeds.Count > 1 && mySpeedKmh > 10)
-        {
-            double avgGroupSpeed = activeSpeeds.Average();
-            if (mySpeedKmh > avgGroupSpeed + 30)
-            {
-                if ((DateTime.Now - _rideCache.LastSpeedAlert).TotalMinutes > 10)
-                {
-                    _rideCache.LastSpeedAlert = DateTime.Now;
-                    _ = TextToSpeech.Default.SpeakAsync("Warning: You are riding significantly faster than the group average.");
-                }
-            }
-        }
-
-        if (amILead)
-        {
-            if (_rideCache.ActiveDestination != null && (DateTime.Now - _rideCache.LastArrivalAlert).TotalMinutes > 15)
-            {
-                double distToDest = Location.CalculateDistance(myLoc, _rideCache.ActiveDestination, DistanceUnits.Kilometers) * 1000;
-                double arrivalThreshold = settings.ArrivalGeofenceMeters > 0 ? settings.ArrivalGeofenceMeters : 1000;
-
-                if (distToDest < arrivalThreshold)
-                {
-                    _rideCache.LastArrivalAlert = DateTime.Now;
-                    await _signalRService.SendArrivalAlert(GroupNameLabel.Text);
-                }
-            }
-
-            double pitstopIntervalKm = settings.PitstopDistanceMeters / 1000.0;
-            if (pitstopIntervalKm > 0 && (_rideCache.CumulativeDistanceKm - _rideCache.LastGroupPitstopKm) >= pitstopIntervalKm)
-            {
-                _rideCache.LastGroupPitstopKm = _rideCache.CumulativeDistanceKm;
-                _ = TextToSpeech.Default.SpeakAsync($"You have traveled {Math.Round(_rideCache.CumulativeDistanceKm)} kilometers. Consider a rest stop.");
-                await _signalRService.SendPitstopReminder(GroupNameLabel.Text, _rideCache.CumulativeDistanceKm);
-            }
-
-            if (settings.SplinterWarningDistanceMeters > 0 && Riders.Count(x=> x.IsOnline) > 1 && (DateTime.Now - _rideCache.LastSplinterAlert).TotalMinutes > 5)
-            {
-                double maxDistMeters = 0;
-                foreach (var riderLoc in _rideCache.OtherRiderLocations.Values)
-                {
-                    double d = Location.CalculateDistance(myLoc, riderLoc, DistanceUnits.Kilometers) * 1000;
-                    if (d > maxDistMeters) maxDistMeters = d;
-                }
-
-                if (maxDistMeters > settings.SplinterWarningDistanceMeters)
-                {
-                    _rideCache.LastSplinterAlert = DateTime.Now;
-                    await _signalRService.SendSplinterWarning(GroupNameLabel.Text);
-                }
-            }
-        }
-        else
-        {
-            if (settings.MaxLagDistanceMeters > 0 && (DateTime.Now - _rideCache.LastLagAlert).TotalMinutes > 3)
-            {
-                string leadId = string.IsNullOrEmpty(settings.LeadRiderGoogleId) ? groupDetails?.AdminGoogleId : settings.LeadRiderGoogleId;
-
-                if (!string.IsNullOrEmpty(leadId) && _rideCache.OtherRiderLocations.TryGetValue(leadId, out var leadLoc))
-                {
-                    double distToLead = Location.CalculateDistance(myLoc, leadLoc, DistanceUnits.Kilometers) * 1000;
-                    if (distToLead > settings.MaxLagDistanceMeters)
-                    {
-                        _rideCache.LastLagAlert = DateTime.Now;
-                        await _signalRService.SendLagWarning(GroupNameLabel.Text, _myName, distToLead, false);
-                    }
-                }
-            }
-        }
-    }
-
-    private async Task<RideSummary> ProcessAndSaveRideTelemetry(string groupName)
-    {
-        try
-        {
-            var summary = new RideSummary
-            {
-                Id = Guid.NewGuid().ToString(),
-                RideDate = DateTime.Now,
-                GroupName = groupName,
-                DestinationName = _rideCache.ActiveDestinationName ?? "Unknown Destination",
-                TotalDistanceKm = Math.Round(_rideCache.CumulativeDistanceKm, 2),
-                TopSpeedKmh = Math.Round(_rideCache.MaxSpeedKmh, 1),
-                TotalElapsedTime = DateTime.Now - _rideCache.RideStartTime,
-                StoppedTime = _rideCache.TotalStoppedTime,
-            };
-
-            summary.MovingTime = summary.TotalElapsedTime - summary.StoppedTime;
-
-            if (summary.MovingTime.TotalHours > 0)
-            {
-                summary.AverageMovingSpeedKmh = Math.Round(summary.TotalDistanceKm / summary.MovingTime.TotalHours, 1);
-            }
-
-            await LocalRideLogger.SaveRideAsync(summary);
-
-            _rideCache.HardResetAll();
-
-            // THE FIX: Return the summary so the UI can display it!
-            return summary;
-        }
-        catch (Exception ex)
-        {
-            System.Diagnostics.Debug.WriteLine($"Error saving ride: {ex.Message}");
-            return null;
-        }
     }
     // --- NEW: Close Button Handler ---
     private async void OnCloseRideSummaryClicked(object sender, EventArgs e)
@@ -796,7 +528,7 @@ public partial class LobbyPage : ContentPage
 
             if (mainRoute != null)
             {
-                var decodedPoints = _rideCache.CurrentRoutePoints = DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
+                var decodedPoints = _rideCache.CurrentRoutePoints = _routingEngine.DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
 
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
@@ -868,147 +600,9 @@ public partial class LobbyPage : ContentPage
     // --- NEW VOICE NAV VARIABLES ---
     private List<RouteStep> _activeRouteSteps = new();
 
-    private void ProcessVoiceNavigation(Location currentGPS)
-    {
-        if (!Preferences.Default.Get("Map_VoiceNav", true)) return;
-        if (_activeRouteSteps == null || !_activeRouteSteps.Any()) return;
-
-        // =====================================================================
-        // 1. AUTO-SKIP PASSED STEPS
-        // =====================================================================
-        for (int i = 0; i < _activeRouteSteps.Count; i++)
-        {
-            var step = _activeRouteSteps[i];
-            if (step.VoiceAlertPlayed) continue;
-
-            double distToThisStep = Location.CalculateDistance(currentGPS, step.TurnLocation, DistanceUnits.Kilometers) * 1000;
-
-            // If we are physically within 25 meters, consider it crossed
-            if (distToThisStep < 25)
-            {
-                step.VoiceAlertPlayed = true;
-                continue;
-            }
-
-            // Spatial Check: Are we closer to the NEXT turn than the CURRENT turn?
-            // If so, we have passed/missed this turn. Skip it!
-            if (i + 1 < _activeRouteSteps.Count)
-            {
-                double distToNextStep = Location.CalculateDistance(currentGPS, _activeRouteSteps[i + 1].TurnLocation, DistanceUnits.Kilometers) * 1000;
-                if (distToNextStep < distToThisStep)
-                {
-                    step.VoiceAlertPlayed = true;
-                    continue;
-                }
-            }
-
-            break; // Stop at the first valid, unplayed step ahead of us
-        }
-
-        // =====================================================================
-        // 2. IDENTIFY THE ACTIVE TURN
-        // =====================================================================
-        var nextStep = _activeRouteSteps.FirstOrDefault(s => !s.VoiceAlertPlayed);
-        if (nextStep == null) return;
-
-        double distanceMeters = Location.CalculateDistance(currentGPS, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
-
-        // =====================================================================
-        // 3. CALCULATE DYNAMIC TRIGGER DISTANCE
-        // =====================================================================
-        // A. Speed Factor: Calculate distance covered in 10 seconds (default to 40km/h if GPS speed is null)
-        double speedKmh = (currentGPS.Speed ?? 11.11) * 3.6;
-        double speedTriggerDist = (speedKmh / 3.6) * 10;
-
-        // Clamp it so it doesn't trigger ridiculously early on highways, or too late in cities
-        double dynamicTriggerDist = Math.Clamp(speedTriggerDist, 100, 350);
-
-        // B. Density Factor: Check the distance between the previous turn and this one
-        var previousStep = _activeRouteSteps.LastOrDefault(s => s.VoiceAlertPlayed);
-        if (previousStep != null)
-        {
-            double distBetweenSteps = Location.CalculateDistance(previousStep.TurnLocation, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
-
-            // If the turns are less than 250m apart, we reduce the trigger distance 
-            // to 60% of the segment length so the rider has time to breathe between instructions
-            if (distBetweenSteps < 250)
-            {
-                double reducedTrigger = distBetweenSteps * 0.6;
-                dynamicTriggerDist = Math.Clamp(reducedTrigger, 30, dynamicTriggerDist);
-            }
-        }
-
-        // =====================================================================
-        // 4. EXECUTE VOICE ALERT
-        // =====================================================================
-        if (distanceMeters <= dynamicTriggerDist)
-        {
-            nextStep.VoiceAlertPlayed = true;
-
-            // Round the spoken distance beautifully to the nearest 50m (e.g., 150m, 200m)
-            int spokenDistance = (int)(Math.Round(distanceMeters / 50.0) * 50);
-            if (spokenDistance < 50) spokenDistance = 50;
-
-            // Use the smart cleaner we built earlier to strip HTML, decode entities, and fix pacing
-            string cleanInstruction = CleanVoiceInstruction(nextStep.Instruction);
-
-            _ = TextToSpeech.Default.SpeakAsync($"In {spokenDistance} meters, {cleanInstruction}");
-        }
-    }
-    private string CleanVoiceInstruction(string rawInstruction)
-    {
-        if (string.IsNullOrWhiteSpace(rawInstruction)) return "";
-
-        // 1. Remove all HTML tags (e.g. <b>, <div>, <wbr>)
-        string clean = System.Text.RegularExpressions.Regex.Replace(rawInstruction, "<.*?>", " ");
-
-        // 2. Decode HTML entities (e.g. &amp; becomes &, &nbsp; becomes a space)
-        clean = System.Net.WebUtility.HtmlDecode(clean);
-
-        // 3. Expand common road abbreviations so the voice doesn't stutter or mispronounce them
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bNH\b", "National Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bSH\b", "State Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bRd\b", "Road", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bSt\b", "Street", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bHwy\b", "Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
-        // 4. INJECT PACING: Native TTS engines pause whenever they hit a comma.
-        // We force a pause between the action and the road name, and before destinations.
-        clean = clean.Replace(" onto ", ", onto, ");
-        clean = clean.Replace(" towards ", ", towards, ");
-        clean = clean.Replace(" to stay on ", ", to stay on, ");
-        clean = clean.Replace(" and ", ", and, ");
-
-        // 5. Clean up any weird double spaces created by the replacements
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s+", " ").Trim();
-
-        return clean;
-    }
-
-    private List<Location> DecodeGooglePolyline(string encodedPoints)
-    {
-        var poly = new List<Location>();
-        char[] polyChars = encodedPoints.ToCharArray();
-        int index = 0, currentLat = 0, currentLng = 0;
-
-        while (index < polyChars.Length)
-        {
-            int sum = 0, shifter = 0, b;
-            do { b = polyChars[index++] - 63; sum |= (b & 31) << shifter; shifter += 5; } while (b >= 32);
-            currentLat += ((sum & 1) == 1 ? ~(sum >> 1) : (sum >> 1));
-
-            sum = 0; shifter = 0;
-            do { b = polyChars[index++] - 63; sum |= (b & 31) << shifter; shifter += 5; } while (b >= 32);
-            currentLng += ((sum & 1) == 1 ? ~(sum >> 1) : (sum >> 1));
-
-            poly.Add(new Location(currentLat / 100000.0, currentLng / 100000.0));
-        }
-        return poly;
-    }
-
     private void OnLeadRouteUpdated(string encodedPolyline)
     {
-        _rideCache.CurrentRoutePoints = DecodeGooglePolyline(encodedPolyline);
+        _rideCache.CurrentRoutePoints = _routingEngine.DecodeGooglePolyline(encodedPolyline);
         MainThread.BeginInvokeOnMainThread(() =>
         {
             var oldLines = LiveMap.MapElements.OfType<Polyline>().ToList();
@@ -1018,42 +612,13 @@ public partial class LobbyPage : ContentPage
             foreach (var coord in _rideCache.CurrentRoutePoints) _activeRouteLine.Geopath.Add(coord);
             LiveMap.MapElements.Add(_activeRouteLine);
 
-            _ = TextToSpeech.Default.SpeakAsync("Map synced with Lead rider.");
+            _voiceEngine.Speak("Map synced with Lead rider.");
         });
     }
 
     private void OnRouteDeviationAlert(string userName)
     {
-        MainThread.BeginInvokeOnMainThread(() => _ = TextToSpeech.Default.SpeakAsync($"{userName} has diverted from the route."));
-    }
-    private async Task<List<Location>> GetRoutePointsOnlyAsync(Location origin, Location dest)
-    {
-        try
-        {
-            var requestBody = new RoutesRequest
-            {
-                Origin = new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = origin.Latitude, Longitude = origin.Longitude } } },
-                Destination = new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = dest.Latitude, Longitude = dest.Longitude } } }
-            };
-
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
-            request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
-            request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline");
-            request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.SendAsync(request);
-            if (response.IsSuccessStatusCode)
-            {
-                var routeResult = JsonSerializer.Deserialize<RoutesResponse>(await response.Content.ReadAsStringAsync());
-                var mainRoute = routeResult?.Routes?.FirstOrDefault();
-                if (mainRoute != null)
-                {
-                    return DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
-                }
-            }
-        }
-        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Silent Route Fetch Error: {ex.Message}"); }
-        return new List<Location>();
+        MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak($"{userName} has diverted from the route."));
     }
     private async void OnGenerateMeetupClicked(object sender, EventArgs e)
     {
@@ -1074,35 +639,39 @@ public partial class LobbyPage : ContentPage
         try
         {
             // 1. Fetch Lead's Route (The Baseline)
-            var leadRoute = await GetRoutePointsOnlyAsync(_lastKnownLocation, _rideCache.ActiveDestination);
-            if (leadRoute.Count == 0) return;
+            var leadRoute = await _routingEngine.GetRouteDataAsync(_lastKnownLocation, _rideCache.ActiveDestination);
+            if (leadRoute == null || leadRoute.DecodedPoints.Count == 0) return;
 
             // 2. Fetch routes for all other riders IN PARALLEL for speed
-            var routeTasks = new List<Task<List<Location>>>();
+            // FIX: The list holds Tasks of RouteCalculationResult
+            var routeTasks = new List<Task<RouteCalculationResult>>();
             foreach (var loc in riderLocations)
             {
-                routeTasks.Add(GetRoutePointsOnlyAsync(loc, _rideCache.ActiveDestination));
+                // FIX: Do NOT use .Result here! Just pass the Task into the list so they all run simultaneously.
+                routeTasks.Add(_routingEngine.GetRouteDataAsync(loc, _rideCache.ActiveDestination));
             }
 
+            // Await them all at once!
             var otherRoutes = await Task.WhenAll(routeTasks);
 
             // 3. Find the convergence point (Trace backwards from Destination)
-            Location meetupPoint = leadRoute.Last(); // Default to destination
+            Location meetupPoint = leadRoute.DecodedPoints.Last(); // Default to destination
 
             // We iterate backward from the destination. The points will match everyone's route 
             // until the geographical paths split. 
-            for (int i = leadRoute.Count - 1; i >= 0; i--)
+            for (int i = leadRoute.DecodedPoints.Count - 1; i >= 0; i--)
             {
-                Location pt = leadRoute[i];
+                Location pt = leadRoute.DecodedPoints[i];
                 bool sharedByAll = true;
 
-                foreach (var route in otherRoutes)
+                foreach (var routeResult in otherRoutes)
                 {
-                    if (route == null || route.Count == 0) continue;
+                    // FIX: Check the DecodedPoints property of the engine result
+                    if (routeResult == null || routeResult.DecodedPoints == null || routeResult.DecodedPoints.Count == 0) continue;
 
                     // Google's polyline nodes won't match to the exact 6th decimal place.
                     // We use a 100-meter tolerance radius to check if this road is shared.
-                    bool foundNear = route.Any(rPt => Location.CalculateDistance(pt, rPt, DistanceUnits.Kilometers) < 0.1);
+                    bool foundNear = routeResult.DecodedPoints.Any(rPt => Location.CalculateDistance(pt, rPt, DistanceUnits.Kilometers) < 0.1);
                     if (!foundNear)
                     {
                         sharedByAll = false;
@@ -1303,7 +872,7 @@ public partial class LobbyPage : ContentPage
                     MainActivity.IsInNavigationMode = false;
 #endif
                     if (newState == GroupState.Completed)
-                        _ = TextToSpeech.Default.SpeakAsync($"Navigation completed by {triggerUser}. Great ride!");
+                        _voiceEngine.Speak($"Navigation completed by {triggerUser}. Great ride!");
                     break;
 
                 case GroupState.Navigating:
@@ -1336,7 +905,7 @@ public partial class LobbyPage : ContentPage
                     MainActivity.IsInNavigationMode = true;
 #endif
                     if (string.IsNullOrEmpty(triggerUser))
-                        _ = TextToSpeech.Default.SpeakAsync("Navigation active. Ride safe!");
+                        _voiceEngine.Speak("Navigation active. Ride safe!");
                     break;
 
                 case GroupState.PausedBreak:
@@ -1360,7 +929,7 @@ public partial class LobbyPage : ContentPage
                                      "for mechanical repairs";
 
                     string spokenReason = string.IsNullOrEmpty(reason) ? context : reason;
-                    _ = TextToSpeech.Default.SpeakAsync($"Navigation paused by {triggerUser} {spokenReason}. Tracking suspended.");
+                    _voiceEngine.Speak($"Navigation paused by {triggerUser} {spokenReason}. Tracking suspended.");
 
                     ActionDrawer.TranslateToAsync(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
                     //OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
@@ -1426,18 +995,15 @@ public partial class LobbyPage : ContentPage
 #endif
         }
         if (!isSyncRequired)
-            _ = TextToSpeech.Default.SpeakAsync($"Navigation started to {destName}. Ride safe!");
+            _voiceEngine.Speak($"Navigation started to {destName}. Ride safe!");
     }
 
     private async void OnNavigationCompleted(string adminName)
     {
         string currentGroupName = GroupNameLabel.Text;
 
-        // 1. GET THE SUMMARY BACK FROM THE BACKGROUND THREAD!
-        var finalSummary = await Task.Run(async () =>
-        {
-            return await ProcessAndSaveRideTelemetry(currentGroupName);
-        });
+        // Call the Telemetry Engine to process the final stats
+        var finalSummary = await _telemetryEngine.ProcessAndSaveRideTelemetryAsync(currentGroupName);
 
         // 2. SAFELY UPDATE THE MAP AND THE NEW SUMMARY UI ON THE MAIN THREAD
         MainThread.BeginInvokeOnMainThread(() =>
@@ -1520,36 +1086,46 @@ public partial class LobbyPage : ContentPage
 
     private void FitMapToBounds(List<Location> points = null)
     {
-        if (points == null)
+        var targetPoints = points;
+        if (targetPoints == null)
         {
             if (MapPins.Count == 0) return;
-            points = MapPins.Select(p => p.Location).ToList();
+            // Snapshot the list so we don't get collection-modified errors in the background!
+            targetPoints = MapPins.Select(p => p.Location).ToList();
         }
 
-        if (points.Count == 1)
+        if (targetPoints.Count == 1)
         {
-            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(points.First(), Distance.FromKilometers(1)));
+            MainThread.BeginInvokeOnMainThread(() =>
+                LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(targetPoints.First(), Distance.FromKilometers(1))));
             return;
         }
 
-        double minLat = double.MaxValue, minLng = double.MaxValue;
-        double maxLat = double.MinValue, maxLng = double.MinValue;
-
-        foreach (var loc in points)
+        // OFF-LOAD HEAVY MATH TO BACKGROUND THREAD
+        Task.Run(() =>
         {
-            if (loc.Latitude < minLat) minLat = loc.Latitude;
-            if (loc.Latitude > maxLat) maxLat = loc.Latitude;
-            if (loc.Longitude < minLng) minLng = loc.Longitude;
-            if (loc.Longitude > maxLng) maxLng = loc.Longitude;
-        }
+            double minLat = double.MaxValue, minLng = double.MaxValue;
+            double maxLat = double.MinValue, maxLng = double.MinValue;
 
-        double centerLat = (minLat + maxLat) / 2.0;
-        double centerLng = (minLng + maxLng) / 2.0;
+            foreach (var loc in targetPoints)
+            {
+                if (loc.Latitude < minLat) minLat = loc.Latitude;
+                if (loc.Latitude > maxLat) maxLat = loc.Latitude;
+                if (loc.Longitude < minLng) minLng = loc.Longitude;
+                if (loc.Longitude > maxLng) maxLng = loc.Longitude;
+            }
 
-        double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
-        double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
+            double centerLat = (minLat + maxLat) / 2.0;
+            double centerLng = (minLng + maxLng) / 2.0;
 
-        LiveMap.MoveToRegion(new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance));
+            double latDistance = Math.Max(0.01, (maxLat - minLat) * 1.5);
+            double lngDistance = Math.Max(0.01, (maxLng - minLng) * 1.5);
+
+            var region = new MapSpan(new Location(centerLat, centerLng), latDistance, lngDistance);
+
+            // BRING THE RESULT BACK TO THE UI THREAD
+            MainThread.BeginInvokeOnMainThread(() => LiveMap.MoveToRegion(region));
+        });
     }
     private async void OnRefreshTelemetryClicked(object sender, EventArgs e)
     {
@@ -1753,7 +1329,7 @@ public partial class LobbyPage : ContentPage
             if (alertType == "Lagging" || alertType == "Splinter" || alertType == "VoicePrompt")
             {
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
-                _ = TextToSpeech.Default.SpeakAsync(senderName);
+                _voiceEngine.Speak(senderName);
                 return;
             }
             int durationSeconds = 5;
@@ -1793,7 +1369,7 @@ public partial class LobbyPage : ContentPage
             AlertSenderLabel.Text = $"Triggered by: {senderName}";
             SensoryAlertOverlay.IsVisible = true;
 
-            _ = TextToSpeech.Default.SpeakAsync(voiceMessage);
+            _voiceEngine.Speak(voiceMessage);
 
             var cts = new CancellationTokenSource();
             cts.CancelAfter(TimeSpan.FromSeconds(durationSeconds));
@@ -1816,8 +1392,8 @@ public partial class LobbyPage : ContentPage
             SetActionButtonsEnabled(true);
         });
     }
-    private void OnUserJoined(string username) => _ = TextToSpeech.Default.SpeakAsync($"{username} has joined the group.");
-    private void OnUserLeft(string username) => _ = TextToSpeech.Default.SpeakAsync($"{username} has left the group.");
+    private void OnUserJoined(string username) => _voiceEngine.Speak($"{username} has joined the group.");
+    private void OnUserLeft(string username) => _voiceEngine.Speak($"{username} has left the group.");
     private async void OnGroupDeleted()
     {
         MainThread.BeginInvokeOnMainThread(async () =>
@@ -1989,7 +1565,7 @@ public partial class LobbyPage : ContentPage
 #endif
         }
 
-        _ = TextToSpeech.Default.SpeakAsync($"Resuming Navigation to {groupDetails.DestName}. Ride safe!");
+        _voiceEngine.Speak($"Resuming Navigation to {groupDetails.DestName}. Ride safe!");
     }
     private void OnSizeSliderChanged(object sender, ValueChangedEventArgs e)
     {
@@ -2052,13 +1628,14 @@ public partial class LobbyPage : ContentPage
     {
         double roundedValue = Math.Round(e.NewValue / 50.0) * 50;
         LagSlider.Value = roundedValue;
-        LagValueLabel.Text = $"{roundedValue}m";
+        LagValueLabel.Text = roundedValue == 0 ? "Off" : $"{roundedValue}m";
     }
+
     private void OnSplinterSliderChanged(object sender, ValueChangedEventArgs e)
     {
         double roundedValue = Math.Round(e.NewValue / 100.0) * 100;
         SplinterSlider.Value = roundedValue;
-        SplinterValueLabel.Text = $"{roundedValue}m";
+        SplinterValueLabel.Text = roundedValue == 0 ? "Off" : $"{roundedValue}m";
     }
     private async void OnSaveSettingsClicked(object sender, EventArgs e)
     {
@@ -2085,6 +1662,40 @@ public partial class LobbyPage : ContentPage
         AdminSettingsOverlay.IsVisible = false;
         Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
     }
+#if DEBUG
+    private async void OnForceRerouteClicked(object sender, EventArgs e)
+    {
+        if (_lastKnownLocation == null || !_isSimulating) return;
+
+        MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("Simulating route deviation."));
+
+        // 1. Kill the current simulation loop so it stops fighting us
+        _isSimulating = false;
+        await Task.Delay(2500); // Wait a couple of seconds for the while-loop to gracefully exit
+
+        // 2. Teleport the rider roughly 500 meters to the East 
+        // (0.005 degrees longitude is about 500m near the equator/India)
+        var offRouteLoc = new Location(_lastKnownLocation.Latitude, _lastKnownLocation.Longitude + 0.005);
+        _lastKnownLocation = offRouteLoc;
+
+        // Move the pin immediately so you can see the teleport
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (_myPinVm != null) _myPinVm.Location = offRouteLoc;
+            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(offRouteLoc, Distance.FromKilometers(1)));
+        });
+
+        // 3. Force the Telemetry Engine to process this fake location.
+        // Because it's > 100m from the line, this will trigger IsOffRoute = true and fire the Google Routes API!
+        await TrimRouteVisuals(offRouteLoc);
+
+        // 4. Wait for the new route to be calculated and drawn
+        await Task.Delay(4000);
+
+        // 5. Restart the simulation! It will now snapshot the NEW route points and drive along them.
+        _ = SimulateMovementAlongRouteAsync();
+    }
+#endif
     private void OnPttLocked(string speakerName)
     {
         _currentSpeaker = speakerName;
@@ -2103,7 +1714,7 @@ public partial class LobbyPage : ContentPage
                 _ = RunPttTimeoutAsync(_pttCts.Token);
 
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
-                _ = TextToSpeech.Default.SpeakAsync("You can now speak.");
+                _voiceEngine.Speak("You can now speak.");
             }
             else
             {
@@ -2132,7 +1743,7 @@ public partial class LobbyPage : ContentPage
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
                     PttCountdownLabel.Text = "Maximum time reached!";
-                    _ = TextToSpeech.Default.SpeakAsync("Microphone closed.");
+                    _voiceEngine.Speak("Microphone closed.");
                 });
 
                 if (_currentSpeaker == _myName)
@@ -2147,7 +1758,7 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            _ = TextToSpeech.Default.SpeakAsync("Channel busy.");
+            _voiceEngine.Speak("Channel busy.");
             Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500));
         });
     }
@@ -2332,55 +1943,61 @@ public partial class LobbyPage : ContentPage
     {
         var newLoc = new Location(lat, lng);
         var now = DateTime.UtcNow;
-        double speedKmh = 0;
 
-        // 1. CALCULATE SPEED & WRITE TO EDGE CACHE!
-        if (_rideCache.OtherRiderLocations.TryGetValue(riderId, out var oldLoc) &&
-            _riderLastUpdateTimes.TryGetValue(riderId, out var lastTime))
+        // OFFLOAD SPEED MATH TO BACKGROUND
+        Task.Run(() =>
         {
-            double distKm = Location.CalculateDistance(oldLoc, newLoc, DistanceUnits.Kilometers);
-            double hours = (now - lastTime).TotalHours;
+            double speedKmh = 0;
 
-            if (hours > 0)
+            if (_rideCache.OtherRiderLocations.TryGetValue(riderId, out var oldLoc) &&
+                _riderLastUpdateTimes.TryGetValue(riderId, out var lastTime))
             {
-                speedKmh = distKm / hours;
-                // Ignore crazy GPS jumps (e.g., > 250 km/h)
-                if (speedKmh > 250) speedKmh = _rideCache.OtherRiderSpeeds.GetValueOrDefault(riderId, 0);
-            }
-        }
+                double distKm = Location.CalculateDistance(oldLoc, newLoc, DistanceUnits.Kilometers);
+                double hours = (now - lastTime).TotalHours;
 
-        // Store the fresh data into the Singleton Cache for the Telemetry Engine!
-        _rideCache.OtherRiderLocations[riderId] = newLoc;
-        _rideCache.OtherRiderSpeeds[riderId] = speedKmh;
-        _riderLastUpdateTimes[riderId] = now;
-
-        // 2. UPDATE THE MAP UI
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            if (_riderViewModels.TryGetValue(riderId, out var existingVm))
-            {
-                existingVm.Location = newLoc;
-                existingVm.Heading = heading;
-                existingVm.Speed = speedKmh > 1 ? $"{Math.Round(speedKmh)} km/h" : "Stopped";
-
-                //AnimatePinMovement(existingVm, newLoc, heading, 1000);
-            }
-            else
-            {
-                Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
-                var newVm = new RiderPin(MapPinClicked)
+                if (hours > 0)
                 {
-                    Username = riderId,
-                    Speed = "Active",
-                    Location = newLoc,
-                    Heading = heading,
-                    PinColor = randomColor,
-                    ZIndex = 50F
-                };
-
-                _riderViewModels.TryAdd(riderId, newVm);
-                MapPins.Add(newVm);
+                    speedKmh = distKm / hours;
+                    if (speedKmh > 250) speedKmh = _rideCache.OtherRiderSpeeds.GetValueOrDefault(riderId, 0);
+                }
             }
+
+            _rideCache.OtherRiderLocations[riderId] = newLoc;
+            _rideCache.OtherRiderSpeeds[riderId] = speedKmh;
+            _riderLastUpdateTimes[riderId] = now;
+
+            string speedStr = speedKmh > 1 ? $"{Math.Round(speedKmh)} km/h" : "Stopped";
+            
+            // SKIP UI UPDATE IF RUNNING IN BACKGROUND
+            if (_rideCache.RunningInBackground) return;
+
+            // BRING UI PIN UPDATE BACK TO MAIN THREAD
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_riderViewModels.TryGetValue(riderId, out var existingVm))
+                {
+                    existingVm.Location = newLoc;
+                    existingVm.Heading = heading;
+                    existingVm.Speed = speedStr;
+                    //AnimatePinMovement(existingVm, newLoc, heading, 1000);
+                }
+                else
+                {
+                    Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
+                    var newVm = new RiderPin(MapPinClicked)
+                    {
+                        Username = riderId,
+                        Speed = speedStr,
+                        Location = newLoc,
+                        Heading = heading,
+                        PinColor = randomColor,
+                        ZIndex = 50F
+                    };
+
+                    _riderViewModels.TryAdd(riderId, newVm);
+                    MapPins.Add(newVm);
+                }
+            });
         });
     }
     private async Task InitializeLocalTrackingAsync()
@@ -2536,17 +2153,20 @@ public partial class LobbyPage : ContentPage
                 }
             }
 
-            MainThread.BeginInvokeOnMainThread(() =>
+            if (!_rideCache.RunningInBackground)
             {
-                if (_myPinVm != null)
+                MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    _myPinVm.Location = point;
-                    _myPinVm.Speed = $"{Math.Round(speedKmh)} km/h";
-                    _myPinVm.Heading = fakeHeading;
+                    if (_myPinVm != null)
+                    {
+                        _myPinVm.Location = point;
+                        _myPinVm.Speed = $"{Math.Round(speedKmh)} km/h";
+                        _myPinVm.Heading = fakeHeading;
 
-                    //AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
-                }
-            });
+                        //AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
+                    }
+                });
+            }
 
             _lastKnownLocation = point;
 
@@ -2557,12 +2177,28 @@ public partial class LobbyPage : ContentPage
                 await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
             }
             await TrimRouteVisuals(point);
-            await EvaluateEdgeTelemetry(point, speedKmh);
-
+            
+            await _telemetryEngine.EvaluateEdgeTelemetryAsync(point, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
             // NEW: Fire the Speed Limit Engine and Camera Physics
-            _ = EvaluateSpeedLimitAsync(point, speedKmh);
+            _ = _telemetryEngine.EvaluateSpeedLimitAsync(point, speedKmh, (limit, isSpeeding) =>
+            {
+                if (_rideCache.RunningInBackground) return;
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    if (limit == 0)
+                    {
+                        SpeedLimitBadge.IsVisible = false;
+                        return;
+                    }
 
-            ProcessVoiceNavigation(point);
+                    SpeedLimitBadge.IsVisible = true;
+                    SpeedLimitLabel.Text = limit.ToString();
+                    MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
+                    SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
+                });
+            });
+
+            _voiceEngine?.ProcessTurnByTurn(point, _activeRouteSteps);
 
             await Task.Delay(delayMs);
             currentIndex++;
@@ -2615,7 +2251,7 @@ public partial class LobbyPage : ContentPage
 
                 // Grab up to the next 500 GPS nodes (roughly 50-80 km of upcoming curves)
                 var upcomingPath = activePoints.Take(500).ToList();
-                string encodedPath = EncodeLocationList(upcomingPath);
+                string encodedPath = _routingEngine.EncodeLocationList(upcomingPath);
 
                 var requestBody = new SearchTextRequest
                 {
@@ -2830,35 +2466,5 @@ public partial class LobbyPage : ContentPage
         {
             _myPinVm.Heading = _myPinVm.Heading;
         }
-    }
-    // =====================================================================
-    // --- NEW: POLYLINE ENCODER FOR SEARCH-ALONG-ROUTE ---
-    // =====================================================================
-    private string EncodeLocationList(List<Location> points)
-    {
-        var str = new System.Text.StringBuilder();
-        int prevLat = 0, prevLng = 0;
-        foreach (var point in points)
-        {
-            int lat = (int)Math.Round(point.Latitude * 1e5);
-            int lng = (int)Math.Round(point.Longitude * 1e5);
-            EncodeDifference(str, lat - prevLat);
-            EncodeDifference(str, lng - prevLng);
-            prevLat = lat;
-            prevLng = lng;
-        }
-        return str.ToString();
-    }
-
-    private void EncodeDifference(System.Text.StringBuilder str, int diff)
-    {
-        int shifted = diff << 1;
-        if (diff < 0) shifted = ~shifted;
-        while (shifted >= 0x20)
-        {
-            str.Append((char)((0x20 | (shifted & 0x1f)) + 63));
-            shifted >>= 5;
-        }
-        str.Append((char)(shifted + 63));
     }
 }

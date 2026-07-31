@@ -38,6 +38,8 @@ namespace SpeedyCompass.Services
         public DateTime LastLagAlert { get; set; } = DateTime.MinValue;
         public double LastGroupPitstopKm { get; set; } = 0;
         public Location LastBroadcastLocation { get; set; } = null;
+        public int CurrentRouteIndex { get; set; } = 0;
+        public bool RunningInBackground { get; internal set; }
 
         // ==========================================
         // EDGE CASE RESET HANDLERS
@@ -58,6 +60,7 @@ namespace SpeedyCompass.Services
             ActiveMeetupPoint = null;
             CurrentRoutePoints.Clear();
             LastRerouteTime = DateTime.MinValue;
+            CurrentRouteIndex = 0;
         }
 
         // Called when we specifically want to zero out the Odometer/Speed trackers
