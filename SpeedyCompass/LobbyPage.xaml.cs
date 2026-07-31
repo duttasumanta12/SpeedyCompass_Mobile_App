@@ -30,12 +30,24 @@ public class RoutesRequest
     [JsonPropertyName("destination")] public RouteWaypoint Destination { get; set; }
     [JsonPropertyName("intermediates")] public List<RouteWaypoint> Intermediates { get; set; }
     [JsonPropertyName("travelMode")] public string TravelMode { get; set; } = "DRIVE";
+    // ==========================================
+    // THE FIX: Force the API to return English
+    // ==========================================
+    [JsonPropertyName("languageCode")] public string LanguageCode { get; set; } = "en-US";
 }
 public class RouteWaypoint { [JsonPropertyName("location")] public RouteLocation Location { get; set; } }
 public class RouteLocation { [JsonPropertyName("latLng")] public RouteLatLng LatLng { get; set; } }
 public class RouteLatLng { [JsonPropertyName("latitude")] public double Latitude { get; set; } [JsonPropertyName("longitude")] public double Longitude { get; set; } }
 public class RoutesResponse { [JsonPropertyName("routes")] public List<RouteData> Routes { get; set; } }
-public class RouteData { [JsonPropertyName("distanceMeters")] public int DistanceMeters { get; set; } [JsonPropertyName("duration")] public string Duration { get; set; } [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; } }
+public class RouteData
+{
+    [JsonPropertyName("distanceMeters")] public int DistanceMeters { get; set; }
+    [JsonPropertyName("duration")] public string Duration { get; set; }
+    [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; }
+    // NEW: Add Legs to get the turn-by-turn steps
+    [JsonPropertyName("legs")] public List<RouteLeg> Legs { get; set; }
+}
+public class RouteLeg { [JsonPropertyName("steps")] public List<RouteStepApi> Steps { get; set; } }
 public class RoutePolyline { [JsonPropertyName("encodedPolyline")] public string EncodedPolyline { get; set; } }
 public class NearbySearchRequest
 {
@@ -52,6 +64,12 @@ public class PlaceResult
     [JsonPropertyName("location")] public RouteLatLng Location { get; set; }
     [JsonPropertyName("rating")] public double Rating { get; set; }
 }
+public class RouteStepApi
+{
+    [JsonPropertyName("startLocation")] public RouteLocation StartLocation { get; set; }
+    [JsonPropertyName("navigationInstruction")] public RouteNavigationInstruction NavigationInstruction { get; set; }
+}
+public class RouteNavigationInstruction { [JsonPropertyName("instructions")] public string Instructions { get; set; } }
 public class DisplayName { [JsonPropertyName("text")] public string Text { get; set; } }
 public class SpeedLimitsResponse
 {
@@ -71,6 +89,7 @@ public class SearchTextRequest
 {
     [JsonPropertyName("textQuery")] public string TextQuery { get; set; }
     [JsonPropertyName("searchAlongRouteParameters")] public SearchAlongRouteParameters SearchAlongRouteParameters { get; set; }
+    [JsonPropertyName("languageCode")] public string LanguageCode { get; set; } = "en-US";
 }
 
 public class SearchAlongRouteParameters
@@ -235,7 +254,7 @@ public partial class LobbyPage : ContentPage
 
             if (groupDetails?.Settings != null)
             {
-                if(_rideCache.CurrentSettings.GroupName != groupDetails.Settings.GroupName)
+                if(_rideCache.CurrentSettings?.GroupName != groupDetails.Settings.GroupName)
                 {
                     _rideCache.HardResetAll();
                 }
@@ -396,6 +415,8 @@ public partial class LobbyPage : ContentPage
             await EvaluateEdgeTelemetry(e.Location, speedKmh);
             // NEW: Fire the Speed Limit Engine and Camera Physics
             _ = EvaluateSpeedLimitAsync(e.Location, speedKmh);
+
+            ProcessVoiceNavigation(e.Location);
         }
     }
     private async Task EvaluateSpeedLimitAsync(Location loc, double currentSpeedKmh)
@@ -757,7 +778,14 @@ public partial class LobbyPage : ContentPage
 
             var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
             request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
-            request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline");
+            if(groupDetails.CurrentState < GroupState.Navigating)
+            {
+                request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline");
+            }
+            else
+            {
+                request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.legs.steps.startLocation,routes.legs.steps.navigationInstruction");
+            }
             request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
 
             var response = await _httpClient.SendAsync(request);
@@ -772,19 +800,44 @@ public partial class LobbyPage : ContentPage
 
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    if (isMainRoute)
+                    if (isMainRoute && mainRoute.Legs != null)
                     {
                         // Safely remove only the main route (leaving the spiderweb intact!)
                         if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
 
-                        _activeRouteLine = new Polyline { StrokeColor = routeColor ?? Colors.DodgerBlue, StrokeWidth = 8 };
+                        _activeRouteLine = new Polyline
+                        {
+                            StrokeColor = routeColor ?? Colors.DodgerBlue,
+                            StrokeWidth = 22f
+                        };
                         foreach (var coord in _rideCache.CurrentRoutePoints) _activeRouteLine.Geopath.Add(coord);
                         LiveMap.MapElements.Add(_activeRouteLine);
+
+                        _activeRouteSteps.Clear();
+                        foreach (var leg in mainRoute.Legs)
+                        {
+                            if (leg.Steps == null) continue;
+                            foreach (var step in leg.Steps)
+                            {
+                                if (step.NavigationInstruction != null && !string.IsNullOrEmpty(step.NavigationInstruction.Instructions) && step.StartLocation?.LatLng != null)
+                                {
+                                    _activeRouteSteps.Add(new RouteStep
+                                    {
+                                        TurnLocation = new Location(step.StartLocation.LatLng.Latitude, step.StartLocation.LatLng.Longitude),
+                                        Instruction = step.NavigationInstruction.Instructions
+                                    });
+                                }
+                            }
+                        }
                     }
                     else
                     {
                         // Draw a secondary spiderweb route
-                        var otherLine = new Polyline { StrokeColor = routeColor ?? Colors.MediumPurple, StrokeWidth = 5 };
+                        var otherLine = new Polyline
+                        {
+                            StrokeColor = routeColor ?? Colors.MediumPurple,
+                            StrokeWidth = 15f
+                        };
                         foreach (var coord in decodedPoints) otherLine.Geopath.Add(coord);
 
                         LiveMap.MapElements.Add(otherLine);
@@ -811,6 +864,125 @@ public partial class LobbyPage : ContentPage
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Routing Error: {ex.Message}"); }
         return null;
+    }
+    // --- NEW VOICE NAV VARIABLES ---
+    private List<RouteStep> _activeRouteSteps = new();
+
+    private void ProcessVoiceNavigation(Location currentGPS)
+    {
+        if (!Preferences.Default.Get("Map_VoiceNav", true)) return;
+        if (_activeRouteSteps == null || !_activeRouteSteps.Any()) return;
+
+        // =====================================================================
+        // 1. AUTO-SKIP PASSED STEPS
+        // =====================================================================
+        for (int i = 0; i < _activeRouteSteps.Count; i++)
+        {
+            var step = _activeRouteSteps[i];
+            if (step.VoiceAlertPlayed) continue;
+
+            double distToThisStep = Location.CalculateDistance(currentGPS, step.TurnLocation, DistanceUnits.Kilometers) * 1000;
+
+            // If we are physically within 25 meters, consider it crossed
+            if (distToThisStep < 25)
+            {
+                step.VoiceAlertPlayed = true;
+                continue;
+            }
+
+            // Spatial Check: Are we closer to the NEXT turn than the CURRENT turn?
+            // If so, we have passed/missed this turn. Skip it!
+            if (i + 1 < _activeRouteSteps.Count)
+            {
+                double distToNextStep = Location.CalculateDistance(currentGPS, _activeRouteSteps[i + 1].TurnLocation, DistanceUnits.Kilometers) * 1000;
+                if (distToNextStep < distToThisStep)
+                {
+                    step.VoiceAlertPlayed = true;
+                    continue;
+                }
+            }
+
+            break; // Stop at the first valid, unplayed step ahead of us
+        }
+
+        // =====================================================================
+        // 2. IDENTIFY THE ACTIVE TURN
+        // =====================================================================
+        var nextStep = _activeRouteSteps.FirstOrDefault(s => !s.VoiceAlertPlayed);
+        if (nextStep == null) return;
+
+        double distanceMeters = Location.CalculateDistance(currentGPS, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
+
+        // =====================================================================
+        // 3. CALCULATE DYNAMIC TRIGGER DISTANCE
+        // =====================================================================
+        // A. Speed Factor: Calculate distance covered in 10 seconds (default to 40km/h if GPS speed is null)
+        double speedKmh = (currentGPS.Speed ?? 11.11) * 3.6;
+        double speedTriggerDist = (speedKmh / 3.6) * 10;
+
+        // Clamp it so it doesn't trigger ridiculously early on highways, or too late in cities
+        double dynamicTriggerDist = Math.Clamp(speedTriggerDist, 100, 350);
+
+        // B. Density Factor: Check the distance between the previous turn and this one
+        var previousStep = _activeRouteSteps.LastOrDefault(s => s.VoiceAlertPlayed);
+        if (previousStep != null)
+        {
+            double distBetweenSteps = Location.CalculateDistance(previousStep.TurnLocation, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
+
+            // If the turns are less than 250m apart, we reduce the trigger distance 
+            // to 60% of the segment length so the rider has time to breathe between instructions
+            if (distBetweenSteps < 250)
+            {
+                double reducedTrigger = distBetweenSteps * 0.6;
+                dynamicTriggerDist = Math.Clamp(reducedTrigger, 30, dynamicTriggerDist);
+            }
+        }
+
+        // =====================================================================
+        // 4. EXECUTE VOICE ALERT
+        // =====================================================================
+        if (distanceMeters <= dynamicTriggerDist)
+        {
+            nextStep.VoiceAlertPlayed = true;
+
+            // Round the spoken distance beautifully to the nearest 50m (e.g., 150m, 200m)
+            int spokenDistance = (int)(Math.Round(distanceMeters / 50.0) * 50);
+            if (spokenDistance < 50) spokenDistance = 50;
+
+            // Use the smart cleaner we built earlier to strip HTML, decode entities, and fix pacing
+            string cleanInstruction = CleanVoiceInstruction(nextStep.Instruction);
+
+            _ = TextToSpeech.Default.SpeakAsync($"In {spokenDistance} meters, {cleanInstruction}");
+        }
+    }
+    private string CleanVoiceInstruction(string rawInstruction)
+    {
+        if (string.IsNullOrWhiteSpace(rawInstruction)) return "";
+
+        // 1. Remove all HTML tags (e.g. <b>, <div>, <wbr>)
+        string clean = System.Text.RegularExpressions.Regex.Replace(rawInstruction, "<.*?>", " ");
+
+        // 2. Decode HTML entities (e.g. &amp; becomes &, &nbsp; becomes a space)
+        clean = System.Net.WebUtility.HtmlDecode(clean);
+
+        // 3. Expand common road abbreviations so the voice doesn't stutter or mispronounce them
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bNH\b", "National Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bSH\b", "State Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bRd\b", "Road", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bSt\b", "Street", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bHwy\b", "Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        // 4. INJECT PACING: Native TTS engines pause whenever they hit a comma.
+        // We force a pause between the action and the road name, and before destinations.
+        clean = clean.Replace(" onto ", ", onto, ");
+        clean = clean.Replace(" towards ", ", towards, ");
+        clean = clean.Replace(" to stay on ", ", to stay on, ");
+        clean = clean.Replace(" and ", ", and, ");
+
+        // 5. Clean up any weird double spaces created by the replacements
+        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s+", " ").Trim();
+
+        return clean;
     }
 
     private List<Location> DecodeGooglePolyline(string encodedPoints)
@@ -1120,6 +1292,7 @@ public partial class LobbyPage : ContentPage
                     {
                         LiveMap.MapElements.Remove(_activeRouteLine);
                         _activeRouteLine = null;
+                        _activeRouteSteps.Clear();
                     }
                     var oldDest = LiveMap.Pins.FirstOrDefault(p => p.Label != "You" && p.Type == PinType.Place);
                     if (oldDest != null) LiveMap.Pins.Remove(oldDest);
@@ -1604,7 +1777,7 @@ public partial class LobbyPage : ContentPage
                 durationSeconds = 5;
                 voiceMessage = $"{senderName} needs a refuel break. Prepare to stop at the next gas station.";
 
-                await ShowPoisTemporarilyAsync(new List<string> { "gas_station" }, "⛽");
+                //await ShowPoisTemporarilyAsync(new List<string> { "gas_station" }, "⛽");
             }
             else if (alertType == "Rest")
             {
@@ -1614,7 +1787,7 @@ public partial class LobbyPage : ContentPage
                 durationSeconds = 5;
                 voiceMessage = $"{senderName} requested a rest stop. Prepare to pull over soon.";
 
-                await ShowPoisTemporarilyAsync(new List<string> { "restaurant", "cafe" }, "🍽️");
+                //await ShowPoisTemporarilyAsync(new List<string> { "restaurant", "cafe" }, "🍽️");
             }
 
             AlertSenderLabel.Text = $"Triggered by: {senderName}";
@@ -2190,7 +2363,7 @@ public partial class LobbyPage : ContentPage
                 existingVm.Heading = heading;
                 existingVm.Speed = speedKmh > 1 ? $"{Math.Round(speedKmh)} km/h" : "Stopped";
 
-                AnimatePinMovement(existingVm, newLoc, heading, 1000);
+                //AnimatePinMovement(existingVm, newLoc, heading, 1000);
             }
             else
             {
@@ -2371,7 +2544,7 @@ public partial class LobbyPage : ContentPage
                     _myPinVm.Speed = $"{Math.Round(speedKmh)} km/h";
                     _myPinVm.Heading = fakeHeading;
 
-                    AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
+                    //AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
                 }
             });
 
@@ -2388,6 +2561,8 @@ public partial class LobbyPage : ContentPage
 
             // NEW: Fire the Speed Limit Engine and Camera Physics
             _ = EvaluateSpeedLimitAsync(point, speedKmh);
+
+            ProcessVoiceNavigation(point);
 
             await Task.Delay(delayMs);
             currentIndex++;
@@ -2605,6 +2780,9 @@ public partial class LobbyPage : ContentPage
         _isHeadingUp = Preferences.Default.Get("Map_HeadingUp", false);
         HeadingUpButton.BackgroundColor = _isHeadingUp ? Colors.DodgerBlue : (Application.Current.RequestedTheme == AppTheme.Dark ? Color.FromArgb("#333333") : Colors.White);
         HeadingUpButton.TextColor = _isHeadingUp ? Colors.White : Colors.DodgerBlue;
+
+        if (VoiceNavSwitch != null)
+            VoiceNavSwitch.IsToggled = Preferences.Default.Get("Map_VoiceNav", true);
     }
     private void OnMapSettingChanged(object sender, ToggledEventArgs e)
     {
@@ -2612,6 +2790,9 @@ public partial class LobbyPage : ContentPage
         Preferences.Default.Set("Map_SpeedLimits", SpeedLimitSwitch.IsToggled);
         Preferences.Default.Set("Map_AutoZoom", AutoZoomSwitch.IsToggled);
         Preferences.Default.Set("Map_AutoTilt", AutoTiltSwitch.IsToggled);
+
+        if (VoiceNavSwitch != null)
+            Preferences.Default.Set("Map_VoiceNav", VoiceNavSwitch.IsToggled);
 
         LiveMap.IsTrafficEnabled = TrafficSwitch.IsToggled;
     }

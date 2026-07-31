@@ -423,6 +423,13 @@
                                         </StackLayout>
                                         <Switch x:Name="AutoTiltSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnMapSettingChanged" />
                                     </Grid>
+                                    <Grid ColumnDefinitions="*, Auto">
+                                        <StackLayout Grid.Column="0" VerticalOptions="Center">
+                                            <Label Text="Voice Navigation" />
+                                            <Label Text="Enables/Disables map navigation instructions" FontSize="11" TextColor="Gray"/>
+                                        </StackLayout>
+                                        <Switch x:Name="VoiceNavSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnMapSettingChanged" />
+                                    </Grid>
                                 </StackLayout>
                             </VerticalStackLayout>
                         </Grid>

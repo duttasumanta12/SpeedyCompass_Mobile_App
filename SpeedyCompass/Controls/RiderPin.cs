@@ -43,7 +43,7 @@ public class RiderPin : System.ComponentModel.INotifyPropertyChanged
             if (diff > 180.0) diff = 360.0 - diff;
 
             // 2. Only update if the turn is > 3 degrees, OR if it's the very first location fix
-            if (diff > 15.0 || _isFirstHeading)
+            if (diff > 3.0 || _isFirstHeading)
             {
                 _heading = value;
                 OnPropertyChanged(); // This now ONLY fires when it actually matters

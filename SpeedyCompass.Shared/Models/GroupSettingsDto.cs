@@ -7,6 +7,7 @@ namespace SpeedyCompass.Shared.Models
     // 1. NEW: Add this DTO class at the top of your file
     public class GroupSettingsDto
     {
+        public string GroupName { get; set; }
         public int MaxLagDistanceMeters { get; set; }
         public int SplinterWarningDistanceMeters { get; set; }
         public int MaxGroupSize { get; set; }

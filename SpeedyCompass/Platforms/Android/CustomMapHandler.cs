@@ -246,7 +246,7 @@ namespace SpeedyCompass.Platforms.Android
                     // (You don't want the map spinning wildly when other riders turn corners!)
                     if (pin.Username == "You" && pin.IsAutoCentering)
                     {
-                        UpdateCameraBearing(pin);
+                        //UpdateCameraBearing(pin);
                     }
                 }
             });
@@ -310,14 +310,14 @@ namespace SpeedyCompass.Platforms.Android
             {
                 if (speedKmh > 100) targetZoom = 16f;       // Highway (Zoomed out to see far ahead)
                 else if (speedKmh > 60) targetZoom = 17f;   // Arterial/City
-                else targetZoom = 18f;                      // Slow/Turning (Zoomed in tight)
+                else targetZoom = 19.5f;                      // Slow/Turning (Zoomed in tight)
             }
 
             // 4. Dynamic Auto-Tilt
-            float targetTilt = 0f;
+            float targetTilt = 60f;
             if (autoTilt && speedKmh > 30)
             {
-                targetTilt = 45f; // 3D Horizon view when moving
+                targetTilt = 60f; // 3D Horizon view when moving
             }
 
             // 5. Dynamic Rotation
@@ -331,8 +331,16 @@ namespace SpeedyCompass.Platforms.Android
                 .Tilt(targetTilt)
                 .Build();
 
-            // Use AnimateCamera for a smooth transition (MoveCamera is instant/choppy)
-            Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition));
+            if (speedKmh < 90)
+            {
+                // Use AnimateCamera for a smooth transition (MoveCamera is instant/choppy)
+                Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition));
+            }
+            else
+            {
+                // Use MoveCamera for instant updates at high speeds (avoids motion sickness)
+                Map.MoveCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition));
+            }
         }
     }
 
