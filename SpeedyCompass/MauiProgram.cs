@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Maui.Maps.Handlers;
 using SpeedyCompass.Controls;
+using SpeedyCompass.Engines;
 using SpeedyCompass.Services;
 using System.Net.Http;
 
@@ -37,6 +38,10 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<MsalAuthService>();
             builder.Services.AddSingleton<RideStateService>();
             builder.Services.AddSingleton<SignalRService>();
+
+            builder.Services.AddSingleton<IVoiceCopilotEngine, VoiceCopilotEngine>();
+            builder.Services.AddSingleton<IRoutingEngine, RoutingEngine>();
+            builder.Services.AddSingleton<ITelemetryEngine, TelemetryEngine>();
 
             // --- NEW: Register HttpClientFactory and your Page ---
             builder.Services.AddHttpClient("CompassBackend", client =>

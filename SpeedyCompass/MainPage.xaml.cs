@@ -287,7 +287,6 @@ public partial class MainPage : ContentPage
             await _signalRService.CreateGroup(groupName, CurrentUsername, CurrentGoogleId, generatedPin, initialSettings);
 
             var groupDetails = await _signalRService.GetGroupDetails(groupName);
-            await _signalRService.StopAsync();
 
             // Show PIN to Admin before jumping into the Lobby
             await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
@@ -356,6 +355,7 @@ public partial class MainPage : ContentPage
             await _signalRService.JoinGroup(groupName, CurrentUsername, CurrentGoogleId, pinCode);
 
             var groupDetails = await _signalRService.GetGroupDetails(groupName);
+            
             await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
         catch (Exception ex)
