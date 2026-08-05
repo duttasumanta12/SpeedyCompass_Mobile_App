@@ -77,6 +77,31 @@ public partial class LobbyPage : ContentPage
     private readonly IVoiceCopilotEngine _voiceEngine;
     private readonly IRoutingEngine _routingEngine;
     private readonly ITelemetryEngine _telemetryEngine;
+    private CancellationTokenSource _rideCts;
+    private DateTime _lastNetworkBroadcastTime = DateTime.MinValue;
+    private Location _lastNetworkBroadcastLocation = null;
+    private bool ShouldBroadcastToNetwork(Location currentLoc, double speedKmh)
+    {
+        if (_lastNetworkBroadcastLocation == null) return true;
+
+        double timeSinceLastSeconds = (DateTime.UtcNow - _lastNetworkBroadcastTime).TotalSeconds;
+
+        // RULE 1: Time Fallback (Always keep the connection alive every 10 seconds)
+        if (timeSinceLastSeconds >= 10) return true;
+
+        // RULE 2: Dynamic Distance Formula
+        double distSinceLastMeters = Location.CalculateDistance(_lastNetworkBroadcastLocation, currentLoc, DistanceUnits.Kilometers) * 1000;
+
+        int minUpdateDist = groupDetails?.Settings?.MinUpdateDistanceMeters ?? 10;
+        int maxUpdateDist = groupDetails?.Settings?.MaxUpdateDistanceMeters ?? 100;
+
+        // The Math: At 0 km/h, threshold is Min (e.g. 10m). At 100+ km/h, threshold scales to Max (e.g. 100m).
+        // This prevents high-speed highway driving from spamming the server, while keeping tight turns in cities accurate.
+        double speedRatio = Math.Min(speedKmh, 100.0) / 100.0;
+        double dynamicThresholdMeters = minUpdateDist + (speedRatio * (maxUpdateDist - minUpdateDist));
+
+        return distSinceLastMeters >= dynamicThresholdMeters;
+    }
 
     public LobbyPage(SignalRService signalRService,  GroupDetailsDto groupDetails)
     {
@@ -293,7 +318,6 @@ public partial class LobbyPage : ContentPage
     // --- LOCATION PROCESSING & TELEMETRY ---
     private async void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
-        // 1. SKIP UI UPDATE IF LOCKED
         if (!_rideCache.RunningInBackground)
         {
             MainThread.BeginInvokeOnMainThread(() =>
@@ -301,9 +325,25 @@ public partial class LobbyPage : ContentPage
                 LocationDisabledOverlay.IsVisible = false;
                 if (_myPinVm != null)
                 {
-                    _myPinVm.Location = e.Location;
-                    _myPinVm.Speed = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
-                    _myPinVm.Heading = e.Heading;
+                    string newSpeedStr = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
+
+                    // THE FIX: 60-FPS Fluid Animation for the Local Pin!
+                    // This tells the UI to glide the pin smoothly to the new spot over 1000ms
+                    AnimatePinMovement(_myPinVm, e.Location, e.Heading, 1000);
+                    _myPinVm.Speed = newSpeedStr;
+
+                    // THE FIX: Fluid Camera Tracking
+                    if (_myPinVm.IsAutoCentering)
+                    {
+                        // Calculate zoom based on speed (closer when slow, further when fast)
+                        double speedKmh = e.SpeedMph * 1.60934;
+                        double radiusKm = speedKmh > 80 ? 1.5 : (speedKmh > 40 ? 1.0 : 0.5);
+
+                        var newRegion = MapSpan.FromCenterAndRadius(e.Location, Distance.FromKilometers(radiusKm));
+
+                        // We do NOT await this, let it fire and smoothly glide the camera
+                        LiveMap.MoveToRegion(newRegion);
+                    }
                 }
             });
         }
@@ -312,10 +352,12 @@ public partial class LobbyPage : ContentPage
 
         if (groupDetails?.CurrentState == GroupState.Navigating)
         {
-            await TrimRouteVisuals(e.Location);
-            double speedKmh = e.SpeedMph * 1.60934; // Convert mph back to kmh for the telemetry engine
-            await _telemetryEngine.EvaluateEdgeTelemetryAsync(e.Location, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
-            // NEW: Fire the Speed Limit Engine and Camera Physics
+            // Fire Telemetry completely independently so it doesn't block the UI glide
+            _ = TrimRouteVisuals(e.Location);
+
+            double speedKmh = e.SpeedMph * 1.60934;
+            _ = _telemetryEngine.EvaluateEdgeTelemetryAsync(e.Location, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
+
             _ = _telemetryEngine.EvaluateSpeedLimitAsync(e.Location, speedKmh, (limit, isSpeeding) =>
             {
                 if (!_rideCache.RunningInBackground)
@@ -337,131 +379,165 @@ public partial class LobbyPage : ContentPage
             });
 
             _voiceEngine?.ProcessTurnByTurn(e.Location, _activeRouteSteps);
+
+            if (ShouldBroadcastToNetwork(e.Location, speedKmh))
+            {
+                _lastNetworkBroadcastTime = DateTime.UtcNow;
+                _lastNetworkBroadcastLocation = e.Location;
+
+                // Offload network call so it doesn't block the buttery-smooth UI glide!
+                _ = Task.Run(async () => {
+                    try
+                    {
+                        await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading);
+                        AppLogger.Info("Network", $"Broadcasted location at {Math.Round(speedKmh)} km/h");
+                    }
+                    catch (Exception ex) { AppLogger.Error("Network", ex, "Failed to broadcast location."); }
+                });
+            }
         }
     }
 
     private async Task TrimRouteVisuals(Location currentLocation)
     {
         if (_activeRouteLine == null || _rideCache.ActiveDestination == null || _rideCache.CurrentRoutePoints.Count < 2) return;
+        if (_rideCts == null || _rideCts.IsCancellationRequested) return;
 
-        // Snapshot the route points to safely read them on a background thread
         var currentRouteSnapshot = _rideCache.CurrentRoutePoints.ToList();
 
-        // 1. OFFLOAD ALL MATH AND TELEMETRY TO BACKGROUND
-        var telemetryData = await Task.Run(() =>
+        try
         {
-            // --- Odometer & Speed Telemetry Math ---
-            if (_rideCache.LastOdometerLocation != null)
+            var telemetryData = await Task.Run(() =>
             {
-                double stepDistance = Location.CalculateDistance(_rideCache.LastOdometerLocation, currentLocation, DistanceUnits.Kilometers);
-                if (stepDistance > 0 && stepDistance < 20) _rideCache.CumulativeDistanceKm += stepDistance;
-            }
+                // Throw an exception immediately if the token was cancelled
+                _rideCts.Token.ThrowIfCancellationRequested();
 
-            if (currentLocation?.Speed != null)
-            {
-                double spdKmh = (currentLocation.Speed.Value) * 3.6;
-                if (spdKmh > _rideCache.MaxSpeedKmh) _rideCache.MaxSpeedKmh = spdKmh;
+                // --- Odometer Math ---
 
-                if (spdKmh < 2) { if (_rideCache.LastStopTime == null) _rideCache.LastStopTime = DateTime.Now; }
-                else if (_rideCache.LastStopTime != null)
+                double currentSpeedKmh = (currentLocation?.Speed ?? 0) * 3.6;
+
+                if (_rideCache.LastOdometerLocation != null)
                 {
-                    _rideCache.TotalStoppedTime += (DateTime.Now - _rideCache.LastStopTime.Value);
-                    _rideCache.LastStopTime = null;
+                    double stepDistance = Location.CalculateDistance(_rideCache.LastOdometerLocation, currentLocation, DistanceUnits.Kilometers);
+                    if (stepDistance > 0.01 && stepDistance < 20) _rideCache.CumulativeDistanceKm += stepDistance;
                 }
-            }
 
-            // --- THE SLIDING WINDOW (Closest Point & Off-Route Math) ---
-            // Start searching 5 points behind where we were last seen (in case of GPS drift/reversing)
-            int startIndex = Math.Max(0, _rideCache.CurrentRouteIndex - 5);
-
-            // Search up to 50 GPS points ahead of us
-            int searchRange = Math.Min(currentRouteSnapshot.Count - startIndex, 50);
-
-            double minDistance = double.MaxValue;
-            int closestActualIndex = startIndex;
-
-            for (int i = 0; i < searchRange; i++)
-            {
-                int checkIndex = startIndex + i;
-                double dist = Location.CalculateDistance(currentLocation, currentRouteSnapshot[checkIndex], DistanceUnits.Kilometers);
-                if (dist < minDistance)
+                if (currentLocation?.Speed != null)
                 {
-                    minDistance = dist;
-                    closestActualIndex = checkIndex;
-                }
-            }
+                    double spdKmh = (currentLocation.Speed.Value) * 3.6;
+                    if (spdKmh > _rideCache.MaxSpeedKmh) _rideCache.MaxSpeedKmh = spdKmh;
 
-            // --- ETA & Distance Remaining Math ---
-            double distLeft = 0;
-            if (currentRouteSnapshot.Count > 1 && closestActualIndex < currentRouteSnapshot.Count)
-            {
-                // Measure from Rider -> Closest Point
-                distLeft += Location.CalculateDistance(currentLocation, currentRouteSnapshot[closestActualIndex], DistanceUnits.Kilometers);
-
-                // Measure from Closest Point -> End of Route
-                for (int j = closestActualIndex; j < currentRouteSnapshot.Count - 1; j++)
-                {
-                    distLeft += Location.CalculateDistance(currentRouteSnapshot[j], currentRouteSnapshot[j + 1], DistanceUnits.Kilometers);
-                }
-            }
-            else distLeft = Location.CalculateDistance(currentLocation, _rideCache.ActiveDestination, DistanceUnits.Kilometers);
-
-            double currentSpeed = (currentLocation?.Speed ?? 0) * 3.6;
-            double movingAvg = Math.Max(currentSpeed, 40);
-            double hoursLeft = distLeft / movingAvg;
-            DateTime eta = DateTime.Now.AddHours(hoursLeft);
-
-            // Return all the calculated strings and values safely
-            return new
-            {
-                IsOffRoute = minDistance > 0.1,
-                NewRouteIndex = closestActualIndex, // Save our progress instead of deleting points!
-                DistLeftStr = $"{Math.Round(distLeft, 1)} km",
-                TotalTravelStr = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)} km",
-                TotalRouteStr = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km",
-                EtaStr = $"ETA {eta:HH:mm}"
-            };
-        });
-
-        // 2. HANDLE REROUTING LOGIC
-        if (telemetryData.IsOffRoute)
-        {
-            if ((DateTime.Now - _rideCache.LastRerouteTime).TotalSeconds > 15)
-            {
-                _rideCache.LastRerouteTime = DateTime.Now;
-                _ = Task.Run(async () => {
-                    string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination, _rideCache.ActiveMeetupPoint);
-                    if (!string.IsNullOrEmpty(newPolyline))
+                    if (spdKmh < 2) { if (_rideCache.LastStopTime == null) _rideCache.LastStopTime = DateTime.Now; }
+                    else if (_rideCache.LastStopTime != null)
                     {
-                        var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
-                        if (settings != null && settings.EnableDynamicRouting)
-                        {
-                            if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
-                            else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
-                        }
+                        _rideCache.TotalStoppedTime += (DateTime.Now - _rideCache.LastStopTime.Value);
+                        _rideCache.LastStopTime = null;
                     }
-                });
-            }
-            return;
-        }
+                }
 
-        // 3. UPDATE THE CACHE WITH OUR PROGRESS
-        _rideCache.CurrentRouteIndex = telemetryData.NewRouteIndex;
-        _rideCache.LastOdometerLocation = currentLocation;
+                int startIndex = Math.Max(0, _rideCache.CurrentRouteIndex - 5);
+                int searchRange = Math.Min(currentRouteSnapshot.Count - startIndex, 50);
 
-        // 4. BATCH ALL UI UPDATES TO MAIN THREAD
-        MainThread.BeginInvokeOnMainThread(() => {
-            try
+                double minDistance = double.MaxValue;
+                int closestActualIndex = startIndex;
+
+                for (int i = 0; i < searchRange; i++)
+                {
+                    int checkIndex = startIndex + i;
+                    double dist = Location.CalculateDistance(currentLocation, currentRouteSnapshot[checkIndex], DistanceUnits.Kilometers);
+                    if (dist < minDistance)
+                    {
+                        minDistance = dist;
+                        closestActualIndex = checkIndex;
+                    }
+                }
+
+                double distLeft = 0;
+                if (currentRouteSnapshot.Count > 1 && closestActualIndex < currentRouteSnapshot.Count)
+                {
+                    distLeft += Location.CalculateDistance(currentLocation, currentRouteSnapshot[closestActualIndex], DistanceUnits.Kilometers);
+                    for (int j = closestActualIndex; j < currentRouteSnapshot.Count - 1; j++)
+                    {
+                        distLeft += Location.CalculateDistance(currentRouteSnapshot[j], currentRouteSnapshot[j + 1], DistanceUnits.Kilometers);
+                    }
+                }
+                else distLeft = Location.CalculateDistance(currentLocation, _rideCache.ActiveDestination, DistanceUnits.Kilometers);
+
+                double currentSpeed = (currentLocation?.Speed ?? 0) * 3.6;
+                double movingAvg = Math.Max(currentSpeed, 40);
+                double hoursLeft = distLeft / movingAvg;
+                DateTime eta = DateTime.Now.AddHours(hoursLeft);
+
+                return new
+                {
+                    IsOffRoute = minDistance > 0.1,
+                    NewRouteIndex = closestActualIndex,
+                    DistLeftStr = $"{Math.Round(distLeft, 1)} km",
+                    TotalTravelStr = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)} km",
+                    TotalRouteStr = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km",
+                    EtaStr = $"ETA {eta:HH:mm}"
+                };
+            }, _rideCts.Token);
+
+            if (telemetryData.IsOffRoute)
             {
-                if (_myPinVm != null) MySpeedLabel.Text = _myPinVm.Speed;
-                MyDistanceLabel.Text = telemetryData.DistLeftStr;
-                MyTotalTraveledLabel.Text = telemetryData.TotalTravelStr;
-                MyTotalRouteLabel.Text = telemetryData.TotalRouteStr;
-                MyEtaLabel.Text = telemetryData.EtaStr;
-                MyEtaLabel.IsVisible = true;
+                if ((DateTime.Now - _rideCache.LastRerouteTime).TotalSeconds > 15)
+                {
+                    AppLogger.Info("Routing", "Rider is off route. Triggering recalculation.");
+                    _rideCache.LastRerouteTime = DateTime.Now;
+
+                    _ = Task.Run(async () => {
+                        try
+                        {
+                            var activeIntermediates = new List<Location>();
+                            if (_rideCache.ActiveMeetupPoint != null) activeIntermediates.Add(_rideCache.ActiveMeetupPoint);
+
+                            string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination);
+
+                            if (!string.IsNullOrEmpty(newPolyline))
+                            {
+                                var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
+                                if (settings != null && settings.EnableDynamicRouting)
+                                {
+                                    if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
+                                    else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            AppLogger.Error("Routing", ex, "Failed to recalculate route during deviation.");
+                        }
+                    }, _rideCts.Token);
+                }
+                return;
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"UI Stats Update Error: {ex.Message}"); }
-        });
+
+            _rideCache.CurrentRouteIndex = telemetryData.NewRouteIndex;
+            _rideCache.LastOdometerLocation = currentLocation;
+
+            MainThread.BeginInvokeOnMainThread(() => {
+                if (_rideCts.IsCancellationRequested) return;
+                try
+                {
+                    MyDistanceLabel.Text = telemetryData.DistLeftStr;
+                    MyTotalTraveledLabel.Text = telemetryData.TotalTravelStr;
+                    MyTotalRouteLabel.Text = telemetryData.TotalRouteStr;
+                    MyEtaLabel.Text = telemetryData.EtaStr;
+                    MyEtaLabel.IsVisible = true;
+                }
+                catch (Exception ex) { AppLogger.Error("UI", ex, "Failed to update UI stats."); }
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            AppLogger.Info("Telemetry", "Telemetry math cancelled gracefully.");
+        }
+        catch (Exception ex)
+        {
+            // THE SAVIOR: If math fails, it logs it and exits cleanly instead of freezing the app forever!
+            AppLogger.Error("Telemetry", ex, "CRITICAL ERROR in TrimRouteVisuals loop.");
+        }
     }
     // --- NEW: Close Button Handler ---
     private async void OnCloseRideSummaryClicked(object sender, EventArgs e)
@@ -528,12 +604,18 @@ public partial class LobbyPage : ContentPage
 
             if (mainRoute != null)
             {
+                double distKm = Math.Round(mainRoute.DistanceMeters / 1000.0, 1);
                 var decodedPoints = _rideCache.CurrentRoutePoints = _routingEngine.DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
 
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
                     if (isMainRoute && mainRoute.Legs != null)
                     {
+                        // THE FIX: Update the UI label with the distance immediately!
+                        if (PendingDestinationLabel != null && !string.IsNullOrEmpty(_rideCache.ActiveDestinationName))
+                        {
+                            PendingDestinationLabel.Text = $"{_rideCache.ActiveDestinationName} ({distKm} km)";
+                        }
                         // Safely remove only the main route (leaving the spiderweb intact!)
                         if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
 
@@ -965,6 +1047,13 @@ public partial class LobbyPage : ContentPage
 
     private async void OnNavigationStarted(double destLat, double destLng, string destName, bool isSyncRequired = false)
     {
+
+        AppLogger.ResetRideCorrelationId();
+        _rideCts?.Cancel();
+        _rideCts = new CancellationTokenSource();
+
+        AppLogger.Info("Navigation", $"Starting route to {destName}...");
+
         _rideCache.ActiveDestination = new Location(destLat, destLng);
         _rideCache.ActiveDestinationName = destName;
         _isSelectingLocation = true;
@@ -985,7 +1074,14 @@ public partial class LobbyPage : ContentPage
         if (loc != null)
         {
             await CalculateAndDrawRoute(loc, _rideCache.ActiveDestination);
-            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
+            // THE FIX: Start navigation zoomed in and pointing North instead of zooming out to FitMapToBounds!
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
+
+                LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(loc, Distance.FromKilometers(0.5)));
+                LiveMap.RotateTo(0, 500, Easing.SinInOut);
+            });
 
 #if DEBUG
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any() && !_isSimulating)
@@ -1280,7 +1376,10 @@ public partial class LobbyPage : ContentPage
     {
         if (_lastKnownLocation != null)
         {
-            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromMiles(0.5)));
+            // THE FIX: Return to default 0.5km zoom and gently rotate North
+            LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromKilometers(0.5)));
+            LiveMap.RotateTo(0, 500, Easing.SinInOut);
+
             if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
 
             OverviewButton.IsVisible = true;
@@ -1530,6 +1629,7 @@ public partial class LobbyPage : ContentPage
         try
         {
             await _signalRService.CompleteGroupNavigation(GroupNameLabel.Text, _myName);
+            _rideCts?.Cancel();
         }
         finally
         {
@@ -2113,14 +2213,16 @@ public partial class LobbyPage : ContentPage
 
         if (_locationTracker != null) _locationTracker.IsSimulating = true;
 
-        // FIX: Freeze a copy of the route! 
-        // This prevents the Trimmer from deleting points out from under the loop's index!
+        // Freeze a copy of the route! 
         var simulationPath = _rideCache.CurrentRoutePoints.ToList();
         int currentIndex = 0;
 
+        AppLogger.Info("Simulator", "Starting route simulation...");
+
         while (currentIndex < simulationPath.Count)
         {
-            if (groupDetails.CurrentState != GroupState.Navigating || !_isSimulating)
+            // THE FIX 4: Check the cancellation token (_rideCts) to kill zombie threads instantly!
+            if (groupDetails.CurrentState != GroupState.Navigating || !_isSimulating || (_rideCts != null && _rideCts.IsCancellationRequested))
             {
                 _isSimulating = false;
                 break;
@@ -2134,7 +2236,6 @@ public partial class LobbyPage : ContentPage
                 continue;
             }
 
-            // Draw from the frozen path, so we never skip a coordinate
             var point = simulationPath[currentIndex];
 
             double fakeHeading = _lastKnownLocation != null
@@ -2159,27 +2260,38 @@ public partial class LobbyPage : ContentPage
                 {
                     if (_myPinVm != null)
                     {
-                        _myPinVm.Location = point;
+                        // THE FIX 3: Unleash the smooth animation!
+                        AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
                         _myPinVm.Speed = $"{Math.Round(speedKmh)} km/h";
-                        _myPinVm.Heading = fakeHeading;
 
-                        //AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
+                        // THE FIX 2: Make the camera follow the simulator too!
+                        //if (_myPinVm.IsAutoCentering)
+                        //{
+                        //    double radiusKm = speedKmh > 80 ? 1.5 : (speedKmh > 40 ? 1.0 : 0.5);
+                        //    var newRegion = MapSpan.FromCenterAndRadius(point, Distance.FromKilometers(radiusKm));
+                        //    LiveMap.MoveToRegion(newRegion); // Smoothly glide the map!
+                        //}
                     }
                 });
             }
 
             _lastKnownLocation = point;
 
-            // --- THE FIX: Pass Simulation through the Gatekeeper! ---
-            if (_rideCache.ShouldBroadcastLocation(point, speedKmh))
+            // --- THE FIX 1: Use the NEW Gatekeeper we just built! ---
+            if (ShouldBroadcastToNetwork(point, speedKmh))
             {
-                _rideCache.LastBroadcastLocation = point;
+                _lastNetworkBroadcastTime = DateTime.UtcNow;
+                _lastNetworkBroadcastLocation = point;
+
                 await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
+                AppLogger.Info("Simulator", $"Broadcasted at {Math.Round(speedKmh)} km/h");
             }
+
             await TrimRouteVisuals(point);
-            
+
             await _telemetryEngine.EvaluateEdgeTelemetryAsync(point, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
-            // NEW: Fire the Speed Limit Engine and Camera Physics
+
+            // Fire the Speed Limit Engine
             _ = _telemetryEngine.EvaluateSpeedLimitAsync(point, speedKmh, (limit, isSpeeding) =>
             {
                 if (_rideCache.RunningInBackground) return;
@@ -2205,6 +2317,7 @@ public partial class LobbyPage : ContentPage
         }
 
         _isSimulating = false;
+        AppLogger.Info("Simulator", "Simulation ended cleanly.");
     }
     private double CalculateBearing(Location start, Location end)
     {

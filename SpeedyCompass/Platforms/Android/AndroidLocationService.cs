@@ -18,7 +18,9 @@ public class AndroidLocationService : Service, ILocationListener
     private PowerManager.WakeLock _wakeLock;
     private NotificationManager _notificationManager;
 
-    // Expose instance so we can update the notification live
+    private global::Android.Locations.Location _lastAndroidLocation;
+    private DateTime _lastLocationTime;
+
     public static AndroidLocationService Instance { get; private set; }
 
     public override IBinder OnBind(Intent intent) => null;
@@ -27,10 +29,8 @@ public class AndroidLocationService : Service, ILocationListener
     {
         Instance = this;
 
-        // 1. ALWAYS update the group name and preferences on every call
         _groupName = intent?.GetStringExtra("GroupName");
         Preferences.Default.Set("CurrentGroupName", _groupName);
-
 
         _notificationManager = (NotificationManager)GetSystemService(NotificationService);
         CreateNotificationChannel();
@@ -40,9 +40,6 @@ public class AndroidLocationService : Service, ILocationListener
         _wakeLock.Acquire();
 
         _signalRService = IPlatformApplication.Current?.Services.GetService<SignalRService>();
-
-        // --- THE FIX: Native GPS now respects the Gatekeeper! ---
-        var rideCache = IPlatformApplication.Current?.Services.GetService<RideStateService>();
 
         int count = intent?.GetIntExtra("NumberOfOnlineRiders", 0) ?? 0;
         var notification = CreateNotification(count);
@@ -61,7 +58,12 @@ public class AndroidLocationService : Service, ILocationListener
         {
             if (_locationManager.IsProviderEnabled(LocationManager.GpsProvider))
             {
-                _locationManager.RequestLocationUpdates(LocationManager.GpsProvider, 10000, 10f, this);
+                // THE FIX: Set distance filter to 0f so Android keeps reporting at red lights!
+                _locationManager.RequestLocationUpdates(LocationManager.GpsProvider, 2000, 0f, this);
+            }
+            else if (_locationManager.IsProviderEnabled(LocationManager.NetworkProvider))
+            {
+                _locationManager.RequestLocationUpdates(LocationManager.NetworkProvider, 2000, 0f, this);
             }
         }
         catch (Java.Lang.SecurityException ex)
@@ -70,11 +72,9 @@ public class AndroidLocationService : Service, ILocationListener
             StopSelf();
         }
 
-
         return StartCommandResult.Sticky;
     }
 
-    // --- NEW: Dynamic Notification Builder ---
     public void UpdateRiderCount(int count)
     {
         if (_notificationManager != null)
@@ -86,12 +86,10 @@ public class AndroidLocationService : Service, ILocationListener
 
     private Notification CreateNotification(int count)
     {
-        // 1. SOS Button Intent (Must be Immutable for Android 12+)
         var sosIntent = new Intent(this, typeof(NotificationActionReceiver));
         sosIntent.SetAction("ACTION_SOS");
         var sosPendingIntent = PendingIntent.GetBroadcast(this, 0, sosIntent, PendingIntentFlags.UpdateCurrent | PendingIntentFlags.Immutable);
 
-        // 2. Open App Intent
         var mainIntent = new Intent(this, typeof(MainActivity));
         mainIntent.SetAction(Intent.ActionMain);
         mainIntent.AddCategory(Intent.CategoryLauncher);
@@ -105,8 +103,8 @@ public class AndroidLocationService : Service, ILocationListener
             .SetSmallIcon(Resource.Mipmap.appicon)
             .SetContentIntent(mainPendingIntent)
             .SetOngoing(true)
-            .SetVisibility(NotificationCompat.VisibilityPublic) // Show fully on Lock Screen
-            .AddAction(0, "🛑 EMERGENCY SOS", sosPendingIntent) // Add Lock Screen Button
+            .SetVisibility(NotificationCompat.VisibilityPublic)
+            .AddAction(0, "🛑 EMERGENCY SOS", sosPendingIntent)
             .Build();
     }
 
@@ -118,15 +116,32 @@ public class AndroidLocationService : Service, ILocationListener
             if (tracker != null && tracker.IsSimulating) return;
 
             var mauiLocation = new Microsoft.Maui.Devices.Sensors.Location(location.Latitude, location.Longitude);
-            double speedMph = location.HasSpeed ? location.Speed : 0;
+
+            double speedMps = 0;
+            if (location.HasSpeed)
+            {
+                speedMps = location.Speed; // Native Android speed is Meters Per Second (m/s)
+            }
+            else if (_lastAndroidLocation != null)
+            {
+                // Fallback math calculation if hardware speed flag drops out
+                double distanceMeters = _lastAndroidLocation.DistanceTo(location);
+                double timeSeconds = (location.Time - _lastAndroidLocation.Time) / 1000.0;
+                if (timeSeconds > 0) speedMps = distanceMeters / timeSeconds;
+            }
+
+            if (speedMps < 0.8)
+            {
+                speedMps = 0;
+            }
+
+            _lastAndroidLocation = location;
+
+            // Convert m/s to MPH for your existing UI calculations
+            double speedMph = speedMps * 2.23694;
             double heading = location.HasBearing ? location.Bearing : 0;
 
             AndroidLocationTracker.NotifyLocation(mauiLocation, speedMph, heading);
-
-            if (_signalRService != null && !string.IsNullOrEmpty(_groupName))
-            {
-                await _signalRService.UpdateLocation(_groupName, Preferences.Default.Get("username", "Unknown"), mauiLocation.Latitude, mauiLocation.Longitude, heading);
-            }
         }
         catch (Exception ex)
         {
@@ -147,7 +162,7 @@ public class AndroidLocationService : Service, ILocationListener
         }
         else
         {
-#pragma warning disable CS0618 // Type or member is obsolete
+#pragma warning disable CS0618
             StopForeground(true);
 #pragma warning restore CS0618
         }

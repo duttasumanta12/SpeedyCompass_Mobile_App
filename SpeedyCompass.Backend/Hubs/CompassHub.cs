@@ -191,7 +191,7 @@ public class CompassHub : Hub
             GroupName = groupName,
             GoogleId = googleId,
             Name = username,
-            Role = "Admin",
+            Role = "Lead",
             IsAdmin = true,
             IsOnline = true,
             ConnectionId = Context.ConnectionId,

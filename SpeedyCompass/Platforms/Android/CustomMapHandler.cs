@@ -217,14 +217,7 @@ namespace SpeedyCompass.Platforms.Android
             {
                 if (e.PropertyName == nameof(RiderPin.Location))
                 {
-                    // Smoothly teleport marker to new GPS coordinate
-                    entry.Marker.Position = new LatLng(pin.Location.Latitude, pin.Location.Longitude);
 
-                    // THE FIX: Move the camera even if we are driving perfectly straight!
-                    if (pin.Username == "You" && pin.IsAutoCentering)
-                    {
-                        UpdateCameraBearing(pin);
-                    }
                 }
                 else if (e.PropertyName == nameof(RiderPin.Speed))
                 {
@@ -246,7 +239,7 @@ namespace SpeedyCompass.Platforms.Android
                     // (You don't want the map spinning wildly when other riders turn corners!)
                     if (pin.Username == "You" && pin.IsAutoCentering)
                     {
-                        //UpdateCameraBearing(pin);
+                        UpdateCameraBearing(pin);
                     }
                 }
             });
@@ -291,12 +284,10 @@ namespace SpeedyCompass.Platforms.Android
             // Apply the padding to the native Android map engine
             Map.SetPadding(0, topPadding, 0, bottomPadding);
 
-            // 1. Read the live preferences directly from the device storage
             bool autoTilt = Preferences.Default.Get("Map_AutoTilt", true);
             bool autoZoom = Preferences.Default.Get("Map_AutoZoom", true);
             bool headingUp = Preferences.Default.Get("Map_HeadingUp", false);
 
-            // 2. Extract speed number from the UI string (e.g. "120 km/h" -> 120)
             double speedKmh = 0;
             if (!string.IsNullOrEmpty(pin.Speed))
             {
@@ -304,26 +295,28 @@ namespace SpeedyCompass.Platforms.Android
                 double.TryParse(speedStr, out speedKmh);
             }
 
-            // 3. Dynamic Auto-Zoom (Google Maps uses Zoom Levels ~10 to 21 instead of miles)
+            // THE FIX: Respect Manual Zoom!
+            // Grab exactly where the camera is right now so we don't cause jitter.
             float targetZoom = Map.CameraPosition.Zoom;
+
+            // Only override the zoom if they explicitly enabled Auto-Zoom in settings
             if (autoZoom)
             {
-                if (speedKmh > 100) targetZoom = 16f;       // Highway (Zoomed out to see far ahead)
-                else if (speedKmh > 60) targetZoom = 17f;   // Arterial/City
-                else targetZoom = 19.5f;                      // Slow/Turning (Zoomed in tight)
+                if (speedKmh > 100) targetZoom = 15f;       // Highway (Zoomed out to see far ahead)
+                else if (speedKmh > 60) targetZoom = 16.5f;   // Arterial/City
+                else targetZoom = 18f;                      // Slow/Turning (Zoomed in tight)
             }
 
-            // 4. Dynamic Auto-Tilt
-            float targetTilt = 60f;
-            if (autoTilt && speedKmh > 30)
+            // Dynamic Auto-Tilt
+            float targetTilt = 0f;
+            if (autoTilt && speedKmh > 10)
             {
                 targetTilt = 60f; // 3D Horizon view when moving
             }
 
-            // 5. Dynamic Rotation
+            // Default to North (0), or respect HeadingUp if toggled
             float targetBearing = headingUp ? (float)pin.Heading : 0f;
 
-            // Build the Native Google Maps Camera Position
             var cameraPosition = new CameraPosition.Builder()
                 .Target(new LatLng(pin.Location.Latitude, pin.Location.Longitude))
                 .Bearing(targetBearing)
@@ -331,16 +324,10 @@ namespace SpeedyCompass.Platforms.Android
                 .Tilt(targetTilt)
                 .Build();
 
-            if (speedKmh < 90)
-            {
-                // Use AnimateCamera for a smooth transition (MoveCamera is instant/choppy)
-                Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition));
-            }
-            else
-            {
-                // Use MoveCamera for instant updates at high speeds (avoids motion sickness)
-                Map.MoveCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition));
-            }
+            // THE FIX: ALWAYS Animate!
+            // Even at high speeds, a 1000ms animation matches our GPS ping rate perfectly,
+            // resulting in a flawless 60FPS glide with zero snap-back.
+            Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition), 1000, null);
         }
     }
 
