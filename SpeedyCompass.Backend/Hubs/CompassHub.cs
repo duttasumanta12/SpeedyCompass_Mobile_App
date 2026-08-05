@@ -345,7 +345,7 @@ public class CompassHub : Hub
                 .Set(g => g.DestName, destName);
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
 
-            await Clients.Group(groupName).SendAsync("DestinationSet", destLat, destLng, destName);
+            await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("DestinationSet", destLat, destLng, destName);
             await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"The Lead rider has set a new destination: {destName}.");
         }
     }

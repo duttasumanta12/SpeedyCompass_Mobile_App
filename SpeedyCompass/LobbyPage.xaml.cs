@@ -192,8 +192,11 @@ public partial class LobbyPage : ContentPage
             }
 
             _hasJoined = true;
-            AdminSettingsBtn.IsVisible = _amIAdmin;
+            //AdminSettingsBtn.IsVisible = _amIAdmin;
             await InitializeLocalTrackingAsync();
+
+            // Open the Convoy (Roster) tab by default when the user enters the map!
+            OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
 
             if (groupDetails != null)
             {
@@ -307,7 +310,7 @@ public partial class LobbyPage : ContentPage
             // 3. Lock down UI based on admin status
             AdminSearchUI.IsVisible = _amIAdmin;
             AdminInstructionBanner.IsVisible = _amIAdmin;
-            AdminSettingsBtn.IsVisible = _amIAdmin;
+            //AdminSettingsBtn.IsVisible = _amIAdmin;
             AdminPinCard.IsVisible = _amIAdmin;
             TabAdminBtn.IsVisible = _amIAdmin;
 
@@ -326,6 +329,9 @@ public partial class LobbyPage : ContentPage
                 if (_myPinVm != null)
                 {
                     string newSpeedStr = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
+
+                    // THE FIX: Push the speed directly to the Drawer UI!
+                    if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
 
                     // THE FIX: 60-FPS Fluid Animation for the Local Pin!
                     // This tells the UI to glide the pin smoothly to the new spot over 1000ms
@@ -611,10 +617,9 @@ public partial class LobbyPage : ContentPage
                 {
                     if (isMainRoute && mainRoute.Legs != null)
                     {
-                        // THE FIX: Update the UI label with the distance immediately!
-                        if (PendingDestinationLabel != null && !string.IsNullOrEmpty(_rideCache.ActiveDestinationName))
+                        if (PreNavDistLabel != null)
                         {
-                            PendingDestinationLabel.Text = $"{_rideCache.ActiveDestinationName} ({distKm} km)";
+                            PreNavDistLabel.Text = $"{distKm} km";
                         }
                         // Safely remove only the main route (leaving the spiderweb intact!)
                         if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
@@ -887,20 +892,38 @@ public partial class LobbyPage : ContentPage
         DrawerMapSettingsTab.IsVisible = false;
         DrawerAdminTab.IsVisible = false;
 
-        if (sender == TabActionsBtn && groupDetails.CurrentState > GroupState.DestinationSet) 
-        { 
-            TabActionsBtn.BackgroundColor = Colors.DodgerBlue; 
-            TabActionsBtn.TextColor = Colors.White; 
-            DrawerActionsTab.IsVisible = true; 
+        // Safety/Actions only available once we actually start driving
+        if (sender == TabActionsBtn && groupDetails.CurrentState >= GroupState.Navigating)
+        {
+            TabActionsBtn.BackgroundColor = Colors.DodgerBlue;
+            TabActionsBtn.TextColor = Colors.White;
+            DrawerActionsTab.IsVisible = true;
         }
-        else if (sender == TabStatsBtn && groupDetails.CurrentState > GroupState.DestinationSet) { TabStatsBtn.BackgroundColor = Colors.DodgerBlue; TabStatsBtn.TextColor = Colors.White; DrawerStatsTab.IsVisible = true; _ = RefreshTelemetryData(); }
-        else if (sender == TabAdminBtn && groupDetails.CurrentState > GroupState.DestinationSet) { TabAdminBtn.BackgroundColor = Colors.DodgerBlue; TabAdminBtn.TextColor = Colors.White; DrawerAdminTab.IsVisible = true; }
-        else if (sender == TabMapSettingsBtn) { TabMapSettingsBtn.BackgroundColor = Colors.DodgerBlue; TabMapSettingsBtn.TextColor = Colors.White; DrawerMapSettingsTab.IsVisible = true; }
+        else if (sender == TabAdminBtn && _amIAdmin) // Visible strictly to Admins
+        {
+            TabAdminBtn.BackgroundColor = Colors.DodgerBlue;
+            TabAdminBtn.TextColor = Colors.White;
+            DrawerAdminTab.IsVisible = true;
+        }
+        else if (sender == TabMapSettingsBtn) // Available to everyone immediately
+        {
+            TabMapSettingsBtn.BackgroundColor = Colors.DodgerBlue;
+            TabMapSettingsBtn.TextColor = Colors.White;
+            DrawerMapSettingsTab.IsVisible = true;
+        }
+        else // Fallback & Default is the Unified Convoy/Stats Tab
+        {
+            TabStatsBtn.BackgroundColor = Colors.DodgerBlue;
+            TabStatsBtn.TextColor = Colors.White;
+            DrawerStatsTab.IsVisible = true;
+        }
+
         if (ActionDrawer.TranslationY >= (_drawerFullHeight - _drawerPeekHeight) - 10)
             ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
     }
 
     // --- STATE MACHINE ---
+    // 🔄 REPLACE entire method
     private async Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "")
     {
         if (this.groupDetails.CurrentState == newState) return;
@@ -915,26 +938,52 @@ public partial class LobbyPage : ContentPage
                 case GroupState.DestinationSet:
                     OnDestinationSet(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
                     _isSelectingLocation = true;
-                    DestinationSearchBar.Text = groupDetails.DestName;
+                    if (string.IsNullOrEmpty(DestinationSearchBar.Text))
+                    {
+                        DestinationSearchBar.Text = groupDetails.DestName;
+                    }
+
+                    // Toggle Headers
+                    IdleHeader.IsVisible = false;
+                    PreNavigationHeader.IsVisible = true;
+                    TelemetryHeader.IsVisible = false;
+
                     AdminInstructionBanner.IsVisible = false;
                     ConfirmDestButton.IsVisible = false;
                     ResetDestButton.IsVisible = true;
                     _isSelectingLocation = false;
+
                     ActionDrawer.IsVisible = true;
                     ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+
+                    if (_amIAdmin)
+                    {
+                        PauseNavBtn.IsVisible = false;
+                        ResumeNavBtn.IsVisible = false;
+                        CompleteNavBtn.IsVisible = false;
+                        MeetupPointBtn.IsVisible = true; // Meetup works here!
+                    }
                     break;
+
                 case GroupState.NotNavigating:
                 case GroupState.Completed:
-                    ActionDrawer.IsVisible = false;
+                    // Toggle Headers
+                    IdleHeader.IsVisible = true;
+                    PreNavigationHeader.IsVisible = false;
+                    TelemetryHeader.IsVisible = false;
+
+                    ActionDrawer.IsVisible = true;
+                    ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+
                     FloatingMapControls.IsVisible = false;
 #if DEBUG
-                    SimSpeedFrame.IsVisible = false;
+                    //SimSpeedFrame.IsVisible = false;
 #endif
-                    PendingDestinationFrame.IsVisible = false;
                     ConfirmDestButton.IsVisible = true;
                     ResetDestButton.IsVisible = false;
                     DestinationSearchBar.IsReadOnly = false;
                     DestinationSearchBar.Text = string.Empty;
+                    AdminInstructionBanner.IsVisible = _amIAdmin;
 
                     _locationTracker?.StopTracking();
                     _isSimulating = false;
@@ -945,8 +994,12 @@ public partial class LobbyPage : ContentPage
                         _activeRouteLine = null;
                         _activeRouteSteps.Clear();
                     }
-                    var oldDest = LiveMap.Pins.FirstOrDefault(p => p.Label != "You" && p.Type == PinType.Place);
-                    if (oldDest != null) LiveMap.Pins.Remove(oldDest);
+                    // THE FIX: Wipe ALL destination/waypoint pins, but keep the Rider pins!
+                    var oldDestPins = LiveMap.Pins.Where(p => p.Label != "You" && p.Type == PinType.Place).ToList();
+                    foreach (var destPin in oldDestPins)
+                    {
+                        LiveMap.Pins.Remove(destPin);
+                    }
 
                     FitMapToBounds();
 
@@ -955,22 +1008,36 @@ public partial class LobbyPage : ContentPage
 #endif
                     if (newState == GroupState.Completed)
                         _voiceEngine.Speak($"Navigation completed by {triggerUser}. Great ride!");
+
+                    if (_amIAdmin)
+                    {
+                        PauseNavBtn.IsVisible = false;
+                        ResumeNavBtn.IsVisible = false;
+                        CompleteNavBtn.IsVisible = false;
+                        MeetupPointBtn.IsVisible = false;
+                    }
+
+                    if (MySpeedLabel != null) MySpeedLabel.Text = "0 km/h";
                     break;
 
                 case GroupState.Navigating:
-                    OnTabClicked(TabMap, new TabClickedEventArgs() { FromNavigationStarted = true });
-                    PendingDestinationFrame.IsVisible = false;
+                    // Toggle Headers
+                    IdleHeader.IsVisible = false;
+                    PreNavigationHeader.IsVisible = false;
+                    TelemetryHeader.IsVisible = true;
+
+                    // Auto-switch drawer to the "Safety" Actions tab
+                    OnDrawerTabClicked(TabActionsBtn, EventArgs.Empty);
+
                     AdminInstructionBanner.IsVisible = false;
                     DestinationSearchBar.IsReadOnly = true;
                     ConfirmDestButton.IsVisible = false;
                     ResetDestButton.IsVisible = true;
 
-                    ActionDrawer.IsVisible = true;
                     FloatingMapControls.IsVisible = true;
 #if DEBUG
-                    SimSpeedFrame.IsVisible = true;
+                    //SimSpeedFrame.IsVisible = true;
 #endif
-                    ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
 
                     TabAdminBtn.IsVisible = _amIAdmin;
                     if (_amIAdmin)
@@ -978,6 +1045,7 @@ public partial class LobbyPage : ContentPage
                         PauseNavBtn.IsVisible = true;
                         ResumeNavBtn.IsVisible = false;
                         CompleteNavBtn.IsVisible = true;
+                        MeetupPointBtn.IsVisible = true;
                     }
 
                     SetActionButtonsEnabled(true);
@@ -1001,9 +1069,10 @@ public partial class LobbyPage : ContentPage
                         PauseNavBtn.IsVisible = false;
                         ResumeNavBtn.IsVisible = true;
                         CompleteNavBtn.IsVisible = true;
+                        MeetupPointBtn.IsVisible = true;
                     }
 #if DEBUG
-                    SimSpeedFrame.IsVisible = false;
+                    //SimSpeedFrame.IsVisible = false;
 #endif
 
                     string context = newState == GroupState.PausedBreak ? "for a break" :
@@ -1014,13 +1083,13 @@ public partial class LobbyPage : ContentPage
                     _voiceEngine.Speak($"Navigation paused by {triggerUser} {spokenReason}. Tracking suspended.");
 
                     ActionDrawer.TranslateToAsync(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
-                    //OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
                     break;
             }
         });
     }
 
     // --- EVENT TRIGGERS ---
+    // 🔄 REPLACE entire method
     private async void OnDestinationSet(double destLat, double destLng, string destName)
     {
         ShowLoading("Drawing Route Preview...");
@@ -1030,15 +1099,31 @@ public partial class LobbyPage : ContentPage
             _rideCache.ActiveDestination = new Location(destLat, destLng);
             _rideCache.ActiveDestinationName = destName;
 
+            var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+            if (currentLoc != null)
+            {
+                // This method internally updates PreNavDistLabel with the exact distance!
+                await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination);
+                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _rideCache.ActiveDestination]));
+            }
+
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                PendingDestinationLabel.Text = destName;
-                PendingDestinationFrame.IsVisible = true;
+                PreNavDestLabel.Text = destName;
 
                 if (_amIAdmin)
                 {
                     StartJourneyButton.IsVisible = true;
                     StartJourneyButton.IsEnabled = true;
+
+                    // Fallback just in case the GPS is completely dead and we couldn't calculate distance
+                    if (currentLoc == null) PreNavDistLabel.Text = "Waiting for GPS...";
+                }
+                else
+                {
+                    StartJourneyButton.IsVisible = false;
+                    // Standard riders see this instead of the Start button
+                    PreNavDistLabel.Text += " (Waiting for Admin to Start)";
                 }
             });
         }
@@ -1144,11 +1229,21 @@ public partial class LobbyPage : ContentPage
     {
         if (groupDetails != null)
         {
-            PendingDestinationFrame.IsVisible = false;
             ConfirmDestButton.IsVisible = true;
             ResetDestButton.IsVisible = false;
             DestinationSearchBar.IsReadOnly = false;
             DestinationSearchBar.Text = string.Empty;
+
+            // THE FIX: Nuke the blue line and the destination pins visually!
+            if (_activeRouteLine != null)
+            {
+                LiveMap.MapElements.Remove(_activeRouteLine);
+                _activeRouteLine = null;
+                _activeRouteSteps.Clear();
+            }
+
+            var oldPins = LiveMap.Pins.Where(p => p.Type == PinType.Place).ToList();
+            foreach (var p in oldPins) LiveMap.Pins.Remove(p);
 
             _rideCache.HardResetAll();
         }
@@ -1163,7 +1258,7 @@ public partial class LobbyPage : ContentPage
         try
         {
             StartJourneyButton.IsEnabled = false;
-            await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _rideCache.ActiveDestination.Latitude, _rideCache.ActiveDestination.Longitude, PendingDestinationLabel.Text);
+            await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _rideCache.ActiveDestination.Latitude, _rideCache.ActiveDestination.Longitude, DestinationSearchBar.Text);
         }
         finally { HideLoading(); }
     }
@@ -1223,10 +1318,10 @@ public partial class LobbyPage : ContentPage
             MainThread.BeginInvokeOnMainThread(() => LiveMap.MoveToRegion(region));
         });
     }
-    private async void OnRefreshTelemetryClicked(object sender, EventArgs e)
-    {
-        await RefreshTelemetryData();
-    }
+    //private async void OnRefreshTelemetryClicked(object sender, EventArgs e)
+    //{
+    //    await RefreshTelemetryData();
+    //}
 
     // Include your remaining hardware hooks, search UI logic, mapping interactions, PTT methods etc below exactly as they were...
 
@@ -1239,7 +1334,7 @@ public partial class LobbyPage : ContentPage
             StatusLabel.Text = status;
             StatusLabel.TextColor = color;
             StatusDot.BackgroundColor = color;
-            MapTabStatusDot.Fill = color;
+            //MapTabStatusDot.Fill = color;
             if (StatusLabel.Parent is View parentView)
             {
                 parentView.InvalidateMeasure();
@@ -1254,46 +1349,46 @@ public partial class LobbyPage : ContentPage
             }
         }
     }
-    private async void OnTabClicked(object sender, EventArgs e)
-    {
-        bool calledFromNavStart = e is TabClickedEventArgs tce && tce.FromNavigationStarted;
+    //private async void OnTabClicked(object sender, EventArgs e)
+    //{
+    //    bool calledFromNavStart = e is TabClickedEventArgs tce && tce.FromNavigationStarted;
 
-        if (sender == TabRoster)
-        {
-            TabRoster.BackgroundColor = Colors.DodgerBlue;
-            TabRoster.TextColor = Colors.White;
-            TabMap.BackgroundColor = Colors.Transparent;
-            TabMap.TextColor = Application.Current.RequestedTheme == AppTheme.Dark ? Colors.White : Colors.Black;
+    //    if (sender == TabRoster)
+    //    {
+    //        TabRoster.BackgroundColor = Colors.DodgerBlue;
+    //        TabRoster.TextColor = Colors.White;
+    //        TabMap.BackgroundColor = Colors.Transparent;
+    //        TabMap.TextColor = Application.Current.RequestedTheme == AppTheme.Dark ? Colors.White : Colors.Black;
 
-            RosterView.IsVisible = true;
-            MapView.IsVisible = false;
-        }
-        else if (sender == TabMap)
-        {
-            TabMap.BackgroundColor = Colors.DodgerBlue;
-            TabMap.TextColor = Colors.White;
-            TabRoster.BackgroundColor = Colors.Transparent;
-            TabRoster.TextColor = Application.Current.RequestedTheme == AppTheme.Dark ? Colors.White : Colors.Black;
+    //        RosterView.IsVisible = true;
+    //        MapView.IsVisible = false;
+    //    }
+    //    else if (sender == TabMap)
+    //    {
+    //        TabMap.BackgroundColor = Colors.DodgerBlue;
+    //        TabMap.TextColor = Colors.White;
+    //        TabRoster.BackgroundColor = Colors.Transparent;
+    //        TabRoster.TextColor = Application.Current.RequestedTheme == AppTheme.Dark ? Colors.White : Colors.Black;
 
-            RosterView.IsVisible = false;
-            MapView.IsVisible = true;
+    //        RosterView.IsVisible = false;
+    //        MapView.IsVisible = true;
 
-            if (!calledFromNavStart && _rideCache.ActiveDestination != null)
-            {
-                var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
-                UpdateDestinationPin(_rideCache.ActiveDestination, DestinationSearchBar.Text ?? PendingDestinationLabel.Text ?? "Selected Destination");
-                await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination);
-                if (groupDetails.CurrentState < GroupState.Navigating)
-                {
-                    MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _rideCache.ActiveDestination]));
-                }
-            }
-            else
-            {
-                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
-            }
-        }
-    }
+    //        if (!calledFromNavStart && _rideCache.ActiveDestination != null)
+    //        {
+    //            var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+    //            UpdateDestinationPin(_rideCache.ActiveDestination, DestinationSearchBar.Text ?? PendingDestinationLabel.Text ?? "Selected Destination");
+    //            await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination);
+    //            if (groupDetails.CurrentState < GroupState.Navigating)
+    //            {
+    //                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _rideCache.ActiveDestination]));
+    //            }
+    //        }
+    //        else
+    //        {
+    //            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
+    //        }
+    //    }
+    //}
     private async void OnMapClicked(object sender, MapClickedEventArgs e)
     {
         if (!_amIAdmin || groupDetails?.CurrentState == GroupState.Navigating) return;
@@ -1334,7 +1429,14 @@ public partial class LobbyPage : ContentPage
             {
                 _pendingDestination = location;
                 UpdateDestinationPin(_pendingDestination, DestinationSearchBar.Text);
-                LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(location, Distance.FromMiles(2)));
+
+                // THE FIX: Actually calculate the route and show the distance!
+                var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+                if (currentLoc != null)
+                {
+                    await CalculateAndDrawRoute(currentLoc, _pendingDestination);
+                    MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _pendingDestination]));
+                }
 
                 ConfirmDestButton.IsEnabled = true;
                 ConfirmDestButton.BackgroundColor = Colors.MediumSeaGreen;
@@ -1364,10 +1466,13 @@ public partial class LobbyPage : ContentPage
 
         string destName = DestinationSearchBar.Text ?? "Destination";
         _rideCache.ActiveDestination = _pendingDestination;
+        groupDetails.DestLng = _pendingDestination.Longitude;
+        groupDetails.DestLat = _pendingDestination.Latitude;
+        groupDetails.DestName = destName;
 
         await ChangeGroupState(GroupState.DestinationSet);
 
-        OnTabClicked(TabRoster, EventArgs.Empty);
+        //OnTabClicked(TabRoster, EventArgs.Empty);
 
         await _signalRService.SetGroupDestination(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
     }
@@ -1567,11 +1672,11 @@ public partial class LobbyPage : ContentPage
             await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
         }
     }
-    private async Task RefreshTelemetryData()
-    {
-        var data = await _signalRService.GetGroupTelemetry(GroupNameLabel.Text);
-        MainThread.BeginInvokeOnMainThread(() => TelemetryCollectionView.ItemsSource = data);
-    }
+    //private async Task RefreshTelemetryData()
+    //{
+    //    var data = await _signalRService.GetGroupTelemetry(GroupNameLabel.Text);
+    //    MainThread.BeginInvokeOnMainThread(() => TelemetryCollectionView.ItemsSource = data);
+    //}
     private void ShowLoading(string message)
     {
         MainThread.BeginInvokeOnMainThread(() =>
@@ -1923,6 +2028,26 @@ public partial class LobbyPage : ContentPage
             MainThread.BeginInvokeOnMainThread(() => {
                 SuggestionsFrame.IsVisible = false;
                 AdminInstructionBanner.IsVisible = true;
+
+                // THE FIX: If text is fully cleared (user hit the 'X'), wipe the map routes!
+                if (string.IsNullOrWhiteSpace(query))
+                {
+                    if (_activeRouteLine != null)
+                    {
+                        LiveMap.MapElements.Remove(_activeRouteLine);
+                        _activeRouteLine = null;
+                        _activeRouteSteps.Clear();
+                    }
+                    var oldPins = LiveMap.Pins.Where(p => p.Type == PinType.Place && p.Label != "You").ToList();
+                    foreach (var p in oldPins) LiveMap.Pins.Remove(p);
+
+                    // Revert UI out of "DestinationSet" state safely
+                    if (groupDetails?.CurrentState == GroupState.DestinationSet)
+                    {
+                        _rideCache.HardResetAll();
+                        _ = ChangeGroupState(GroupState.NotNavigating);
+                    }
+                }
             });
             return;
         }
@@ -2044,7 +2169,6 @@ public partial class LobbyPage : ContentPage
         var newLoc = new Location(lat, lng);
         var now = DateTime.UtcNow;
 
-        // OFFLOAD SPEED MATH TO BACKGROUND
         Task.Run(() =>
         {
             double speedKmh = 0;
@@ -2067,19 +2191,78 @@ public partial class LobbyPage : ContentPage
             _riderLastUpdateTimes[riderId] = now;
 
             string speedStr = speedKmh > 1 ? $"{Math.Round(speedKmh)} km/h" : "Stopped";
-            
-            // SKIP UI UPDATE IF RUNNING IN BACKGROUND
+
+            // =======================================================
+            // THE FIX: LOCAL AHEAD/BEHIND MATH
+            // =======================================================
+            string gapStatus = "Nearby";
+            Color gapColor = Colors.MediumSeaGreen;
+
+            if (_lastKnownLocation != null && _rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Count > 0)
+            {
+                double distToThemKm = Location.CalculateDistance(_lastKnownLocation, newLoc, DistanceUnits.Kilometers);
+                double distToThemMeters = distToThemKm * 1000;
+
+                if (distToThemMeters > 50) // If they are further than 50 meters away
+                {
+                    int theirIndex = 0;
+                    double minDist = double.MaxValue;
+
+                    // Find where they are on the route line
+                    // Optimization: We check every 5th point to save CPU power!
+                    for (int i = 0; i < _rideCache.CurrentRoutePoints.Count; i += 5)
+                    {
+                        double d = Location.CalculateDistance(newLoc, _rideCache.CurrentRoutePoints[i], DistanceUnits.Kilometers);
+                        if (d < minDist)
+                        {
+                            minDist = d;
+                            theirIndex = i;
+                        }
+                    }
+
+                    string distDisplay = distToThemMeters > 1000 ? $"{Math.Round(distToThemKm, 1)} km" : $"{Math.Round(distToThemMeters)}m";
+
+                    // Compare their route index to our route index!
+                    if (theirIndex > _rideCache.CurrentRouteIndex + 5)
+                    {
+                        gapStatus = $"{distDisplay} Ahead";
+                        gapColor = Colors.DodgerBlue;
+                    }
+                    else if (theirIndex < _rideCache.CurrentRouteIndex - 5)
+                    {
+                        gapStatus = $"{distDisplay} Behind";
+
+                        // Check if they are falling too far behind based on Admin settings!
+                        int lagLimit = groupDetails?.Settings?.MaxLagDistanceMeters ?? 1000;
+                        gapColor = distToThemMeters > lagLimit ? Colors.Red : Colors.Orange;
+                    }
+                    else
+                    {
+                        gapStatus = $"{distDisplay} Away";
+                        gapColor = Colors.Gray;
+                    }
+                }
+            }
+            // =======================================================
+
             if (_rideCache.RunningInBackground) return;
 
-            // BRING UI PIN UPDATE BACK TO MAIN THREAD
             MainThread.BeginInvokeOnMainThread(() =>
             {
+                var riderModel = Riders.FirstOrDefault(r => r.Name != null && r.Name.StartsWith(riderId));
+                if (riderModel != null)
+                {
+                    riderModel.SpeedStr = speedStr;
+                    // Inject the live math into the UI
+                    riderModel.StatusStr = gapStatus;
+                    riderModel.StatusColor = gapColor;
+                }
+
                 if (_riderViewModels.TryGetValue(riderId, out var existingVm))
                 {
                     existingVm.Location = newLoc;
                     existingVm.Heading = heading;
                     existingVm.Speed = speedStr;
-                    //AnimatePinMovement(existingVm, newLoc, heading, 1000);
                 }
                 else
                 {
@@ -2161,6 +2344,7 @@ public partial class LobbyPage : ContentPage
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
                     LocationDisabledOverlay.IsVisible = false;
+                    DrawerStatsTab.IsVisible = true;
 
                     var usedColors = MapPins.Where(pin => pin.Username != "You").Select(pin => pin.PinColor).ToHashSet();
                     Color uniqueColor;
@@ -2228,7 +2412,7 @@ public partial class LobbyPage : ContentPage
                 break;
             }
 
-            double speedKmh = _simSpeedKmh;
+            double speedKmh = 60;
 
             if (speedKmh == 0)
             {
@@ -2262,7 +2446,11 @@ public partial class LobbyPage : ContentPage
                     {
                         // THE FIX 3: Unleash the smooth animation!
                         AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
-                        _myPinVm.Speed = $"{Math.Round(speedKmh)} km/h";
+                        string newSpeedStr = $"{Math.Round(speedKmh)} km/h";
+                        _myPinVm.Speed = newSpeedStr;
+
+                        // THE FIX: Push the simulated speed directly to the Drawer UI!
+                        if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
 
                         // THE FIX 2: Make the camera follow the simulator too!
                         //if (_myPinVm.IsAutoCentering)
