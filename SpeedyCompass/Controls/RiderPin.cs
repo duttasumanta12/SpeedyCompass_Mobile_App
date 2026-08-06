@@ -62,6 +62,19 @@ public class RiderPin : System.ComponentModel.INotifyPropertyChanged
     {
         ClickedCommand = new Command(() => clicked(this));
     }
+    private double _screenX;
+    public double ScreenX
+    {
+        get => _screenX;
+        set { _screenX = value; OnPropertyChanged(); }
+    }
+
+    private double _screenY;
+    public double ScreenY
+    {
+        get => _screenY;
+        set { _screenY = value; OnPropertyChanged(); }
+    }
 }
 // Defining the CustomMap so XAML can find <controls:CustomMap>
 public class CustomMap : Microsoft.Maui.Controls.Maps.Map

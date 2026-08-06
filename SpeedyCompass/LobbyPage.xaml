@@ -30,6 +30,40 @@
             <!-- ALWAYS VISIBLE MAP -->
             <controls:CustomMap x:Name="LiveMap" MapClicked="OnMapClicked" IsShowingUser="False" CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}" />
 
+            <AbsoluteLayout x:Name="PinOverlayLayout" InputTransparent="True" CascadeInputTransparent="True" ZIndex="10" Grid.Row="0" Grid.RowSpan="2" BindableLayout.ItemsSource="{Binding MapPins, Source={x:Reference ThisPage}}">
+                <BindableLayout.ItemTemplate>
+                    <DataTemplate>
+                        <!-- ContentView acts as the 0,0 anchor. The Translation binds to the Android Projection Engine! -->
+                        <ContentView AbsoluteLayout.LayoutBounds="0,0,-1,-1"
+                                     TranslationX="{Binding ScreenX}"
+                                     TranslationY="{Binding ScreenY}">
+
+                            <!-- The Grid translates negatively to hover precisely over the dot -->
+                            <Grid TranslationX="-50" TranslationY="-75" WidthRequest="100" HorizontalOptions="Center">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- The Main Bubble -->
+                                <Border Grid.Row="0" BackgroundColor="#E61E1E1E" Stroke="{Binding PinColor}" StrokeThickness="2" 
+                                        StrokeShape="RoundRectangle 10" Padding="8,4" HorizontalOptions="Fill">
+                                    <Border.Shadow>
+                                        <Shadow Brush="Black" Offset="0,4" Opacity="0.3" Radius="5"/>
+                                    </Border.Shadow>
+                                    <VerticalStackLayout Spacing="0">
+                                        <Label Text="{Binding Username}" TextColor="White" FontSize="10" FontAttributes="Bold" HorizontalOptions="Center" LineBreakMode="TailTruncation" MaxLines="1"/>
+                                        <Label Text="{Binding Speed}" TextColor="DodgerBlue" FontSize="12" FontAttributes="Bold" HorizontalOptions="Center"/>
+                                    </VerticalStackLayout>
+                                </Border>
+
+                                <!-- The Downward Tail (Drawn via Vector Path) -->
+                                <Path Grid.Row="1" Data="M 0,0 L 12,0 L 6,8 Z" Fill="{Binding PinColor}" HorizontalOptions="Center" Margin="0,-2,0,0"/>
+                            </Grid>
+                        </ContentView>
+                    </DataTemplate>
+                </BindableLayout.ItemTemplate>
+            </AbsoluteLayout>
             <!-- OVERLAYS: Admin Search UI -->
             <Grid x:Name="AdminSearchUI" ColumnDefinitions="*, Auto" RowDefinitions="Auto, Auto" Margin="20,20,20,10" VerticalOptions="Start" IsVisible="False" ZIndex="20">
                 <Border Grid.Row="0" Grid.Column="0" Padding="0" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}">
@@ -106,9 +140,17 @@
                                 <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
                                 <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
                             </Grid.GestureRecognizers>
-                            <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="2">
+
+                            <!-- Visible ONLY to Admin -->
+                            <VerticalStackLayout x:Name="AdminIdleHeader" HorizontalOptions="Center" VerticalOptions="Center" Spacing="2">
                                 <Label Text="Select a destination above" FontSize="16" FontAttributes="Bold" TextColor="Gray" HorizontalOptions="Center"/>
                                 <Label Text="to begin a new ride session." FontSize="12" TextColor="LightGray" HorizontalOptions="Center"/>
+                            </VerticalStackLayout>
+
+                            <!-- Visible ONLY to Standard Riders -->
+                            <VerticalStackLayout x:Name="RiderIdleHeader" HorizontalOptions="Center" VerticalOptions="Center" Spacing="2" IsVisible="False">
+                                <Label Text="Waiting for Admin" FontSize="16" FontAttributes="Bold" TextColor="Gray" HorizontalOptions="Center"/>
+                                <Label Text="to set the convoy destination." FontSize="12" TextColor="LightGray" HorizontalOptions="Center"/>
                             </VerticalStackLayout>
                         </Grid>
 
@@ -341,7 +383,7 @@
                                 <Label Text="Ride Management" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
                                 <Button x:Name="PauseNavBtn" Text="⏸ Pause Ride" BackgroundColor="Goldenrod" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnPauseNavClicked" />
                                 <Button x:Name="ResumeNavBtn" Text="▶️ Resume Ride" IsVisible="False" BackgroundColor="MediumSeaGreen" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnResumeJourneyClicked" />
-                                <Button x:Name="MeetupPointBtn" Text="📍 Generate Meetup Point" BackgroundColor="DarkViolet" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnGenerateMeetupClicked" />
+                                <Button x:Name="MeetupPointBtn" Text="🔄 Sync Routes (Late Joiners)" BackgroundColor="DarkViolet" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnGenerateMeetupClicked" />
                                 <Button Text="⚙️ Group Settings" BackgroundColor="DimGray" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
                                 <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
                             </VerticalStackLayout>

@@ -101,78 +101,26 @@ namespace SpeedyCompass.Platforms.Android
         }
         private BitmapDescriptor GetOrCreateCanvasIcon(string username, Microsoft.Maui.Graphics.Color userColor)
         {
-            if (_usernameIconCache.TryGetValue(username, out var cachedDescriptor))
-            {
-                return cachedDescriptor;
-            }
+            if (_usernameIconCache.TryGetValue(username, out var cachedDescriptor)) return cachedDescriptor;
 
-            // 1. Get Screen Density to ensure it looks sharp on all screen sizes
             float density = this.Context.Resources.DisplayMetrics.Density;
+            int size = (int)(20 * density); // 20dp simple dot
 
-            // 2. Define our sizes (scaled by screen density)
-            float textSize = 14f * density;
-            float paddingX = 12f * density;
-            float paddingY = 8f * density;
-            float cornerRadius = 8f * density;
-            float tailWidth = 12f * density;
-            float tailHeight = 8f * density;
-
-            // 3. Setup the Paints (The "Brushes" we use to draw)
-            using var backgroundPaint = new Paint { AntiAlias = true };
-            backgroundPaint.Color = Color.ParseColor("#55575A"); // Dark grey bubble from your screenshot
-            backgroundPaint.SetStyle(Paint.Style.Fill);
-
-            using var textPaint = new Paint { AntiAlias = true };
-            textPaint.Color = Color.White;
-            textPaint.TextSize = textSize;
-            textPaint.FakeBoldText = true;
-            textPaint.TextAlign = Paint.Align.Center; // Centers text automatically on the X axis
-
-            // 4. Measure the text to figure out how big our bubble needs to be
-            var textBounds = new Rect();
-            textPaint.GetTextBounds(username, 0, username.Length, textBounds);
-
-            float bubbleWidth = textBounds.Width() + (paddingX * 2);
-            float bubbleHeight = textBounds.Height() + (paddingY * 2);
-
-            // The total height includes the bubble + the little tail pointing down
-            float totalHeight = bubbleHeight + tailHeight;
-
-            // 5. Create the empty Bitmap and Canvas
-            var bitmap = Bitmap.CreateBitmap((int)bubbleWidth, (int)totalHeight, Bitmap.Config.Argb8888);
+            var bitmap = Bitmap.CreateBitmap(size, size, Bitmap.Config.Argb8888);
             using var canvas = new Canvas(bitmap);
+            using var paint = new Paint { AntiAlias = true };
 
-            // 6. Draw the rounded rectangle (The main bubble)
-            var rect = new RectF(0, 0, bubbleWidth, bubbleHeight);
-            canvas.DrawRoundRect(rect, cornerRadius, cornerRadius, backgroundPaint);
+            // White outline
+            paint.Color = Color.White;
+            paint.SetStyle(Paint.Style.Fill);
+            canvas.DrawCircle(size / 2f, size / 2f, size / 2f, paint);
 
-            // 7. Draw the Triangle Tail pointing down
-            using var tailPath = new Path();
-            float centerX = bubbleWidth / 2f;
+            // Colored inner dot
+            paint.Color = userColor.ToPlatform();
+            canvas.DrawCircle(size / 2f, size / 2f, (size / 2f) - (2 * density), paint);
 
-            tailPath.MoveTo(centerX - (tailWidth / 2f), bubbleHeight); // Top left of tail
-            tailPath.LineTo(centerX + (tailWidth / 2f), bubbleHeight); // Top right of tail
-            tailPath.LineTo(centerX, totalHeight);                     // Bottom point of tail
-            tailPath.Close();
-
-            // Create a Paint for the tail using the userColor
-            using var tailPaint = new Paint { AntiAlias = true };
-
-            tailPaint.Color = userColor.ToPlatform(); // Convert MAUI Color to Android Color
-            tailPaint.SetStyle(Paint.Style.Fill);
-
-            // Draw the tail with the user color
-            canvas.DrawPath(tailPath, tailPaint);
-
-            // 8. Draw the Text (Centered vertically and horizontally)
-            // Font math: We calculate the vertical center based on the font's Ascent and Descent
-            float textY = (bubbleHeight / 2f) - ((textPaint.Descent() + textPaint.Ascent()) / 2f);
-            canvas.DrawText(username, centerX, textY, textPaint);
-
-            // 9. Convert to Google Maps format and cache it!
             var descriptor = BitmapDescriptorFactory.FromBitmap(bitmap);
             _usernameIconCache[username] = descriptor;
-
             return descriptor;
         }
 
@@ -194,7 +142,9 @@ namespace SpeedyCompass.Platforms.Android
                     markerOption.SetIcon(GetOrCreateCanvasIcon(pin.Username, pin.PinColor));
                     markerOption.SetPosition(new LatLng(pin.Location.Latitude, pin.Location.Longitude));
                     markerOption.InvokeZIndex(pin.ZIndex);
-                    markerOption.Anchor(0.5f, 1.0f); // Center icon on coordinate
+                    markerOption.Anchor(0.5f, 0.5f); // Center icon on coordinate
+                    markerOption.Flat(true);
+                    //markerOption.Rotation((float)pin.Heading);
 
                     var marker = Map.AddMarker(markerOption);
 
@@ -215,29 +165,17 @@ namespace SpeedyCompass.Platforms.Android
 
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                if (e.PropertyName == nameof(RiderPin.Location))
+                if (e.PropertyName == nameof(RiderPin.Location) || e.PropertyName == nameof(RiderPin.Heading))
                 {
-
-                }
-                else if (e.PropertyName == nameof(RiderPin.Speed))
-                {
-                    // Update snippet text
-                    entry.Marker.Snippet = $"Speed: {pin.Speed}";
-
-                    // If the user currently has this pin's bubble open on their screen, force it to refresh!
-                    if (entry.Marker.IsInfoWindowShown)
-                    {
-                        entry.Marker.ShowInfoWindow();
-                    }
-                }
-                else if (e.PropertyName == nameof(RiderPin.Heading))
-                {
-                    // 1. Move the marker
+                    // Move the tiny Native Map Dot
                     entry.Marker.Position = new LatLng(pin.Location.Latitude, pin.Location.Longitude);
 
-                    // 2. ONLY rotate/move the camera if this is the CURRENT user's pin
-                    // (You don't want the map spinning wildly when other riders turn corners!)
-                    if (pin.Username == "You" && pin.IsAutoCentering)
+                    entry.Marker.Rotation = (float)pin.Heading;
+
+                    // NEW: Instantly Sync the MAUI UI Overlay!
+                    ProjectPinsToScreen();
+
+                    if (pin.Username == "You" && pin.IsAutoCentering && e.PropertyName == nameof(RiderPin.Heading))
                     {
                         UpdateCameraBearing(pin);
                     }
@@ -245,17 +183,30 @@ namespace SpeedyCompass.Platforms.Android
             });
         }
 
-        private BitmapDescriptor GetIcon(string icon)
+        private BitmapDescriptor GetIcon(string icon, Microsoft.Maui.Graphics.Color color)
         {
-            if (_iconMap.TryGetValue(icon, out BitmapDescriptor? value)) return value;
+            // Cache by name AND color so we only ever generate each color once!
+            string cacheKey = $"{icon}_{color.ToArgbHex()}";
+            if (_iconMap.TryGetValue(cacheKey, out BitmapDescriptor? value)) return value;
 
             var drawable = Context.Resources.GetIdentifier(icon, "drawable", Context.PackageName);
-            var bitmap = BitmapFactory.DecodeResource(Context.Resources, drawable);
-            var scaled = Bitmap.CreateScaledBitmap(bitmap, _iconSize, _iconSize, false);
-            bitmap.Recycle();
-            var descriptor = BitmapDescriptorFactory.FromBitmap(scaled);
+            if (drawable == 0) return BitmapDescriptorFactory.DefaultMarker(); // Safe fallback if image is missing
 
-            _iconMap[icon] = descriptor;
+            var bitmap = BitmapFactory.DecodeResource(Context.Resources, drawable);
+            var scaled = Bitmap.CreateScaledBitmap(bitmap, 80, 80, false); // Adjust size as needed
+            bitmap.Recycle();
+
+            // Apply a blazing-fast native GPU tint to the static white image
+            var tintedBitmap = Bitmap.CreateBitmap(scaled.Width, scaled.Height, Bitmap.Config.Argb8888);
+            using var canvas = new Canvas(tintedBitmap);
+            using var paint = new Paint();
+            paint.SetColorFilter(new PorterDuffColorFilter(color.ToPlatform(), PorterDuff.Mode.SrcIn));
+
+            canvas.DrawBitmap(scaled, 0, 0, paint);
+            scaled.Recycle();
+
+            var descriptor = BitmapDescriptorFactory.FromBitmap(tintedBitmap);
+            _iconMap[cacheKey] = descriptor;
             return descriptor;
         }
 
@@ -329,6 +280,26 @@ namespace SpeedyCompass.Platforms.Android
             // resulting in a flawless 60FPS glide with zero snap-back.
             Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition), 1000, null);
         }
+        public void ProjectPinsToScreen()
+        {
+            if (Map == null) return;
+
+            var projection = Map.Projection;
+            float density = Context.Resources.DisplayMetrics.Density;
+
+            foreach (var entry in MarkerMap.Values)
+            {
+                var marker = entry.Marker;
+                var pin = entry.Pin;
+
+                // Magic: Google Maps converts LatLng to physical Screen Pixels
+                var screenPoint = projection.ToScreenLocation(marker.Position);
+
+                // Pass it back to MAUI (divided by density so it matches XAML coordinates)
+                pin.ScreenX = screenPoint.X / density;
+                pin.ScreenY = screenPoint.Y / density;
+            }
+        }
     }
 
     public class MapCallbackHandler : Java.Lang.Object, IOnMapReadyCallback
@@ -340,6 +311,8 @@ namespace SpeedyCompass.Platforms.Android
         {
             mapHandler.UpdateValue(nameof(CustomMap.CustomPins));
             googleMap.MarkerClick += mapHandler.MarkerClick;
+
+            googleMap.CameraMove += (s, e) => mapHandler.ProjectPinsToScreen();
         }
     }
 }

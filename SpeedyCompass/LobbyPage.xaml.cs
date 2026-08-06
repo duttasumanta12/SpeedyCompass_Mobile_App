@@ -80,6 +80,36 @@ public partial class LobbyPage : ContentPage
     private CancellationTokenSource _rideCts;
     private DateTime _lastNetworkBroadcastTime = DateTime.MinValue;
     private Location _lastNetworkBroadcastLocation = null;
+    private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
+    {
+        (Color.FromArgb("#FFA07A"), Color.FromArgb("#8B0000")), // Light Salmon -> Dark Red
+        (Color.FromArgb("#98FB98"), Color.FromArgb("#006400")), // Pale Green -> Dark Green
+        (Color.FromArgb("#FFD700"), Color.FromArgb("#B8860B")), // Gold -> Dark Goldenrod
+        (Color.FromArgb("#DDA0DD"), Color.FromArgb("#4B0082")), // Plum -> Indigo
+        (Color.FromArgb("#FF69B4"), Color.FromArgb("#C71585")), // Hot Pink -> Medium Violet Red
+        (Color.FromArgb("#87CEFA"), Color.FromArgb("#00008B")), // Light Sky Blue -> Dark Blue
+        (Color.FromArgb("#F0E68C"), Color.FromArgb("#8B8000")), // Khaki -> Dark Yellow
+        (Color.FromArgb("#E6E6FA"), Color.FromArgb("#483D8B")), // Lavender -> Dark Slate Blue
+        (Color.FromArgb("#FFB6C1"), Color.FromArgb("#800000")), // Light Pink -> Maroon
+        (Color.FromArgb("#20B2AA"), Color.FromArgb("#008080")), // Light Sea Green -> Teal
+        (Color.FromArgb("#9370DB"), Color.FromArgb("#800080")), // Medium Purple -> Purple
+        (Color.FromArgb("#00FA9A"), Color.FromArgb("#2E8B57")), // Medium Spring Green -> Sea Green
+        (Color.FromArgb("#FFC0CB"), Color.FromArgb("#DC143C")), // Pink -> Crimson
+        (Color.FromArgb("#B0E0E6"), Color.FromArgb("#4682B4")), // Powder Blue -> Steel Blue
+        (Color.FromArgb("#F5DEB3"), Color.FromArgb("#A0522D")), // Wheat -> Sienna
+        (Color.FromArgb("#D3D3D3"), Color.FromArgb("#696969")), // Light Gray -> Dim Gray
+        (Color.FromArgb("#FFA500"), Color.FromArgb("#D2691E")), // Orange -> Chocolate
+        (Color.FromArgb("#7FFFD4"), Color.FromArgb("#556B2F")), // Aquamarine -> Dark Olive Green
+        (Color.FromArgb("#F08080"), Color.FromArgb("#B22222")), // Light Coral -> Firebrick
+        (Color.FromArgb("#EEE8AA"), Color.FromArgb("#8B4513"))  // Pale Goldenrod -> Saddle Brown
+    };
+
+    private (Color PinColor, Color RouteColor) GetColorsForRider(string riderId)
+    {
+        if (string.IsNullOrEmpty(riderId)) return RiderColors[0];
+        int hash = Math.Abs(riderId.GetHashCode());
+        return RiderColors[hash % RiderColors.Length];
+    }
     private bool ShouldBroadcastToNetwork(Location currentLoc, double speedKmh)
     {
         if (_lastNetworkBroadcastLocation == null) return true;
@@ -143,7 +173,7 @@ public partial class LobbyPage : ContentPage
         _signalRService.RiderLocationUpdated += OnRiderLocationUpdated;
         _signalRService.NavigationCancelled += OnNavigationCancelled;
         _signalRService.AlertReceived += OnAlertReceived;
-        _signalRService.DestinationSet += OnDestinationSet;
+        _signalRService.DestinationSet += OnSignalRDestinationSetReceived;
         _signalRService.UserJoinedAlert += OnUserJoined;
         _signalRService.UserLeftAlert += OnUserLeft;
         _signalRService.GroupDeleted += OnGroupDeleted;
@@ -204,16 +234,28 @@ public partial class LobbyPage : ContentPage
                 OnPropertyChanged(nameof(ConvoyPin));
                 AdminPinCard.IsVisible = _amIAdmin;
 
-                if (groupDetails.CurrentState == GroupState.DestinationSet)
-                {
-                    groupDetails.CurrentState = GroupState.NotNavigating;
-                    await ChangeGroupState(GroupState.DestinationSet);
-                }
+                // THE FIX: Push EVERYTHING through the Gatekeeper the moment you enter the room!
 
-                if (groupDetails.CurrentState == GroupState.Navigating)
+                if (groupDetails.CurrentState == GroupState.Navigating ||
+                    groupDetails.CurrentState == GroupState.PausedBreak ||
+                    groupDetails.CurrentState == GroupState.PausedHazard ||
+                    groupDetails.CurrentState == GroupState.PausedMechanical)
                 {
-                    groupDetails.CurrentState = GroupState.NotNavigating;
+                    // 1. If the group is currently in a ride (even if paused), we MUST run the heavy 
+                    // route builder so your local phone downloads and draws the active path!
                     OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName, true);
+
+                    // 2. If it happens to be Paused right now, safely snap the buttons into the Paused state.
+                    if (groupDetails.CurrentState != GroupState.Navigating)
+                    {
+                        await ChangeGroupState(groupDetails.CurrentState, forceSync: true);
+                    }
+                }
+                else
+                {
+                    // 3. For NotNavigating or DestinationSet, just force the Gatekeeper!
+                    // If it's a brand new group, this forcefully wipes the map and resets the drawer.
+                    await ChangeGroupState(groupDetails.CurrentState, forceSync: true);
                 }
             }
         }
@@ -222,6 +264,20 @@ public partial class LobbyPage : ContentPage
             await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
             await Navigation.PopAsync();
         }
+    }
+    private async void OnSignalRDestinationSetReceived(double destLat, double destLng, string destName)
+    {
+        if (groupDetails != null)
+        {
+            // 1. Update the internal model silently
+            groupDetails.DestLat = destLat;
+            groupDetails.DestLng = destLng;
+            groupDetails.DestName = destName;
+        }
+
+        // 2. Automatically push it through the Gatekeeper to open the Drawer and update the UI!
+        // (This will automatically call your existing OnDestinationSet visual drawing method)
+        await ChangeGroupState(GroupState.DestinationSet);
     }
 
     protected async override void OnDisappearing()
@@ -234,7 +290,7 @@ public partial class LobbyPage : ContentPage
         _signalRService.RiderLocationUpdated -= OnRiderLocationUpdated;
         _signalRService.NavigationCancelled -= OnNavigationCancelled;
         _signalRService.AlertReceived -= OnAlertReceived;
-        _signalRService.DestinationSet -= OnDestinationSet;
+        _signalRService.DestinationSet -= OnSignalRDestinationSetReceived;
         _signalRService.UserJoinedAlert -= OnUserJoined;
         _signalRService.UserLeftAlert -= OnUserLeft;
         _signalRService.GroupDeleted -= OnGroupDeleted;
@@ -315,6 +371,7 @@ public partial class LobbyPage : ContentPage
             TabAdminBtn.IsVisible = _amIAdmin;
 
             _locationTracker?.UpdateRiderCount(Riders.Count(r => r.IsOnline));
+            UpdateAdminButtonsVisibility();
         });
     }
 
@@ -349,6 +406,14 @@ public partial class LobbyPage : ContentPage
 
                         // We do NOT await this, let it fire and smoothly glide the camera
                         LiveMap.MoveToRegion(newRegion);
+                    }
+                    // THE FIX: Update your OWN listing in the unified Convoy drawer
+                    var myModel = Riders.FirstOrDefault(r => r.GoogleId == CurrentGoogleId);
+                    if (myModel != null)
+                    {
+                        myModel.SpeedStr = newSpeedStr;
+                        myModel.StatusStr = "Local"; // Replaces "Standby/Nearby" with "Local"
+                        myModel.StatusColor = Colors.Transparent;
                     }
                 }
             });
@@ -611,6 +676,13 @@ public partial class LobbyPage : ContentPage
             if (mainRoute != null)
             {
                 double distKm = Math.Round(mainRoute.DistanceMeters / 1000.0, 1);
+
+                // THE FIX: Parse the Google Routes ETA!
+                string durationStr = mainRoute.Duration?.Replace("s", "") ?? "0";
+                double.TryParse(durationStr, out double durationSecs);
+                TimeSpan ts = TimeSpan.FromSeconds(durationSecs);
+                string etaText = ts.Hours > 0 ? $"{ts.Hours}h {ts.Minutes}m" : $"{ts.Minutes}m";
+
                 var decodedPoints = _rideCache.CurrentRoutePoints = _routingEngine.DecodeGooglePolyline(mainRoute.Polyline.EncodedPolyline);
 
                 MainThread.BeginInvokeOnMainThread(() =>
@@ -663,18 +735,18 @@ public partial class LobbyPage : ContentPage
                         _otherRiderRoutes.Add(otherLine);
 
                         // Drop a label pin in the middle of their route line!
-                        if (!string.IsNullOrEmpty(riderName) && decodedPoints.Count > 0)
-                        {
-                            int midIndex = decodedPoints.Count / 2;
-                            var labelPin = new Pin
-                            {
-                                Location = decodedPoints[midIndex],
-                                Label = $"{riderName}'s Route",
-                                Type = PinType.Generic
-                            };
-                            LiveMap.Pins.Add(labelPin);
-                            _otherRiderRoutePins.Add(labelPin);
-                        }
+                        //if (!string.IsNullOrEmpty(riderName) && decodedPoints.Count > 0)
+                        //{
+                        //    int midIndex = decodedPoints.Count / 2;
+                        //    var labelPin = new Pin
+                        //    {
+                        //        Location = decodedPoints[midIndex],
+                        //        Label = $"{riderName}'s Route",
+                        //        Type = PinType.Generic
+                        //    };
+                        //    LiveMap.Pins.Add(labelPin);
+                        //    _otherRiderRoutePins.Add(labelPin);
+                        //}
                     }
                 });
 
@@ -707,45 +779,26 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak($"{userName} has diverted from the route."));
     }
-    private async void OnGenerateMeetupClicked(object sender, EventArgs e)
+    private async Task GenerateMeetupPointAsync()
     {
-        if (_rideCache.ActiveDestination == null || _lastKnownLocation == null)
-        {
-            await DisplayAlert("Hold Up", "You must set a Destination before generating a meetup point.", "OK");
-            return;
-        }
+        if (_rideCache.ActiveDestination == null || _lastKnownLocation == null) return;
 
         var riderLocations = _rideCache.OtherRiderLocations.Values.ToList();
-        if (riderLocations.Count == 0)
-        {
-            await DisplayAlert("No Riders", "There are no other online riders to meet up with.", "OK");
-            return;
-        }
+        if (riderLocations.Count == 0) return; // Silent return if riding solo
 
-        ShowLoading("Calculating Convergence Point...");
+        ShowLoading("Optimizing Convoy Routes...");
         try
         {
-            // 1. Fetch Lead's Route (The Baseline)
             var leadRoute = await _routingEngine.GetRouteDataAsync(_lastKnownLocation, _rideCache.ActiveDestination);
             if (leadRoute == null || leadRoute.DecodedPoints.Count == 0) return;
 
-            // 2. Fetch routes for all other riders IN PARALLEL for speed
-            // FIX: The list holds Tasks of RouteCalculationResult
             var routeTasks = new List<Task<RouteCalculationResult>>();
-            foreach (var loc in riderLocations)
-            {
-                // FIX: Do NOT use .Result here! Just pass the Task into the list so they all run simultaneously.
-                routeTasks.Add(_routingEngine.GetRouteDataAsync(loc, _rideCache.ActiveDestination));
-            }
+            foreach (var loc in riderLocations) routeTasks.Add(_routingEngine.GetRouteDataAsync(loc, _rideCache.ActiveDestination));
 
-            // Await them all at once!
             var otherRoutes = await Task.WhenAll(routeTasks);
 
-            // 3. Find the convergence point (Trace backwards from Destination)
-            Location meetupPoint = leadRoute.DecodedPoints.Last(); // Default to destination
+            Location meetupPoint = leadRoute.DecodedPoints.Last();
 
-            // We iterate backward from the destination. The points will match everyone's route 
-            // until the geographical paths split. 
             for (int i = leadRoute.DecodedPoints.Count - 1; i >= 0; i--)
             {
                 Location pt = leadRoute.DecodedPoints[i];
@@ -753,11 +806,8 @@ public partial class LobbyPage : ContentPage
 
                 foreach (var routeResult in otherRoutes)
                 {
-                    // FIX: Check the DecodedPoints property of the engine result
                     if (routeResult == null || routeResult.DecodedPoints == null || routeResult.DecodedPoints.Count == 0) continue;
 
-                    // Google's polyline nodes won't match to the exact 6th decimal place.
-                    // We use a 100-meter tolerance radius to check if this road is shared.
                     bool foundNear = routeResult.DecodedPoints.Any(rPt => Location.CalculateDistance(pt, rPt, DistanceUnits.Kilometers) < 0.1);
                     if (!foundNear)
                     {
@@ -766,35 +816,15 @@ public partial class LobbyPage : ContentPage
                     }
                 }
 
-                if (sharedByAll)
-                {
-                    // This point is shared by everyone.
-                    // Keep moving backward to find the earliest possible shared merge point.
-                    meetupPoint = pt;
-                }
-                else
-                {
-                    // Divergence found! The PREVIOUS 'meetupPoint' was the last shared point.
-                    break;
-                }
+                if (sharedByAll) meetupPoint = pt;
+                else break;
             }
 
-            // 4. Broadcast the computed Meetup Point to the convoy
             await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, meetupPoint.Latitude, meetupPoint.Longitude);
         }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Error", $"Could not calculate meetup: {ex.Message}", "OK");
-        }
-        finally
-        {
-            HideLoading();
-        }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Meetup Error: {ex.Message}"); }
+        finally { HideLoading(); }
     }
-
-    // =====================================================================
-    // --- UPDATED: TRIGGER THE SPIDERWEB AFTER MEETUP IS SET ---
-    // =====================================================================
     private async void OnMeetupPointSet(double lat, double lng)
     {
         _rideCache.ActiveMeetupPoint = new Location(lat, lng);
@@ -805,33 +835,29 @@ public partial class LobbyPage : ContentPage
 
         if (_lastKnownLocation != null && _rideCache.ActiveDestination != null)
         {
-            // 1. Calculate my own personal route to the meetup point
             await CalculateAndDrawRoute(_lastKnownLocation, _rideCache.ActiveDestination, _rideCache.ActiveMeetupPoint);
 
-            // 2. If I am the Lead, download and draw the spiderweb!
-            bool amILead = _rideCache.MyRole == "Lead" || (_amIAdmin && string.IsNullOrEmpty(_rideCache.CurrentSettings?.LeadRiderGoogleId));
+            // THE FIX: Draw the spiderweb for ALL users, using the Dark Route Colors!
+            MainThread.BeginInvokeOnMainThread(() => ClearOtherRiderRoutes());
 
-            if (amILead)
+            foreach (var rider in _rideCache.OtherRiderLocations)
             {
-                MainThread.BeginInvokeOnMainThread(() => ClearOtherRiderRoutes());
+                var colorProfile = GetColorsForRider(rider.Key);
 
-                var random = new Random();
-                foreach (var rider in _rideCache.OtherRiderLocations)
-                {
-                    // Generate a highly visible, dark random color for contrast
-                    Color riderColor = Color.FromRgb((byte)random.Next(20, 200), (byte)random.Next(20, 200), (byte)random.Next(20, 200));
-
-                    // Draw it quietly in the background
-                    _ = CalculateAndDrawRoute(
-                        origin: rider.Value,
-                        dest: _rideCache.ActiveDestination,
-                        meetup: _rideCache.ActiveMeetupPoint,
-                        routeColor: riderColor,
-                        riderName: rider.Key,
-                        isMainRoute: false);
-                }
+                _ = CalculateAndDrawRoute(
+                    origin: rider.Value,
+                    dest: _rideCache.ActiveDestination,
+                    meetup: _rideCache.ActiveMeetupPoint,
+                    routeColor: colorProfile.RouteColor, // Dark, highly visible line
+                    riderName: rider.Key,
+                    isMainRoute: false);
             }
         }
+    }
+    private async void OnGenerateMeetupClicked(object sender, EventArgs e)
+    {
+        // Manual override for Late Joiners
+        await GenerateMeetupPointAsync();
     }
 
     // --- UI/DRAWER PHYSICS ---
@@ -924,9 +950,9 @@ public partial class LobbyPage : ContentPage
 
     // --- STATE MACHINE ---
     // 🔄 REPLACE entire method
-    private async Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "")
+    private async Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "", bool forceSync = false)
     {
-        if (this.groupDetails.CurrentState == newState) return;
+        if (!forceSync && this.groupDetails.CurrentState == newState) return;
 
         this.groupDetails.CurrentState = newState;
         _stateStartTime = DateTime.Now;
@@ -956,13 +982,7 @@ public partial class LobbyPage : ContentPage
                     ActionDrawer.IsVisible = true;
                     ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
 
-                    if (_amIAdmin)
-                    {
-                        PauseNavBtn.IsVisible = false;
-                        ResumeNavBtn.IsVisible = false;
-                        CompleteNavBtn.IsVisible = false;
-                        MeetupPointBtn.IsVisible = true; // Meetup works here!
-                    }
+                   
                     break;
 
                 case GroupState.NotNavigating:
@@ -971,6 +991,10 @@ public partial class LobbyPage : ContentPage
                     IdleHeader.IsVisible = true;
                     PreNavigationHeader.IsVisible = false;
                     TelemetryHeader.IsVisible = false;
+
+                    // THE FIX: Show appropriate header message based on Role
+                    AdminIdleHeader.IsVisible = _amIAdmin;
+                    RiderIdleHeader.IsVisible = !_amIAdmin;
 
                     ActionDrawer.IsVisible = true;
                     ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
@@ -985,21 +1009,16 @@ public partial class LobbyPage : ContentPage
                     DestinationSearchBar.Text = string.Empty;
                     AdminInstructionBanner.IsVisible = _amIAdmin;
 
+                    // BULLETPROOF CLEANUP
+                    LiveMap.MapElements.Clear();
+                    LiveMap.Pins.Clear();
+                    _activeRouteLine = null;
+                    _activeRouteSteps.Clear();
+                    ClearOtherRiderRoutes();
+                    ClearTemporaryPois();
+
                     _locationTracker?.StopTracking();
                     _isSimulating = false;
-
-                    if (_activeRouteLine != null)
-                    {
-                        LiveMap.MapElements.Remove(_activeRouteLine);
-                        _activeRouteLine = null;
-                        _activeRouteSteps.Clear();
-                    }
-                    // THE FIX: Wipe ALL destination/waypoint pins, but keep the Rider pins!
-                    var oldDestPins = LiveMap.Pins.Where(p => p.Label != "You" && p.Type == PinType.Place).ToList();
-                    foreach (var destPin in oldDestPins)
-                    {
-                        LiveMap.Pins.Remove(destPin);
-                    }
 
                     FitMapToBounds();
 
@@ -1040,13 +1059,6 @@ public partial class LobbyPage : ContentPage
 #endif
 
                     TabAdminBtn.IsVisible = _amIAdmin;
-                    if (_amIAdmin)
-                    {
-                        PauseNavBtn.IsVisible = true;
-                        ResumeNavBtn.IsVisible = false;
-                        CompleteNavBtn.IsVisible = true;
-                        MeetupPointBtn.IsVisible = true;
-                    }
 
                     SetActionButtonsEnabled(true);
                     _locationTracker?.StartTracking(GroupNameLabel.Text, Riders.Count(x => x.IsOnline));
@@ -1063,14 +1075,6 @@ public partial class LobbyPage : ContentPage
                 case GroupState.PausedMechanical:
                     _locationTracker?.StopTracking();
                     SetActionButtonsEnabled(false);
-
-                    if (_amIAdmin)
-                    {
-                        PauseNavBtn.IsVisible = false;
-                        ResumeNavBtn.IsVisible = true;
-                        CompleteNavBtn.IsVisible = true;
-                        MeetupPointBtn.IsVisible = true;
-                    }
 #if DEBUG
                     //SimSpeedFrame.IsVisible = false;
 #endif
@@ -1085,24 +1089,29 @@ public partial class LobbyPage : ContentPage
                     ActionDrawer.TranslateToAsync(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
                     break;
             }
+            UpdateAdminButtonsVisibility();
         });
     }
 
     // --- EVENT TRIGGERS ---
     // 🔄 REPLACE entire method
+    // 🔄 REPLACE entire method
     private async void OnDestinationSet(double destLat, double destLng, string destName)
     {
-        ShowLoading("Drawing Route Preview...");
+        ShowLoading("Drawing Route...");
         try
         {
             _rideCache.ResetNavigationState();
             _rideCache.ActiveDestination = new Location(destLat, destLng);
             _rideCache.ActiveDestinationName = destName;
 
+            // THE FIX: Redrop the Destination Pin when returning to the Lobby!
+            UpdateDestinationPin(_rideCache.ActiveDestination, destName);
+
             var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
             if (currentLoc != null)
             {
-                // This method internally updates PreNavDistLabel with the exact distance!
+                // This updates PreNavDistLabel with the exact distance & ETA
                 await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination);
                 MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _rideCache.ActiveDestination]));
             }
@@ -1115,15 +1124,13 @@ public partial class LobbyPage : ContentPage
                 {
                     StartJourneyButton.IsVisible = true;
                     StartJourneyButton.IsEnabled = true;
-
-                    // Fallback just in case the GPS is completely dead and we couldn't calculate distance
-                    if (currentLoc == null) PreNavDistLabel.Text = "Waiting for GPS...";
+                    if (currentLoc == null) PreNavDistLabel.Text = "Waiting for GPS to calc route...";
                 }
                 else
                 {
                     StartJourneyButton.IsVisible = false;
-                    // Standard riders see this instead of the Start button
-                    PreNavDistLabel.Text += " (Waiting for Admin to Start)";
+                    if (currentLoc == null) PreNavDistLabel.Text = "Waiting for Admin to Start";
+                    else PreNavDistLabel.Text += " (Waiting for Admin)";
                 }
             });
         }
@@ -1345,7 +1352,17 @@ public partial class LobbyPage : ContentPage
             var fetchedDetails = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
             if (fetchedDetails != null)
             {
+                // Snapshot what our screen currently shows
+                var previousState = this.groupDetails?.CurrentState ?? GroupState.NotNavigating;
+
+                // Download the fresh data
                 this.groupDetails = fetchedDetails;
+
+                // THE FIX: If the server says the convoy changed state while we were offline, automatically catch up!
+                if (previousState != fetchedDetails.CurrentState)
+                {
+                    _ = ChangeGroupState(fetchedDetails.CurrentState, forceSync: true);
+                }
             }
         }
     }
@@ -1475,6 +1492,12 @@ public partial class LobbyPage : ContentPage
         //OnTabClicked(TabRoster, EventArgs.Empty);
 
         await _signalRService.SetGroupDestination(GroupNameLabel.Text, _pendingDestination.Latitude, _pendingDestination.Longitude, destName);
+
+        // THE FIX: Auto-generate the meetup point instantly!
+        if (_amIAdmin)
+        {
+            _ = GenerateMeetupPointAsync();
+        }
     }
     // --- REPLACED MAP CAMERA MODES ---
     private void OnRecenterMapClicked(object sender, EventArgs e)
@@ -2266,14 +2289,14 @@ public partial class LobbyPage : ContentPage
                 }
                 else
                 {
-                    Color randomColor = Color.FromRgb((byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230), (byte)_randomColorGen.Next(50, 230));
+                    var colorProfile = GetColorsForRider(riderId);
                     var newVm = new RiderPin(MapPinClicked)
                     {
                         Username = riderId,
                         Speed = speedStr,
                         Location = newLoc,
                         Heading = heading,
-                        PinColor = randomColor,
+                        PinColor = colorProfile.PinColor,
                         ZIndex = 50F
                     };
 
@@ -2356,7 +2379,7 @@ public partial class LobbyPage : ContentPage
                         _myPinVm = new RiderPin(MapPinClicked)
                         {
                             Username = "You",
-                            Speed = "0 mph",
+                            Speed = "0 km/h",
                             Location = currentLocation,
                             PinColor = uniqueColor,
                             ZIndex = 100F,
@@ -2767,5 +2790,54 @@ public partial class LobbyPage : ContentPage
         {
             _myPinVm.Heading = _myPinVm.Heading;
         }
+    }
+    private void UpdateAdminButtonsVisibility()
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (!_amIAdmin)
+            {
+                PauseNavBtn.IsVisible = false;
+                ResumeNavBtn.IsVisible = false;
+                CompleteNavBtn.IsVisible = false;
+                MeetupPointBtn.IsVisible = false;
+                return;
+            }
+
+            // The Sync/Meetup button ONLY appears if there are other online riders!
+            bool hasMultipleRiders = Riders.Count(r => r.IsOnline) > 1;
+
+            if (groupDetails?.CurrentState == GroupState.Navigating)
+            {
+                PauseNavBtn.IsVisible = true;
+                ResumeNavBtn.IsVisible = false;
+                CompleteNavBtn.IsVisible = true;
+                MeetupPointBtn.IsVisible = hasMultipleRiders;
+            }
+            else if (groupDetails?.CurrentState == GroupState.PausedBreak ||
+                     groupDetails?.CurrentState == GroupState.PausedHazard ||
+                     groupDetails?.CurrentState == GroupState.PausedMechanical)
+            {
+                PauseNavBtn.IsVisible = false;
+                ResumeNavBtn.IsVisible = true;
+                CompleteNavBtn.IsVisible = true;
+                MeetupPointBtn.IsVisible = hasMultipleRiders;
+            }
+            else if (groupDetails?.CurrentState == GroupState.DestinationSet)
+            {
+                PauseNavBtn.IsVisible = false;
+                ResumeNavBtn.IsVisible = false;
+                CompleteNavBtn.IsVisible = false;
+                MeetupPointBtn.IsVisible = hasMultipleRiders;
+            }
+            else
+            {
+                // NotNavigating or Completed
+                PauseNavBtn.IsVisible = false;
+                ResumeNavBtn.IsVisible = false;
+                CompleteNavBtn.IsVisible = false;
+                MeetupPointBtn.IsVisible = false;
+            }
+        });
     }
 }
