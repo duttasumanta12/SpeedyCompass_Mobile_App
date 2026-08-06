@@ -91,4 +91,22 @@ public class CustomMap : Microsoft.Maui.Controls.Maps.Map
             typeof(ObservableCollection<RiderPin>),
             typeof(CustomMap),
             new ObservableCollection<RiderPin>());
+
+    public event EventHandler<PoiClickedEventArgs> NativePoiClicked;
+
+    public void InvokePoiClicked(Location loc, string name, string placeId)
+    {
+        NativePoiClicked?.Invoke(this, new PoiClickedEventArgs
+        {
+            Location = loc,
+            Name = name,
+            PlaceId = placeId
+        });
+    }
+}
+public class PoiClickedEventArgs : EventArgs
+{
+    public Location Location { get; set; }
+    public string Name { get; set; }
+    public string PlaceId { get; set; }
 }

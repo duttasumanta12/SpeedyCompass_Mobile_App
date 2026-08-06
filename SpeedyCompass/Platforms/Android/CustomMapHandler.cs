@@ -313,6 +313,24 @@ namespace SpeedyCompass.Platforms.Android
             googleMap.MarkerClick += mapHandler.MarkerClick;
 
             googleMap.CameraMove += (s, e) => mapHandler.ProjectPinsToScreen();
+            googleMap.PoiClick += (sender, e) =>
+            {
+                if (mapHandler.VirtualView is CustomMap customMap && e.Poi != null)
+                {
+                    var loc = new Location(e.Poi.LatLng.Latitude, e.Poi.LatLng.Longitude);
+
+                    // Push it straight up to MAUI XAML!
+                    customMap.InvokePoiClicked(loc, e.Poi.Name, e.Poi.PlaceId);
+                }
+            };
+        }
+        public void OnPoiClick(PointOfInterest poi)
+        {
+            if (mapHandler.VirtualView is CustomMap customMap)
+            {
+                var loc = new Location(poi.LatLng.Latitude, poi.LatLng.Longitude);
+                customMap.InvokePoiClicked(loc, poi.Name, poi.PlaceId);
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 #if ANDROID
+using Android.Hardware;
 using AndroidX.ConstraintLayout.Core.Motion.Utils;
 using Kotlin.Contracts;
 
@@ -137,6 +138,7 @@ public partial class LobbyPage : ContentPage
     {
         InitializeComponent();
         BindingContext = this;
+        LiveMap.NativePoiClicked += OnNativePoiClicked;
 
         DeviceDisplay.Current.KeepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
 
@@ -323,6 +325,38 @@ public partial class LobbyPage : ContentPage
             _ = _signalRService.LeaveLobby();
         }
         await _signalRService.StopAsync();
+    }
+    private async void OnNativePoiClicked(object sender, PoiClickedEventArgs e)
+    {
+        // Don't let standard riders or active navigating admins mess with the destination
+        if (!_amIAdmin || groupDetails?.CurrentState == GroupState.Navigating) return;
+
+        LiveMap.MapElements.Clear();
+        LiveMap.Pins.Clear();
+
+        // 1. Set the pending destination to exactly where they tapped
+        _pendingDestination = e.Location;
+
+        // 2. THE MAGIC: Because we caught the POI natively, we actually know the name of the place!
+        DestinationSearchBar.Text = e.Name;
+
+        // 3. Update the visual pin
+        UpdateDestinationPin(_pendingDestination, e.Name);
+
+        // 4. Draw the route
+        var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+        if (currentLoc != null)
+        {
+            await CalculateAndDrawRoute(currentLoc, _pendingDestination);
+            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _pendingDestination]));
+        }
+
+        // 5. Unlock the Confirm button
+        ConfirmDestButton.IsEnabled = true;
+        ConfirmDestButton.BackgroundColor = Colors.MediumSeaGreen;
+
+        // Optional UX Polish: Vibrate so they know they tapped a valid location
+        Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(50));
     }
 
     // --- SETTINGS SYNC ---
@@ -1410,6 +1444,9 @@ public partial class LobbyPage : ContentPage
     {
         if (!_amIAdmin || groupDetails?.CurrentState == GroupState.Navigating) return;
 
+        LiveMap.MapElements.Clear();
+        LiveMap.Pins.Clear();
+
         _pendingDestination = e.Location;
         UpdateDestinationPin(_pendingDestination, "Selected Destination");
         var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
@@ -1480,6 +1517,8 @@ public partial class LobbyPage : ContentPage
         ResetDestButton.IsVisible = true;
         DestinationSearchBar.IsReadOnly = true;
         AdminInstructionBanner.IsVisible = false;
+        SuggestionsListView.ItemsSource = null;
+        SuggestionsFrame.IsVisible = false;
 
         string destName = DestinationSearchBar.Text ?? "Destination";
         _rideCache.ActiveDestination = _pendingDestination;
