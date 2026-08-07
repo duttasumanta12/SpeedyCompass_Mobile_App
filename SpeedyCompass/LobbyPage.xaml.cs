@@ -55,8 +55,8 @@ public partial class LobbyPage : ContentPage
     private readonly Random _randomColorGen = new();
 
     private bool _isSimulating = false;
-    private DateTime _lastMeetupCheckTime = DateTime.MinValue;
     private bool _haveIReachedMeetup = false;
+    private bool _hasAnnouncedArrival = false;
     private HashSet<string> _ridersAtMeetup = new();
     private CancellationTokenSource _debounceCts;
 
@@ -425,7 +425,7 @@ public partial class LobbyPage : ContentPage
                     string newSpeedStr = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
 
                     // THE FIX: Push the speed directly to the Drawer UI!
-                    if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
+                    //if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
 
                     // THE FIX: 60-FPS Fluid Animation for the Local Pin!
                     // This tells the UI to glide the pin smoothly to the new spot over 1000ms
@@ -472,22 +472,22 @@ public partial class LobbyPage : ContentPage
 
             _ = _telemetryEngine.EvaluateSpeedLimitAsync(e.Location, speedKmh, (limit, isSpeeding) =>
             {
-                if (!_rideCache.RunningInBackground)
-                {
-                    MainThread.BeginInvokeOnMainThread(() =>
-                    {
-                        if (limit == 0)
-                        {
-                            SpeedLimitBadge.IsVisible = false;
-                            return;
-                        }
+                //if (!_rideCache.RunningInBackground)
+                //{
+                //    MainThread.BeginInvokeOnMainThread(() =>
+                //    {
+                //        if (limit == 0)
+                //        {
+                //            SpeedLimitBadge.IsVisible = false;
+                //            return;
+                //        }
 
-                        SpeedLimitBadge.IsVisible = true;
-                        SpeedLimitLabel.Text = limit.ToString();
-                        MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
-                        SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
-                    });
-                }
+                //        SpeedLimitBadge.IsVisible = true;
+                //        SpeedLimitLabel.Text = limit.ToString();
+                //        MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
+                //        SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
+                //    });
+                //}
             });
 
             _voiceEngine?.ProcessTurnByTurn(e.Location, _activeRouteSteps);
@@ -564,6 +564,18 @@ public partial class LobbyPage : ContentPage
                 DateTime eta = DateTime.Now.AddHours(hoursLeft);
 
                 // =====================================================================
+                // --- THE FIX: DESTINATION ARRIVAL VOICE PROMPT ---
+                // =====================================================================
+                if (distLeft < 0.05 && !_hasAnnouncedArrival) // 0.05 km = 50 meters
+                {
+                    _hasAnnouncedArrival = true; // Tripwire flipped so it doesn't spam!
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        _voiceEngine.Speak("You have arrived at your destination.");
+                    });
+                }
+
+                // =====================================================================
                 // --- SMART HEADING + DISTANCE REROUTE MATRIX ---
                 // =====================================================================
                 bool currentPingIsOffRoute = false;
@@ -602,14 +614,64 @@ public partial class LobbyPage : ContentPage
                 // It takes 3 consecutive bad pings (strikes) to officially trigger a reroute
                 bool officiallyLost = _rideCache.OffRouteStrikeCount >= 3;
 
+                // =====================================================================
+                // --- NEW: PROGRESS BAR & NEXT TURN MATH ---
+                // =====================================================================
+                double progressVal = distLeft == 0 ? 1.0 : _rideCache.CumulativeDistanceKm / (_rideCache.CumulativeDistanceKm + distLeft);
+
+                string progressPercentStr = $"{(int)(progressVal * 100)}%";
+
+                string nextTurnDistStr = "";
+                string nextTurnInstruction = "";
+                string nextTurnIcon = "⬆️";
+                bool showNextTurn = false;
+
+                if (_activeRouteSteps.Count > 0)
+                {
+                    var nextStep = _activeRouteSteps[0];
+                    double distToTurnMeters = Location.CalculateDistance(currentLocation, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
+
+                    // If we passed the turn (within 30m), pop it off the list and grab the next one
+                    if (distToTurnMeters < 30)
+                    {
+                        _activeRouteSteps.RemoveAt(0);
+                        if (_activeRouteSteps.Count > 0)
+                        {
+                            nextStep = _activeRouteSteps[0];
+                            distToTurnMeters = Location.CalculateDistance(currentLocation, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
+                        }
+                    }
+
+                    if (_activeRouteSteps.Count > 0)
+                    {
+                        showNextTurn = true;
+                        nextTurnDistStr = distToTurnMeters > 1000 ? $"{Math.Round(distToTurnMeters / 1000.0, 1)} km" : $"{Math.Round(distToTurnMeters)}m";
+                        nextTurnInstruction = nextStep.Instruction;
+
+                        // Parse the text to figure out which arrow to show!
+                        string instrLower = nextTurnInstruction.ToLower();
+                        if (instrLower.Contains("turn left")) nextTurnIcon = "⬅️";
+                        else if (instrLower.Contains("turn right")) nextTurnIcon = "➡️";
+                        else if (instrLower.Contains("u-turn")) nextTurnIcon = "↩️";
+                        else if (instrLower.Contains("exit")) nextTurnIcon = "↗️";
+                        else nextTurnIcon = "⬆️";
+                    }
+                }
+
                 return new
                 {
                     IsOffRoute = officiallyLost,
                     NewRouteIndex = closestActualIndex,
                     DistLeftStr = $"{Math.Round(distLeft, 1)} km",
-                    TotalTravelStr = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)} km",
+                    TotalTravelStr = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)}",
                     TotalRouteStr = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km",
-                    EtaStr = $"ETA {eta:HH:mm}"
+                    ProgressVal = progressVal,
+                    EtaStr = eta.ToString("h:mm tt"), // Formats strictly to "10:10 PM"
+                    ShowNextTurn = showNextTurn,
+                    NextTurnDistStr = nextTurnDistStr,
+                    NextTurnInstr = nextTurnInstruction,
+                    NextTurnIcon = nextTurnIcon,
+                    ProgressPercentStr = progressPercentStr, // Add this!   
                 };
             }, _rideCts.Token);
 
@@ -656,15 +718,33 @@ public partial class LobbyPage : ContentPage
                     {
                         MyDistanceLabel.Text = "Rerouting...";
                         MyEtaLabel.IsVisible = false;
+                        NextTurnOverlay.IsVisible = false;
                     }
                     else
                     {
                         MyDistanceLabel.Text = telemetryData.DistLeftStr;
                         MyEtaLabel.IsVisible = true;
                         MyEtaLabel.Text = telemetryData.EtaStr;
+
+                        // NEXT TURN OVERLAY
+                        if (telemetryData.ShowNextTurn)
+                        {
+                            NextTurnOverlay.IsVisible = true;
+                            NextTurnDistLabel.Text = telemetryData.NextTurnDistStr;
+                            NextTurnInstructionLabel.Text = telemetryData.NextTurnInstr;
+                            NextTurnIcon.Text = telemetryData.NextTurnIcon;
+                        }
+                        else
+                        {
+                            NextTurnOverlay.IsVisible = false;
+                        }
                     }
+
                     MyTotalTraveledLabel.Text = telemetryData.TotalTravelStr;
                     MyTotalRouteLabel.Text = telemetryData.TotalRouteStr;
+
+                    MyProgressPercentLabel.Text = telemetryData.ProgressPercentStr;
+                    RouteProgressBar.ProgressTo(telemetryData.ProgressVal, 500, Easing.Linear);
                 }
                 catch (Exception ex) { AppLogger.Error("UI", ex, "Failed to update UI stats."); }
             });
@@ -1109,13 +1189,12 @@ public partial class LobbyPage : ContentPage
 
                     AdminInstructionBanner.IsVisible = false;
                     ConfirmDestButton.IsVisible = false;
-                    ResetDestButton.IsVisible = true;
                     _isSelectingLocation = false;
 
                     ActionDrawer.IsVisible = true;
                     ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+                    AdminSearchUI.IsVisible = _amIAdmin;
 
-                   
                     break;
 
                 case GroupState.NotNavigating:
@@ -1137,12 +1216,12 @@ public partial class LobbyPage : ContentPage
                     //SimSpeedFrame.IsVisible = false;
 #endif
                     ConfirmDestButton.IsVisible = true;
-                    ResetDestButton.IsVisible = false;
                     DestinationSearchBar.IsReadOnly = false;
                     DestinationSearchBar.Text = string.Empty;
                     AdminInstructionBanner.IsVisible = _amIAdmin;
 
                     // BULLETPROOF CLEANUP
+                    NextTurnOverlay.IsVisible = false;
                     LiveMap.MapElements.Clear();
                     LiveMap.Pins.Clear();
                     _activeRouteLine = null;
@@ -1154,7 +1233,7 @@ public partial class LobbyPage : ContentPage
                     _isSimulating = false;
 
                     FitMapToBounds();
-
+                    AdminSearchUI.IsVisible = _amIAdmin;
 #if ANDROID
                     MainActivity.IsInNavigationMode = false;
 #endif
@@ -1169,7 +1248,7 @@ public partial class LobbyPage : ContentPage
                         MeetupPointBtn.IsVisible = false;
                     }
 
-                    if (MySpeedLabel != null) MySpeedLabel.Text = "0 km/h";
+                    //if (MySpeedLabel != null) MySpeedLabel.Text = "0 km/h";
                     break;
 
                 case GroupState.Navigating:
@@ -1184,7 +1263,6 @@ public partial class LobbyPage : ContentPage
                     AdminInstructionBanner.IsVisible = false;
                     DestinationSearchBar.IsReadOnly = true;
                     ConfirmDestButton.IsVisible = false;
-                    ResetDestButton.IsVisible = true;
 
                     FloatingMapControls.IsVisible = true;
 #if DEBUG
@@ -1192,7 +1270,8 @@ public partial class LobbyPage : ContentPage
 #endif
 
                     TabAdminBtn.IsVisible = _amIAdmin;
-
+                    AdminSearchUI.IsVisible = false;
+                    TelemetryDestLabel.Text = groupDetails.DestName;
                     SetActionButtonsEnabled(true);
                     _locationTracker?.StartTracking(GroupNameLabel.Text, Riders.Count(x => x.IsOnline));
 
@@ -1287,6 +1366,9 @@ public partial class LobbyPage : ContentPage
 
         _rideCache.ResetTelemetryState();
 
+        // THE FIX: Reset the arrival tripwire for the new ride!
+        _hasAnnouncedArrival = false;
+
         await ChangeGroupState(GroupState.Navigating, _myName);
 
         Location loc;
@@ -1367,7 +1449,6 @@ public partial class LobbyPage : ContentPage
         if (groupDetails != null)
         {
             ConfirmDestButton.IsVisible = true;
-            ResetDestButton.IsVisible = false;
             DestinationSearchBar.IsReadOnly = false;
             DestinationSearchBar.Text = string.Empty;
 
@@ -1614,7 +1695,6 @@ public partial class LobbyPage : ContentPage
         if (_pendingDestination == null || _lastKnownLocation == null || string.IsNullOrEmpty(DestinationSearchBar.Text)) return;
 
         ConfirmDestButton.IsVisible = false;
-        ResetDestButton.IsVisible = true;
         DestinationSearchBar.IsReadOnly = true;
         AdminInstructionBanner.IsVisible = false;
         SuggestionsListView.ItemsSource = null;
@@ -2513,7 +2593,7 @@ public partial class LobbyPage : ContentPage
                         _myPinVm.Speed = newSpeedStr;
 
                         // THE FIX: Push the simulated speed directly to the Drawer UI!
-                        if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
+                        //if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
 
                         // THE FIX 2: Make the camera follow the simulator too!
                         //if (_myPinVm.IsAutoCentering)
@@ -2543,23 +2623,23 @@ public partial class LobbyPage : ContentPage
             await _telemetryEngine.EvaluateEdgeTelemetryAsync(point, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
 
             // Fire the Speed Limit Engine
-            _ = _telemetryEngine.EvaluateSpeedLimitAsync(point, speedKmh, (limit, isSpeeding) =>
-            {
-                if (_rideCache.RunningInBackground) return;
-                MainThread.BeginInvokeOnMainThread(() =>
-                {
-                    if (limit == 0)
-                    {
-                        SpeedLimitBadge.IsVisible = false;
-                        return;
-                    }
+            //_ = _telemetryEngine.EvaluateSpeedLimitAsync(point, speedKmh, (limit, isSpeeding) =>
+            //{
+            //    if (_rideCache.RunningInBackground) return;
+            //    MainThread.BeginInvokeOnMainThread(() =>
+            //    {
+            //        if (limit == 0)
+            //        {
+            //            SpeedLimitBadge.IsVisible = false;
+            //            return;
+            //        }
 
-                    SpeedLimitBadge.IsVisible = true;
-                    SpeedLimitLabel.Text = limit.ToString();
-                    MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
-                    SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
-                });
-            });
+            //        SpeedLimitBadge.IsVisible = true;
+            //        SpeedLimitLabel.Text = limit.ToString();
+            //        MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
+            //        SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
+            //    });
+            //});
 
             _voiceEngine?.ProcessTurnByTurn(point, _activeRouteSteps);
 
@@ -2841,10 +2921,10 @@ public partial class LobbyPage : ContentPage
                 ResumeNavBtn.IsVisible = false;
                 CompleteNavBtn.IsVisible = false;
                 MeetupPointBtn.IsVisible = false;
+                ResetTripBtn.IsVisible = false; // Add this!
                 return;
             }
 
-            // The Sync/Meetup button ONLY appears if there are other online riders!
             bool hasMultipleRiders = Riders.Count(r => r.IsOnline) > 1;
 
             if (groupDetails?.CurrentState == GroupState.Navigating)
@@ -2853,6 +2933,7 @@ public partial class LobbyPage : ContentPage
                 ResumeNavBtn.IsVisible = false;
                 CompleteNavBtn.IsVisible = true;
                 MeetupPointBtn.IsVisible = hasMultipleRiders;
+                ResetTripBtn.IsVisible = true; // Add this!
             }
             else if (groupDetails?.CurrentState == GroupState.PausedBreak ||
                      groupDetails?.CurrentState == GroupState.PausedHazard ||
@@ -2862,6 +2943,7 @@ public partial class LobbyPage : ContentPage
                 ResumeNavBtn.IsVisible = true;
                 CompleteNavBtn.IsVisible = true;
                 MeetupPointBtn.IsVisible = hasMultipleRiders;
+                ResetTripBtn.IsVisible = true; // Add this!
             }
             else if (groupDetails?.CurrentState == GroupState.DestinationSet)
             {
@@ -2869,6 +2951,7 @@ public partial class LobbyPage : ContentPage
                 ResumeNavBtn.IsVisible = false;
                 CompleteNavBtn.IsVisible = false;
                 MeetupPointBtn.IsVisible = hasMultipleRiders;
+                ResetTripBtn.IsVisible = true; // Add this!
             }
             else
             {
@@ -2877,6 +2960,7 @@ public partial class LobbyPage : ContentPage
                 ResumeNavBtn.IsVisible = false;
                 CompleteNavBtn.IsVisible = false;
                 MeetupPointBtn.IsVisible = false;
+                ResetTripBtn.IsVisible = false; // Add this!
             }
         });
     }
