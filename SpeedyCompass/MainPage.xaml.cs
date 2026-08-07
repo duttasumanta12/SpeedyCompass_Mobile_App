@@ -2,6 +2,7 @@
 using Microsoft.Maui.ApplicationModel;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Models;
+using SpeedyCompass.Controls; // THE FIX: Added the namespace for your new components!
 using System.Collections.ObjectModel;
 using System.Net.Http.Json;
 
@@ -13,12 +14,11 @@ public class GroupItemViewModel
     public int MemberCount { get; set; }
     public int MaxGroupSize { get; set; }
     public bool IsMyAdmin { get; set; }
-    public bool IsMember { get; set; } // Tracks if they already validated the PIN previously
+    public bool IsMember { get; set; }
 
     public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Riders";
     public bool CanJoin => IsMyAdmin || IsMember || MemberCount < MaxGroupSize;
 
-    // Dynamic Button UI Rules
     public string JoinButtonText => IsMyAdmin ? "Resume" : (IsMember ? "Enter" : "Join");
     public Color JoinButtonColor => IsMyAdmin || IsMember ? Colors.DodgerBlue : Colors.MediumSeaGreen;
 }
@@ -43,7 +43,7 @@ public partial class MainPage : ContentPage
         _authService = authService;
         _httpClientFactory = httpClientFactory;
 
-        GroupsCollectionView.ItemsSource = AvailableGroups;
+        GroupsListControl.ItemsSource = AvailableGroups;
     }
 
     protected override async void OnAppearing()
@@ -70,7 +70,7 @@ public partial class MainPage : ContentPage
 
             if (firstAccount != null)
             {
-                ShowLoading("Validating session...");
+                GlobalLoadingOverlay.Show("Validating session...");
                 var authResult = await _authService.AcquireTokenSilentAsync(firstAccount);
 
                 Preferences.Default.Set("username", authResult.Account.Username);
@@ -79,7 +79,7 @@ public partial class MainPage : ContentPage
                 bool isConnected = await ConnectSignalR(3);
                 if (!isConnected)
                 {
-                    HideLoading();
+                    GlobalLoadingOverlay.Hide();
                     return;
                 }
 
@@ -88,18 +88,18 @@ public partial class MainPage : ContentPage
         }
         catch (MsalUiRequiredException) { /* Do nothing, show login UI */ }
         catch (Exception ex) { Console.WriteLine($"Silent Auth failed: {ex.Message}"); }
-        finally { HideLoading(); }
+        finally { GlobalLoadingOverlay.Hide(); }
     }
 
     private async void OnAzureLoginClicked(object sender, EventArgs e)
     {
-        ShowLoading("Authenticating...");
+        GlobalLoadingOverlay.Show("Authenticating...");
         try
         {
             var authResult = await _authService.LoginAsync();
             if (authResult == null)
             {
-                HideLoading();
+                GlobalLoadingOverlay.Hide();
                 return;
             }
 
@@ -110,11 +110,11 @@ public partial class MainPage : ContentPage
             Preferences.Default.Set("username", authResult.Account.Username);
             Preferences.Default.Set("GoogleId", authResult.UniqueId);
 
-            ShowLoading("Connecting to Server...");
+            GlobalLoadingOverlay.Show("Connecting to Server...");
             bool flowControl = await ConnectSignalR(3);
             if (!flowControl) return;
 
-            ShowLoading("Fetching Groups...");
+            GlobalLoadingOverlay.Show("Fetching Groups...");
             await ProcessLoginFlow(authResult.UniqueId);
         }
         catch (Exception ex)
@@ -123,9 +123,10 @@ public partial class MainPage : ContentPage
         }
         finally
         {
-            HideLoading();
+            GlobalLoadingOverlay.Hide();
         }
     }
+
     private async Task ProcessLoginFlow(string googleId)
     {
         await ConnectSignalR(3);
@@ -142,7 +143,9 @@ public partial class MainPage : ContentPage
 
             if (!profile.HasConsented || string.IsNullOrEmpty(profile.EmergencyContact))
             {
-                OpenProfileModal(profile, isMandatory: true);
+                // THE FIX: Use the new Component to force setup!
+                ProfileOverlay.LoadData(profile.Username, profile.BloodGroup, profile.EmergencyContact, profile.VehicleNumber, false, profile.HasConsented);
+                ProfileOverlay.Show(isMandatorySetup: true);
             }
             else
             {
@@ -169,7 +172,7 @@ public partial class MainPage : ContentPage
         {
             try
             {
-                if (i > 1) ShowLoading($"Connecting... (Attempt {i}/{maxRetries})");
+                if (i > 1) GlobalLoadingOverlay.Show($"Connecting... (Attempt {i}/{maxRetries})");
                 await _signalRService.StartAsync();
                 return true;
             }
@@ -177,7 +180,7 @@ public partial class MainPage : ContentPage
             {
                 if (i == maxRetries)
                 {
-                    HideLoading();
+                    GlobalLoadingOverlay.Hide();
                     await DisplayAlertAsync("Connection Failed", "Could not reach the server. Please check your internet connection.", "OK");
                     return false;
                 }
@@ -191,7 +194,7 @@ public partial class MainPage : ContentPage
     private async void OnRefreshGroups(object sender, EventArgs e)
     {
         await LoadGroupsAsync();
-        GroupsRefreshView.IsRefreshing = false;
+        GroupsListControl.EndRefresh();
     }
 
     private async Task LoadGroupsAsync()
@@ -212,8 +215,6 @@ public partial class MainPage : ContentPage
 
             foreach (var g in groups)
             {
-                // NOTE FOR BACKEND: Make sure `api/groups` checks if CurrentGoogleId is inside g.ActiveRiders
-                // and sets `IsMember` to true in the DTO if they already joined earlier!
                 AvailableGroups.Add(new GroupItemViewModel
                 {
                     GroupName = g.GroupName,
@@ -229,207 +230,37 @@ public partial class MainPage : ContentPage
             Console.WriteLine($"Error fetching groups: {ex.Message}");
         }
     }
+    // =========================================================================================
+    // --- THE FIX: NEW COMPONENT-BASED PROFILE & LOGOUT LOGIC ---
+    // =========================================================================================
 
-    // --- 1. CREATE GROUP MODAL LOGIC ---
-    private void OnOpenCreateGroupModalClicked(object sender, EventArgs e)
-    {
-        NewGroupNameEntry.Text = string.Empty;
-        CreateSizeSlider.Value = 10;
-        CreateLagSlider.Value = 500;
-        CreateSplinterSlider.Value = 2000;
-
-        CreateGroupModalOverlay.IsVisible = true;
-    }
-
-    private void OnCloseCreateGroupModalClicked(object sender, EventArgs e) => CreateGroupModalOverlay.IsVisible = false;
-
-    private void OnCreateSizeSliderChanged(object sender, ValueChangedEventArgs e) => CreateSizeLabel.Text = $"{(int)Math.Round(e.NewValue)} Riders";
-    private void OnCreateLagSliderChanged(object sender, ValueChangedEventArgs e)
-    {
-        int val = (int)(Math.Round(e.NewValue / 50.0) * 50);
-        CreateLagLabel.Text = val == 0 ? "Off" : $"{val}m";
-    }
-    private void OnCreateSplinterSliderChanged(object sender, ValueChangedEventArgs e)
-    {
-        int val = (int)(Math.Round(e.NewValue / 100.0) * 100);
-        CreateSplinterLabel.Text = val == 0 ? "Off" : $"{val}m";
-    }
-
-    private async void OnConfirmCreateGroupClicked(object sender, EventArgs e)
-    {
-        string groupName = NewGroupNameEntry.Text?.Trim();
-        if (string.IsNullOrEmpty(groupName))
-        {
-            await DisplayAlert("Hold Up", "Please enter a name for your convoy.", "OK");
-            return;
-        }
-
-        CreateGroupModalOverlay.IsVisible = false;
-        ShowLoading("Generating Convoy PIN...");
-
-        // Generate Secure 6-Digit PIN
-        string generatedPin = new Random().Next(100000, 999999).ToString();
-
-        // Package the initial settings configured by the Admin
-        var initialSettings = new GroupSettingsDto
-        {
-            MaxGroupSize = (int)Math.Round(CreateSizeSlider.Value),
-            MaxLagDistanceMeters = (int)(Math.Round(CreateLagSlider.Value / 50.0) * 50),
-            SplinterWarningDistanceMeters = (int)(Math.Round(CreateSplinterSlider.Value / 100.0) * 100),
-            PitstopDistanceMeters = 0 // Optional: Add a slider for this if needed
-        };
-
-        try
-        {
-            await ConnectSignalR(3);
-
-            // NOTE FOR BACKEND: Update this SignalR Hub method to accept `generatedPin` and `initialSettings`
-            await _signalRService.CreateGroup(groupName, CurrentUsername, CurrentGoogleId, generatedPin, initialSettings);
-
-            var groupDetails = await _signalRService.GetGroupDetails(groupName);
-
-            // Show PIN to Admin before jumping into the Lobby
-            await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
-
-            HideLoading();
-
-            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlertAsync("Error", ex.Message, "OK");
-        }
-        finally
-        {
-            HideLoading();
-        }
-    }
-
-    // --- 2. JOIN GROUP PIN MODAL LOGIC ---
-    private async void OnJoinGroupClicked(object sender, EventArgs e)
-    {
-        if (sender is Button btn && btn.CommandParameter is GroupItemViewModel groupData)
-        {
-            if (groupData.IsMyAdmin || groupData.IsMember)
-            {
-                // They are already authenticated for this group. Jump straight in!
-                await ExecuteJoinFlow(groupData.GroupName, null);
-            }
-            else
-            {
-                // They are a new rider trying to join. Ask for the PIN!
-                _pendingJoinGroupName = groupData.GroupName;
-                JoinPinEntry.Text = string.Empty;
-                JoinGroupModalOverlay.IsVisible = true;
-
-                // UX Polish: Auto-focus the keyboard
-                JoinPinEntry.Focus();
-            }
-        }
-    }
-
-    private void OnCloseJoinModalClicked(object sender, EventArgs e) => JoinGroupModalOverlay.IsVisible = false;
-
-    private async void OnConfirmJoinPinClicked(object sender, EventArgs e)
-    {
-        string pinCode = JoinPinEntry.Text?.Trim();
-        if (string.IsNullOrEmpty(pinCode) || pinCode.Length != 6)
-        {
-            await DisplayAlert("Invalid PIN", "Please enter the full 6-digit code provided by the Admin.", "OK");
-            return;
-        }
-
-        JoinGroupModalOverlay.IsVisible = false;
-        await ExecuteJoinFlow(_pendingJoinGroupName, pinCode);
-    }
-
-    private async Task ExecuteJoinFlow(string groupName, string pinCode)
-    {
-        ShowLoading("Joining Convoy...");
-        try
-        {
-            await ConnectSignalR(3);
-
-            // NOTE FOR BACKEND: Update this SignalR Hub method to accept `pinCode`. 
-            // If the pinCode is wrong, throw a HubException so it gets caught right here!
-            await _signalRService.JoinGroup(groupName, CurrentUsername, CurrentGoogleId, pinCode);
-
-            var groupDetails = await _signalRService.GetGroupDetails(groupName);
-            
-            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
-        }
-        catch (Exception ex)
-        {
-            await DisplayAlert("Access Denied", ex.Message, "OK");
-            await _signalRService.StopAsync();
-        }
-        finally
-        {
-            HideLoading();
-        }
-    }
-
-    // --- PROFILE MODAL LOGIC ---
     private void OnOpenProfileClicked(object sender, EventArgs e)
     {
-        var profile = new UserProfileDto
-        {
-            Username = Preferences.Default.Get("username", "Rider"),
-            EmergencyContact = Preferences.Default.Get("EmergencyContact", ""),
-            VehicleNumber = Preferences.Default.Get("VehicleNumber", ""),
-            BloodGroup = Preferences.Default.Get("BloodGroup", "Unknown"),
-            HasConsented = true
-        };
-        OpenProfileModal(profile, isMandatory: false);
+        // 1. Pass the exact settings to the new Component
+        ProfileOverlay.LoadData(
+            username: Preferences.Default.Get("username", "Rider"),
+            bloodGroup: Preferences.Default.Get("BloodGroup", "Unknown"),
+            contact: Preferences.Default.Get("EmergencyContact", ""),
+            vehicle: Preferences.Default.Get("VehicleNumber", ""),
+            keepScreenOn: Preferences.Default.Get("KeepScreenOn", false),
+            consent: Preferences.Default.Get("HasConsented", true)
+        );
+
+        // 2. Tell it to show as a standard editor!
+        ProfileOverlay.Show(isMandatorySetup: false);
     }
 
-    private void OpenProfileModal(UserProfileDto profile, bool isMandatory)
+    private async void OnProfileSaved(object sender, ProfileSavedEventArgs e)
     {
-        ProfileUsernameEntry.Text = profile.Username;
-        ProfileContactEntry.Text = profile.EmergencyContact;
-        ProfileVehicleEntry.Text = profile.VehicleNumber;
-        ProfileBloodGroupPicker.SelectedItem = string.IsNullOrEmpty(profile.BloodGroup) ? "Unknown" : profile.BloodGroup;
-        ConsentCheckbox.IsChecked = profile.HasConsented;
-
-        KeepScreenOnSwitch.IsToggled = Preferences.Default.Get("KeepScreenOn", false);
-
-        if (isMandatory)
-        {
-            ProfileModalTitle.Text = "Complete Setup";
-            ProfileModalSubtitle.Text = "We need this emergency info before you can ride.";
-            CancelProfileButton.IsVisible = false;
-        }
-        else
-        {
-            ProfileModalTitle.Text = "Edit Profile";
-            ProfileModalSubtitle.Text = "Update your emergency info.";
-            CancelProfileButton.IsVisible = true;
-        }
-
-        ProfileModalOverlay.IsVisible = true;
-    }
-
-    private async void OnSaveProfileClicked(object sender, EventArgs e)
-    {
-        if (string.IsNullOrWhiteSpace(ProfileUsernameEntry.Text) || string.IsNullOrWhiteSpace(ProfileContactEntry.Text))
-        {
-            await DisplayAlert("Missing Info", "Username and Emergency Contact are required fields.", "OK");
-            return;
-        }
-
-        if (!ConsentCheckbox.IsChecked)
-        {
-            await DisplayAlert("Consent Required", "You must agree to the data storage policy to use the safety features.", "OK");
-            return;
-        }
+        GlobalLoadingOverlay.Show("Saving profile...");
 
         var updatedProfile = new UserProfileDto
         {
-            Username = ProfileUsernameEntry.Text.Trim(),
-            EmergencyContact = ProfileContactEntry.Text.Trim(),
-            VehicleNumber = ProfileVehicleEntry.Text?.Trim() ?? "",
-            BloodGroup = ProfileBloodGroupPicker.SelectedItem?.ToString() ?? "Unknown",
-            HasConsented = true
+            Username = e.Username,
+            EmergencyContact = e.EmergencyContact,
+            VehicleNumber = e.VehicleNumber,
+            BloodGroup = e.BloodGroup,
+            HasConsented = e.HasConsent
         };
 
         try
@@ -446,11 +277,10 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Set("BloodGroup", updatedProfile.BloodGroup);
                 Preferences.Default.Set("HasConsented", updatedProfile.HasConsented);
 
-                Preferences.Default.Set("KeepScreenOn", KeepScreenOnSwitch.IsToggled);
-                DeviceDisplay.Current.KeepScreenOn = KeepScreenOnSwitch.IsToggled;
+                Preferences.Default.Set("KeepScreenOn", e.KeepScreenOn);
+                DeviceDisplay.Current.KeepScreenOn = e.KeepScreenOn;
 
                 WelcomeNameLabel.Text = updatedProfile.Username;
-                ProfileModalOverlay.IsVisible = false;
 
                 await LoadGroupsAsync();
             }
@@ -459,37 +289,23 @@ public partial class MainPage : ContentPage
         {
             await DisplayAlert("Error", ex.Message, "OK");
         }
-    }
-
-    private void OnCancelProfileClicked(object sender, EventArgs e) => ProfileModalOverlay.IsVisible = false;
-
-    // --- ADMIN ACTION ---
-    private async void OnDeleteGroupClicked(object sender, EventArgs e)
-    {
-        if (sender is Button btn && btn.CommandParameter is string groupName)
+        finally
         {
-            bool confirm = await DisplayAlert("Delete Group", $"Are you sure you want to delete {groupName}?", "Yes", "No");
-            if (confirm)
-            {
-                await ConnectSignalR(3);
-                await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
-                await _signalRService.StopAsync();
-                await LoadGroupsAsync();
-            }
+            GlobalLoadingOverlay.Hide();
         }
     }
-    private async void OnLogoutClicked(object sender, EventArgs e)
+
+    // The overlay component fires this when the user clicks the red Log Out button
+    private async void OnLogoutRequested(object sender, EventArgs e)
     {
         bool confirm = await DisplayAlert("Sign Out", "Are you sure you want to log out?", "Yes", "Cancel");
         if (!confirm) return;
 
-        ShowLoading("Signing out...");
+        GlobalLoadingOverlay.Show("Signing out...");
         try
         {
-
             await _authService.LogoutAsync();
-           
-            // 2. Wipe Local Device Storage (so silent login fails next time)
+
             Preferences.Default.Remove("GoogleId");
             Preferences.Default.Remove("username");
             Preferences.Default.Remove("EmergencyContact");
@@ -497,9 +313,7 @@ public partial class MainPage : ContentPage
             Preferences.Default.Remove("BloodGroup");
             Preferences.Default.Remove("HasConsented");
 
-            // 3. Clear UI State
             AvailableGroups.Clear();
-            ProfileModalOverlay.IsVisible = false;
             DashboardView.IsVisible = false;
             LoginView.IsVisible = true;
         }
@@ -509,17 +323,102 @@ public partial class MainPage : ContentPage
         }
         finally
         {
-            HideLoading();
+            GlobalLoadingOverlay.Hide();
         }
     }
 
-    private void HideLoading() => MainThread.BeginInvokeOnMainThread(() => LoadingOverlay.IsVisible = false);
-    private void ShowLoading(string message)
+    // --- ADMIN ACTION ---
+    private async void OnDeleteGroupClicked(object sender, string groupName)
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        bool confirm = await DisplayAlert("Delete Group", $"Are you sure you want to delete {groupName}?", "Yes", "No");
+        if (confirm)
         {
-            LoadingText.Text = message;
-            LoadingOverlay.IsVisible = true;
-        });
+            await ConnectSignalR(3);
+            await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
+            await _signalRService.StopAsync();
+            await LoadGroupsAsync();
+        }
+    }
+    // ==========================================
+    // --- 1. CREATE GROUP ---
+    // ==========================================
+    private void OnOpenCreateGroupModalClicked(object sender, EventArgs e)
+    {
+        CreateGroupOverlay.Show();
+    }
+
+    private async void OnGroupCreated(object sender, GroupCreatedEventArgs e)
+    {
+        GlobalLoadingOverlay.Show("Generating Convoy PIN...");
+
+        string generatedPin = new Random().Next(100000, 999999).ToString();
+
+        var initialSettings = new GroupSettingsDto
+        {
+            MaxGroupSize = e.MaxGroupSize,
+            MaxLagDistanceMeters = e.MaxLagDistanceMeters,
+            SplinterWarningDistanceMeters = e.SplinterWarningDistanceMeters,
+            PitstopDistanceMeters = 0
+        };
+
+        try
+        {
+            await ConnectSignalR(3);
+            await _signalRService.CreateGroup(e.GroupName, CurrentUsername, CurrentGoogleId, generatedPin, initialSettings);
+            var groupDetails = await _signalRService.GetGroupDetails(e.GroupName);
+
+            await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
+
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlertAsync("Error", ex.Message, "OK");
+        }
+        finally
+        {
+            GlobalLoadingOverlay.Hide();
+        }
+    }
+
+    // ==========================================
+    // --- 2. JOIN GROUP ---
+    // ==========================================
+    private async void OnJoinGroupClicked(object sender, GroupItemViewModel groupData)
+    {
+        if (groupData.IsMyAdmin || groupData.IsMember)
+        {
+            await ExecuteJoinFlow(groupData.GroupName, null);
+        }
+        else
+        {
+            JoinGroupOverlay.Show(groupData.GroupName);
+        }
+    }
+
+    private async void OnJoinConfirmed(object sender, JoinGroupEventArgs e)
+    {
+        await ExecuteJoinFlow(e.GroupName, e.PinCode);
+    }
+
+    private async Task ExecuteJoinFlow(string groupName, string pinCode)
+    {
+        GlobalLoadingOverlay.Show("Joining Convoy...");
+        try
+        {
+            await ConnectSignalR(3);
+            await _signalRService.JoinGroup(groupName, CurrentUsername, CurrentGoogleId, pinCode);
+            var groupDetails = await _signalRService.GetGroupDetails(groupName);
+            await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
+        }
+        catch (Exception ex)
+        {
+            await DisplayAlert("Access Denied", ex.Message, "OK");
+            await _signalRService.StopAsync();
+        }
+        finally
+        {
+            GlobalLoadingOverlay.Hide();
+        }
     }
 }

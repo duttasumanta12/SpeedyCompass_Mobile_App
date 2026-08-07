@@ -473,90 +473,10 @@
                 </StackLayout>
             </Grid>
 
-            <Grid x:Name="AdminSettingsOverlay" BackgroundColor="#CC000000" IsVisible="False" ZIndex="2500" Padding="20">
-                <Border Margin="20" VerticalOptions="Center" MaximumHeightRequest="600" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="25">
-                    <Border.StrokeShape>
-                        <RoundRectangle CornerRadius="25"/>
-                    </Border.StrokeShape>
-                    <Grid RowDefinitions="Auto, *, Auto" RowSpacing="20">
-                        <VerticalStackLayout Grid.Row="0" Spacing="5">
-                            <Label Text="Convoy Settings" FontSize="22" FontAttributes="Bold" HorizontalOptions="Center"/>
-                            <Label Text="Adjust live telemetry rules." FontSize="13" TextColor="Gray" HorizontalOptions="Center"/>
-                        </VerticalStackLayout>
-                        <ScrollView Grid.Row="1" VerticalScrollBarVisibility="Always">
-                            <!-- All your existing sliders stay exactly the same here -->
-                            <VerticalStackLayout Spacing="15" Padding="0,5,15,5">
-                                <StackLayout Spacing="5">
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <Label Text="Max Lag Distance" FontAttributes="Bold" VerticalOptions="Center"/>
-                                        <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                                    </Grid>
-                                    <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="11" TextColor="Gray"/>
-                                    <Slider x:Name="LagSlider" Minimum="0" Maximum="5000" Value="500" ValueChanged="OnLagSliderChanged" MinimumTrackColor="DodgerBlue"/>
-                                </StackLayout>
-                                <StackLayout Spacing="5">
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <Label Text="Splinter Warning" FontAttributes="Bold" VerticalOptions="Center"/>
-                                        <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="Orange" FontAttributes="Bold"/>
-                                    </Grid>
-                                    <Label Text="Alerts if the convoy stretches too far from front to back." FontSize="11" TextColor="Gray"/>
-                                    <Slider x:Name="SplinterSlider" Minimum="0" Maximum="10000" Value="2000" ValueChanged="OnSplinterSliderChanged" MinimumTrackColor="Orange"/>
-                                </StackLayout>
-                                <StackLayout Spacing="5">
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <Label Text="Max Group Size" FontAttributes="Bold" VerticalOptions="Center"/>
-                                        <Label x:Name="SizeValueLabel" Grid.Column="1" Text="15 Riders" TextColor="MediumSeaGreen" FontAttributes="Bold"/>
-                                    </Grid>
-                                    <Label Text="Cap the total number of allowed riders." FontSize="11" TextColor="Gray"/>
-                                    <Slider x:Name="SizeSlider" Minimum="2" Maximum="20" Value="15" ValueChanged="OnSizeSliderChanged" MinimumTrackColor="MediumSeaGreen"/>
-                                </StackLayout>
-                                <StackLayout Spacing="5">
-                                    <Grid ColumnDefinitions="*, Auto">
-                                        <Label Text="Pitstop Reminder" FontAttributes="Bold" VerticalOptions="Center"/>
-                                        <Label x:Name="PitstopValueLabel" Grid.Column="1" Text="100 km" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                                    </Grid>
-                                    <Label Text="Voice reminder for a rest stop (0 to turn off)." FontSize="11" TextColor="Gray"/>
-                                    <Slider x:Name="PitstopSlider" Minimum="0" Maximum="300" Value="100" ValueChanged="OnPitstopSliderChanged" MinimumTrackColor="DodgerBlue"/>
-                                </StackLayout>
-                                <StackLayout Orientation="Horizontal" Spacing="10" Margin="0,5,0,5">
-                                    <Switch x:Name="DynamicRoutingSwitch" OnColor="MediumSeaGreen" IsToggled="True" VerticalOptions="Center"/>
-                                    <StackLayout VerticalOptions="Center">
-                                        <Label Text="Dynamic Group Routing" FontAttributes="Bold" FontSize="14"/>
-                                        <Label Text="Sync the Lead's route to the whole group." FontSize="12" TextColor="Gray"/>
-                                    </StackLayout>
-                                </StackLayout>
-                                <StackLayout Spacing="5">
-                                    <Grid ColumnDefinitions="*,Auto">
-                                        <Label Text="Min Broadcast Distance" FontAttributes="Bold" FontSize="14"/>
-                                        <Label x:Name="MinUpdateValueLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="DodgerBlue"/>
-                                    </Grid>
-                                    <Label Text="Updates at low speeds." FontSize="11" TextColor="Gray"/>
-                                    <Slider x:Name="MinUpdateSlider" Minimum="5" Maximum="50" Value="10" MinimumTrackColor="DodgerBlue" ValueChanged="OnMinUpdateSliderChanged"/>
-                                </StackLayout>
-                                <StackLayout Spacing="5">
-                                    <Grid ColumnDefinitions="*,Auto">
-                                        <Label Text="Max Broadcast Distance" FontAttributes="Bold" FontSize="14"/>
-                                        <Label x:Name="MaxUpdateValueLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="DodgerBlue"/>
-                                    </Grid>
-                                    <Label Text="Expands the update gap at high speeds to save battery." FontSize="11" TextColor="Gray"/>
-                                    <Slider x:Name="MaxUpdateSlider" Minimum="50" Maximum="500" Value="100" MinimumTrackColor="DodgerBlue" ValueChanged="OnMaxUpdateSliderChanged"/>
-                                </StackLayout>
-                            </VerticalStackLayout>
-                        </ScrollView>
-                        <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="15">
-                            <Button Grid.Column="0" Text="Cancel" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#333}" TextColor="{AppThemeBinding Light=#333, Dark=White}" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnCloseSettingsClicked"/>
-                            <Button Grid.Column="1" Text="Save" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnSaveSettingsClicked"/>
-                        </Grid>
-                    </Grid>
-                </Border>
-            </Grid>
+            <controls:AdminSettingsOverlay x:Name="AdminSettingsOverlay" 
+                                       SettingsSaved="OnAdminSettingsSaved" />
 
-            <Grid x:Name="LoadingOverlay" BackgroundColor="#CC000000" IsVisible="False" InputTransparent="False" ZIndex="9999">
-                <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20">
-                    <ActivityIndicator IsRunning="{Binding Source={x:Reference LoadingOverlay}, Path=IsVisible}" Color="DodgerBlue" WidthRequest="60" HeightRequest="60" />
-                    <Label x:Name="LoadingText" Text="Calculating Route..." TextColor="White" FontAttributes="Bold" FontSize="18" HorizontalOptions="Center" />
-                </StackLayout>
-            </Grid>
+            <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" />
 
             <Grid x:Name="RideSummaryOverlay" BackgroundColor="#E6000000" IsVisible="False" ZIndex="3000" Padding="20">
                 <!-- Keep your exact summary layout here, omitted for brevity but intact! -->

@@ -40,6 +40,7 @@ namespace SpeedyCompass.Services
         public Location LastBroadcastLocation { get; set; } = null;
         public int CurrentRouteIndex { get; set; } = 0;
         public bool RunningInBackground { get; internal set; }
+        public int OffRouteStrikeCount { get; set; } = 0;
 
         // ==========================================
         // EDGE CASE RESET HANDLERS
@@ -78,6 +79,7 @@ namespace SpeedyCompass.Services
             LastSplinterAlert = DateTime.MinValue;
             LastLagAlert = DateTime.MinValue;
             LastGroupPitstopKm = 0;
+            OffRouteStrikeCount = 0;
         }
         public bool ShouldBroadcastLocation(Location currentLocation, double speedKmh)
         {

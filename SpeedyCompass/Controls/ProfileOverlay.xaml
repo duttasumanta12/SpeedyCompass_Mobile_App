@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="SpeedyCompass.Controls.ProfileOverlay"
+             IsVisible="False"
+             ZIndex="2000">
+
+    <!-- The main background blocking touches -->
+    <Grid BackgroundColor="#CC000000" InputTransparent="False" Padding="20">
+
+        <Border VerticalOptions="Center" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="25">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="25"/>
+            </Border.StrokeShape>
+            <ScrollView>
+                <StackLayout Spacing="15">
+                    <Label x:Name="ProfileModalTitle" Text="Rider Profile" FontSize="24" FontAttributes="Bold" HorizontalOptions="Center"/>
+                    <Label x:Name="ProfileModalSubtitle" Text="Complete your emergency info before riding." FontSize="14" TextColor="Gray" HorizontalOptions="Center" HorizontalTextAlignment="Center" Margin="0,0,0,10"/>
+
+                    <!-- Username -->
+                    <StackLayout Spacing="5">
+                        <Label Text="Rider Name / Alias" FontAttributes="Bold" FontSize="14"/>
+                        <Border Stroke="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" Padding="10,0" HeightRequest="45">
+                            <Border.StrokeShape>
+                                <RoundRectangle CornerRadius="10"/>
+                            </Border.StrokeShape>
+                            <Entry x:Name="ProfileUsernameEntry" Placeholder="e.g. Maverick" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                        </Border>
+                    </StackLayout>
+
+                    <!-- Blood Group -->
+                    <StackLayout Spacing="5">
+                        <Label Text="Blood Group" FontAttributes="Bold" FontSize="14"/>
+                        <Border Stroke="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" Padding="10,0" HeightRequest="45">
+                            <Border.StrokeShape>
+                                <RoundRectangle CornerRadius="10"/>
+                            </Border.StrokeShape>
+                            <Picker x:Name="ProfileBloodGroupPicker" Title="Select Blood Group" BackgroundColor="Transparent" VerticalOptions="Center">
+                                <Picker.ItemsSource>
+                                    <x:Array Type="{x:Type x:String}">
+                                        <x:String>A+</x:String>
+                                        <x:String>A-</x:String>
+                                        <x:String>B+</x:String>
+                                        <x:String>B-</x:String>
+                                        <x:String>AB+</x:String>
+                                        <x:String>AB-</x:String>
+                                        <x:String>O+</x:String>
+                                        <x:String>O-</x:String>
+                                        <x:String>Unknown</x:String>
+                                    </x:Array>
+                                </Picker.ItemsSource>
+                            </Picker>
+                        </Border>
+                    </StackLayout>
+
+                    <!-- Emergency Contact -->
+                    <StackLayout Spacing="5">
+                        <Label Text="Emergency Contact Phone" FontAttributes="Bold" FontSize="14"/>
+                        <Border Stroke="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" Padding="10,0" HeightRequest="45">
+                            <Border.StrokeShape>
+                                <RoundRectangle CornerRadius="10"/>
+                            </Border.StrokeShape>
+                            <Entry x:Name="ProfileContactEntry" Placeholder="e.g. +1 555-0199" Keyboard="Telephone" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                        </Border>
+                    </StackLayout>
+
+                    <!-- Vehicle Number -->
+                    <StackLayout Spacing="5">
+                        <Label Text="Vehicle License Plate (Optional)" FontAttributes="Bold" FontSize="14"/>
+                        <Border Stroke="Transparent" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#2A2A2A}" Padding="10,0" HeightRequest="45">
+                            <Border.StrokeShape>
+                                <RoundRectangle CornerRadius="10"/>
+                            </Border.StrokeShape>
+                            <Entry x:Name="ProfileVehicleEntry" Placeholder="e.g. ABC-1234" TextTransform="Uppercase" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                        </Border>
+                    </StackLayout>
+
+                    <!-- Keep Screen On Toggle -->
+                    <StackLayout Orientation="Horizontal" Spacing="10" Margin="0,5,0,0">
+                        <Switch x:Name="KeepScreenOnSwitch" OnColor="MediumSeaGreen" VerticalOptions="Center"/>
+                        <StackLayout VerticalOptions="Center">
+                            <Label Text="Keep Screen On" FontAttributes="Bold" FontSize="14"/>
+                            <Label Text="Prevents phone from sleeping." FontSize="12" TextColor="Gray"/>
+                        </StackLayout>
+                    </StackLayout>
+
+                    <!-- Consent -->
+                    <Border Stroke="DodgerBlue" StrokeThickness="1" BackgroundColor="#1A0099FF" Padding="15" Margin="0,10,0,0">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="12"/>
+                        </Border.StrokeShape>
+                        <Grid ColumnDefinitions="Auto, *">
+                            <CheckBox x:Name="ConsentCheckbox" Grid.Column="0" VerticalOptions="Start" Color="DodgerBlue"/>
+                            <Label Grid.Column="1" Text="I consent to SpeedyCompass storing this medical info in the cloud securely for emergency broadcast purposes." FontSize="12" TextColor="Gray" VerticalOptions="Center"/>
+                        </Grid>
+                    </Border>
+
+                    <!-- Buttons -->
+                    <Button Text="Save &amp; Continue" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnSaveProfileClicked" Margin="0,10,0,0"/>
+                    <Button Text="Log Out" BackgroundColor="#FFF0F0" TextColor="#CC0000" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnLogoutClicked" Margin="0,5,0,0"/>
+                    <Button x:Name="CancelProfileButton" Text="Cancel" BackgroundColor="Transparent" TextColor="Gray" FontAttributes="Bold" Clicked="OnCancelProfileClicked" IsVisible="True"/>
+                </StackLayout>
+            </ScrollView>
+        </Border>
+    </Grid>
+</ContentView>
