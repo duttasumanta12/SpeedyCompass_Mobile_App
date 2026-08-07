@@ -446,76 +446,23 @@
             </Border>
 
             <!-- OVERLAYS: ALERTS & LOADERS -->
-            <Grid x:Name="SensoryAlertOverlay" BackgroundColor="Red" Opacity="0" IsVisible="False" InputTransparent="True" ZIndex="999">
-                <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
-                    <Label x:Name="AlertIconLabel" Text="🛑" FontSize="100" HorizontalTextAlignment="Center" />
-                    <Label x:Name="AlertTitleLabel" Text="EMERGENCY STOP!" TextColor="White" FontSize="36" FontAttributes="Bold" HorizontalTextAlignment="Center" />
-                    <Label x:Name="AlertSenderLabel" Text="Triggered by: You" TextColor="White" FontSize="20" HorizontalTextAlignment="Center" />
-                </StackLayout>
-            </Grid>
+            <controls:SensoryAlertOverlay x:Name="SensoryAlertOverlay" Grid.RowSpan="100" ZIndex="999" />
 
-            <Grid x:Name="PttOverlay" BackgroundColor="#E6000000" IsVisible="False" ZIndex="2000" Padding="20">
-                <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="15">
-                    <Label Text="🎤" FontSize="80" HorizontalOptions="Center" />
-                    <Label x:Name="PttStatusLabel" Text="Mic Open" TextColor="MediumSeaGreen" FontSize="28" FontAttributes="Bold" HorizontalOptions="Center" CharacterSpacing="1"/>
-                    <Label x:Name="PttSpeakerLabel" Text="You can now speak to the group." TextColor="White" FontSize="16" HorizontalOptions="Center"/>
-                    <Label x:Name="PttCountdownLabel" Text="Closing in 30s..." TextColor="LightCoral" FontSize="14" FontAttributes="Bold" HorizontalOptions="Center" IsVisible="False"/>
-                </StackLayout>
-            </Grid>
+            <controls:PttOverlay x:Name="PttOverlay" Grid.RowSpan="100" ZIndex="2000" />
 
-            <Grid x:Name="LocationDisabledOverlay" BackgroundColor="#F2000000" IsVisible="False" InputTransparent="False" ZIndex="1000">
-                <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20" Padding="30">
-                    <Label Text="📍" FontSize="80" HorizontalTextAlignment="Center"/>
-                    <Label Text="Location Required" TextColor="White" FontSize="24" FontAttributes="Bold" HorizontalTextAlignment="Center"/>
-                    <Label Text="SpeedyCompass requires your location to track your ride. Please enable GPS and location permissions to continue." TextColor="LightGray" FontSize="16" HorizontalTextAlignment="Center"/>
-                    <Button Text="Open Settings" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="12" HeightRequest="50" FontAttributes="Bold" Clicked="OnOpenSettingsClicked" Margin="0,20,0,0"/>
-                    <Button Text="I've Enabled It (Retry)" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="12" HeightRequest="50" FontAttributes="Bold" Clicked="OnRetryLocationClicked"/>
-                </StackLayout>
-            </Grid>
+            <controls:LocationDisabledOverlay x:Name="LocationDisabledOverlay" Grid.RowSpan="100" ZIndex="1000" 
+                                          OpenSettingsRequested="OnOpenSettingsClicked" 
+                                          RetryRequested="OnRetryLocationClicked" />
 
             <controls:AdminSettingsOverlay x:Name="AdminSettingsOverlay" 
                                        SettingsSaved="OnAdminSettingsSaved" />
 
-            <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" />
+            <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" Grid.RowSpan="100" 
+                             Grid.ColumnSpan="100" 
+                             ZIndex="9999" />
 
-            <Grid x:Name="RideSummaryOverlay" BackgroundColor="#E6000000" IsVisible="False" ZIndex="3000" Padding="20">
-                <!-- Keep your exact summary layout here, omitted for brevity but intact! -->
-                <Border VerticalOptions="Center" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="25">
-                    <Border.StrokeShape>
-                        <RoundRectangle CornerRadius="25"/>
-                    </Border.StrokeShape>
-                    <VerticalStackLayout Spacing="20">
-                        <StackLayout Spacing="5" HorizontalOptions="Center">
-                            <Label Text="🏁 Ride Complete!" FontSize="26" FontAttributes="Bold" HorizontalOptions="Center" TextColor="MediumSeaGreen"/>
-                            <Label x:Name="SummaryDestLabel" Text="Target Destination" FontSize="16" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
-                        </StackLayout>
-                        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" Margin="0,5"/>
-                        <Grid RowDefinitions="Auto, Auto, Auto" ColumnDefinitions="*, *" RowSpacing="20" ColumnSpacing="15">
-                            <VerticalStackLayout Grid.Row="0" Grid.Column="0" HorizontalOptions="Center" Spacing="2">
-                                <Label Text="TOTAL DISTANCE" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
-                                <Label x:Name="SummaryDistLabel" Text="0.0 km" FontSize="22" FontAttributes="Bold" TextColor="DodgerBlue" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Row="0" Grid.Column="1" HorizontalOptions="Center" Spacing="2">
-                                <Label Text="MOVING TIME" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
-                                <Label x:Name="SummaryMovingTimeLabel" Text="00:00:00" FontSize="22" FontAttributes="Bold" TextColor="DodgerBlue" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Row="1" Grid.Column="0" HorizontalOptions="Center" Spacing="2">
-                                <Label Text="AVG SPEED" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
-                                <Label x:Name="SummaryAvgSpeedLabel" Text="0.0 km/h" FontSize="22" FontAttributes="Bold" TextColor="MediumPurple" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Row="1" Grid.Column="1" HorizontalOptions="Center" Spacing="2">
-                                <Label Text="TOP SPEED" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
-                                <Label x:Name="SummaryTopSpeedLabel" Text="0.0 km/h" FontSize="22" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                            <VerticalStackLayout Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" HorizontalOptions="Center" Spacing="2">
-                                <Label Text="TOTAL ELAPSED TIME (WITH STOPS)" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
-                                <Label x:Name="SummaryTotalTimeLabel" Text="00:00:00" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                        </Grid>
-                        <Button Text="Awesome!" BackgroundColor="MediumSeaGreen" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnCloseRideSummaryClicked" Margin="0,15,0,0"/>
-                    </VerticalStackLayout>
-                </Border>
-            </Grid>
+            <controls:RideSummaryOverlay x:Name="RideSummaryOverlay" Grid.RowSpan="100" ZIndex="3000" 
+                                     CloseRequested="OnCloseRideSummaryClicked" />
 
         </Grid>
     </Grid>

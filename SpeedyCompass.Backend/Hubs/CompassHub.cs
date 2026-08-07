@@ -788,7 +788,10 @@ public class CompassHub : Hub
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
 
             await Clients.Group(groupName).SendAsync("ReceiveMeetupPoint", lat, lng);
-            await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "A new meetup point has been established.");
+            if (lat != 0 && lng != 0)
+            {
+                await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "A new meetup point has been established.");
+            }
         }
     }
 }

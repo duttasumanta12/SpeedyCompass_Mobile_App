@@ -90,7 +90,9 @@
         <!-- ========================================== -->
         <!-- 6. LOADING OVERLAY                         -->
         <!-- ========================================== -->
-        <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" />
+        <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" Grid.RowSpan="100" 
+                             Grid.ColumnSpan="100" 
+                             ZIndex="9999" />
 
     </Grid>
 </ContentPage>

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="SpeedyCompass.Controls.SensoryAlertOverlay"
+             IsVisible="False"
+             InputTransparent="True">
+
+    <Grid BackgroundColor="Red">
+        <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
+            <Label Text="🛑" FontSize="100" HorizontalTextAlignment="Center" />
+            <Label Text="EMERGENCY STOP!" TextColor="White" FontSize="36" FontAttributes="Bold" HorizontalTextAlignment="Center" />
+            <Label x:Name="AlertSenderLabel" Text="Triggered by: You" TextColor="White" FontSize="20" HorizontalTextAlignment="Center" />
+        </StackLayout>
+    </Grid>
+</ContentView>

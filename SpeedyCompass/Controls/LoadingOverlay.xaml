@@ -7,6 +7,11 @@
 
     <!-- Semi-transparent background blocking touches -->
     <Grid BackgroundColor="#CC1E1E1E" InputTransparent="False">
+
+        <Grid.GestureRecognizers>
+            <TapGestureRecognizer />
+        </Grid.GestureRecognizers>
+        
         <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="15">
             <ActivityIndicator IsRunning="True" Color="DodgerBlue" HorizontalOptions="Center" WidthRequest="50" HeightRequest="50"/>
             <Label Text="{Binding Message, Source={x:Reference thisControl}}" 

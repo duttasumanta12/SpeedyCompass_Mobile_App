@@ -55,6 +55,9 @@ public partial class LobbyPage : ContentPage
     private readonly Random _randomColorGen = new();
 
     private bool _isSimulating = false;
+    private DateTime _lastMeetupCheckTime = DateTime.MinValue;
+    private bool _haveIReachedMeetup = false;
+    private HashSet<string> _ridersAtMeetup = new();
     private CancellationTokenSource _debounceCts;
 
     private bool _isLeavingGroupPermanently = false;
@@ -416,7 +419,7 @@ public partial class LobbyPage : ContentPage
         {
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                LocationDisabledOverlay.IsVisible = false;
+                LocationDisabledOverlay.Hide();
                 if (_myPinVm != null)
                 {
                     string newSpeedStr = $"{Math.Round(e.SpeedMph * 1.60934)} kmph";
@@ -613,6 +616,36 @@ public partial class LobbyPage : ContentPage
             // 1. UPDATE CACHE FIRST
             _rideCache.CurrentRouteIndex = telemetryData.NewRouteIndex;
             _rideCache.LastOdometerLocation = currentLocation;
+            //MeetupPoint logic: If the group has an active meetup point, we need to check if the rider has reached it or if the admin has left it.
+            if (_rideCache.ActiveMeetupPoint != null)
+            {
+                double distToMeetup = Location.CalculateDistance(currentLocation, _rideCache.ActiveMeetupPoint, DistanceUnits.Kilometers);
+
+                // STAGE 1: *I* arrive at the Meetup Point (< 100 meters) - Applies to ALL riders!
+                if (!_haveIReachedMeetup && distToMeetup < 0.1)
+                {
+                    _haveIReachedMeetup = true;
+
+                    MainThread.BeginInvokeOnMainThread(() =>
+                    {
+                        if (_amIAdmin)
+                            _voiceEngine.Speak("Meetup point reached. Please wait here until all riders have joined.");
+                        else
+                            _voiceEngine.Speak("You have reached the meetup point. Prepare to merge with the convoy.");
+                        _ = _signalRService.SendGroupAlert(GroupNameLabel.Text, "MeetupArrival", _myName);
+                    });
+                }
+                // STAGE 2: Admin departs the Meetup Point (> 200 meters away AFTER reaching it) - ONLY for Admin!
+                else if (_haveIReachedMeetup && distToMeetup > 0.2 && _amIAdmin)
+                {
+                    AppLogger.Info("Routing", "Admin left meetup point. Clearing pin for all riders.");
+
+                    _haveIReachedMeetup = false; // Reset
+
+                    // Clear it instantly for everyone so they transition back to following the Lead!
+                    _ = _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0);
+                }
+            }
 
             // 2. THE FIX: UPDATE UI *BEFORE* RETURNING FOR REROUTE
             MainThread.BeginInvokeOnMainThread(() => {
@@ -729,12 +762,13 @@ public partial class LobbyPage : ContentPage
             request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
             if(groupDetails.CurrentState < GroupState.Navigating)
             {
-                request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline");
+                request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration");
             }
             else
             {
-                request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.legs.steps.startLocation,routes.legs.steps.navigationInstruction");
+                request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration,routes.legs.steps.startLocation,routes.legs.steps.navigationInstruction");
             }
+
             request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
 
             var response = await _httpClient.SendAsync(request);
@@ -757,12 +791,13 @@ public partial class LobbyPage : ContentPage
 
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    if (isMainRoute && mainRoute.Legs != null)
+                    if (isMainRoute)
                     {
                         if (PreNavDistLabel != null)
                         {
-                            PreNavDistLabel.Text = $"{distKm} km";
+                            PreNavDistLabel.Text = $"{distKm} km, ETA {etaText}";
                         }
+
                         // Safely remove only the main route (leaving the spiderweb intact!)
                         if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
 
@@ -775,18 +810,23 @@ public partial class LobbyPage : ContentPage
                         LiveMap.MapElements.Add(_activeRouteLine);
 
                         _activeRouteSteps.Clear();
-                        foreach (var leg in mainRoute.Legs)
+
+                        // THE FIX: Only parse the turn-by-turn legs if we actually requested them (i.e. we are actively Navigating)
+                        if (mainRoute.Legs != null)
                         {
-                            if (leg.Steps == null) continue;
-                            foreach (var step in leg.Steps)
+                            foreach (var leg in mainRoute.Legs)
                             {
-                                if (step.NavigationInstruction != null && !string.IsNullOrEmpty(step.NavigationInstruction.Instructions) && step.StartLocation?.LatLng != null)
+                                if (leg.Steps == null) continue;
+                                foreach (var step in leg.Steps)
                                 {
-                                    _activeRouteSteps.Add(new RouteStep
+                                    if (step.NavigationInstruction != null && !string.IsNullOrEmpty(step.NavigationInstruction.Instructions) && step.StartLocation?.LatLng != null)
                                     {
-                                        TurnLocation = new Location(step.StartLocation.LatLng.Latitude, step.StartLocation.LatLng.Longitude),
-                                        Instruction = step.NavigationInstruction.Instructions
-                                    });
+                                        _activeRouteSteps.Add(new RouteStep
+                                        {
+                                            TurnLocation = new Location(step.StartLocation.LatLng.Latitude, step.StartLocation.LatLng.Longitude),
+                                            Instruction = step.NavigationInstruction.Instructions
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -803,20 +843,6 @@ public partial class LobbyPage : ContentPage
 
                         LiveMap.MapElements.Add(otherLine);
                         _otherRiderRoutes.Add(otherLine);
-
-                        // Drop a label pin in the middle of their route line!
-                        //if (!string.IsNullOrEmpty(riderName) && decodedPoints.Count > 0)
-                        //{
-                        //    int midIndex = decodedPoints.Count / 2;
-                        //    var labelPin = new Pin
-                        //    {
-                        //        Location = decodedPoints[midIndex],
-                        //        Label = $"{riderName}'s Route",
-                        //        Type = PinType.Generic
-                        //    };
-                        //    LiveMap.Pins.Add(labelPin);
-                        //    _otherRiderRoutePins.Add(labelPin);
-                        //}
                     }
                 });
 
@@ -851,68 +877,71 @@ public partial class LobbyPage : ContentPage
     }
     private async Task GenerateMeetupPointAsync()
     {
-        if (_rideCache.ActiveDestination == null || _lastKnownLocation == null) return;
+        if (_rideCache.CurrentRoutePoints == null || _rideCache.CurrentRoutePoints.Count == 0) return;
+        if (_lastKnownLocation == null) return;
 
         var riderLocations = _rideCache.OtherRiderLocations.Values.ToList();
-        if (riderLocations.Count == 0) return; // Silent return if riding solo
+        if (riderLocations.Count == 0) return;
 
-        GlobalLoadingOverlay.Show("Optimizing Convoy Routes...");
+        MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Show("Checking Rider Positions..."));
+
         try
         {
-            var leadRoute = await _routingEngine.GetRouteDataAsync(_lastKnownLocation, _rideCache.ActiveDestination);
-            if (leadRoute == null || leadRoute.DecodedPoints.Count == 0) return;
+            bool isAnyoneLost = false;
 
-            var routeTasks = new List<Task<RouteCalculationResult>>();
-            foreach (var loc in riderLocations) routeTasks.Add(_routingEngine.GetRouteDataAsync(loc, _rideCache.ActiveDestination));
-
-            var otherRoutes = await Task.WhenAll(routeTasks);
-
-            // THE FIX: Track the index of the meetup point!
-            int meetupIndex = leadRoute.DecodedPoints.Count - 1;
-            Location meetupPoint = leadRoute.DecodedPoints[meetupIndex];
-
-            for (int i = leadRoute.DecodedPoints.Count - 1; i >= 0; i--)
+            // 1. SIMPLE MATH: Is anyone actually off the blue line?
+            foreach (var loc in riderLocations)
             {
-                Location pt = leadRoute.DecodedPoints[i];
-                bool sharedByAll = true;
-
-                foreach (var routeResult in otherRoutes)
+                bool isOnPath = false;
+                // Check every 5th coordinate to see if they are on the road (150m buffer)
+                for (int i = 0; i < _rideCache.CurrentRoutePoints.Count; i += 5)
                 {
-                    if (routeResult == null || routeResult.DecodedPoints == null || routeResult.DecodedPoints.Count == 0) continue;
-
-                    bool foundNear = routeResult.DecodedPoints.Any(rPt => Location.CalculateDistance(pt, rPt, DistanceUnits.Kilometers) < 0.1);
-                    if (!foundNear)
+                    if (Location.CalculateDistance(loc, _rideCache.CurrentRoutePoints[i], DistanceUnits.Kilometers) < 0.15)
                     {
-                        sharedByAll = false;
+                        isOnPath = true;
                         break;
                     }
                 }
 
-                if (sharedByAll)
+                if (!isOnPath)
                 {
-                    meetupPoint = pt;
-                    meetupIndex = i; // Save the index!
+                    isAnyoneLost = true;
+                    break; // One lost rider is all it takes!
                 }
-                else break;
             }
 
-            // THE FIX: If the merge point is right at the start, everyone is on the same path!
-            if (meetupIndex <= 2)
+            // 2. THE FIX: If everyone is on the same path (even 5km behind), clear the pin!
+            if (!isAnyoneLost)
             {
-                // Send 0,0 to tell everyone to wipe the spiderweb and clear the pin
                 await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0);
+                return;
             }
-            else
+
+            // 3. Someone is lost. Pick a meetup point ~5km ahead of the Lead's current position!
+            int targetIndex = _rideCache.CurrentRouteIndex;
+            double accumulatedDist = 0;
+
+            while (targetIndex < _rideCache.CurrentRoutePoints.Count - 1 && accumulatedDist < 5.0)
             {
-                await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, meetupPoint.Latitude, meetupPoint.Longitude);
+                accumulatedDist += Location.CalculateDistance(_rideCache.CurrentRoutePoints[targetIndex], _rideCache.CurrentRoutePoints[targetIndex + 1], DistanceUnits.Kilometers);
+                targetIndex++;
             }
+
+            var meetupPoint = _rideCache.CurrentRoutePoints[targetIndex];
+            await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, meetupPoint.Latitude, meetupPoint.Longitude);
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Meetup Error: {ex.Message}"); }
-        finally { GlobalLoadingOverlay.Hide(); }
+        finally
+        {
+            // THE FIX: Ensure the overlay ALWAYS hides safely on the UI thread
+            MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Hide());
+        }
     }
-    private async void OnMeetupPointSet(double lat, double lng)
+    private void OnMeetupPointSet(double lat, double lng)
     {
-        // THE FIX 1: If we receive 0,0, it means everyone is on the same path. Clear everything!
+        _haveIReachedMeetup = false;
+        _ridersAtMeetup.Clear();
+
         if (lat == 0 && lng == 0)
         {
             _rideCache.ActiveMeetupPoint = null;
@@ -929,41 +958,35 @@ public partial class LobbyPage : ContentPage
 
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            // THE FIX 2: Destroy the old pin before drawing the new one!
             var oldPin = LiveMap.Pins.FirstOrDefault(p => p.Label == "Meetup Point");
             if (oldPin != null) LiveMap.Pins.Remove(oldPin);
 
             LiveMap.Pins.Add(new Pin { Label = "Meetup Point", Location = _rideCache.ActiveMeetupPoint, Type = PinType.Generic });
         });
 
-        if (_lastKnownLocation != null && _rideCache.ActiveDestination != null)
+        // THE FIX: Do NOT recalculate the Main Route. It breaks the Odometer!
+        // Just draw the Spiderwebs for the lost riders.
+        bool amILead = _rideCache.MyRole == "Lead" || (_amIAdmin && string.IsNullOrEmpty(_rideCache.CurrentSettings?.LeadRiderGoogleId));
+
+        if (amILead)
         {
-            // 1. Calculate my own personal route to the meetup point
-            await CalculateAndDrawRoute(_lastKnownLocation, _rideCache.ActiveDestination, _rideCache.ActiveMeetupPoint);
+            MainThread.BeginInvokeOnMainThread(() => ClearOtherRiderRoutes());
 
-            // 2. If I am the Lead, download and draw the spiderweb!
-            bool amILead = _rideCache.MyRole == "Lead" || (_amIAdmin && string.IsNullOrEmpty(_rideCache.CurrentSettings?.LeadRiderGoogleId));
-
-            if (amILead)
+            foreach (var rider in _rideCache.OtherRiderLocations)
             {
-                MainThread.BeginInvokeOnMainThread(() => ClearOtherRiderRoutes());
+                var colorProfile = GetColorsForRider(rider.Key);
 
-                foreach (var rider in _rideCache.OtherRiderLocations)
-                {
-                    // Use our new predefined color palette based on their ID
-                    var colorProfile = GetColorsForRider(rider.Key);
-
-                    _ = CalculateAndDrawRoute(
-                        origin: rider.Value,
-                        dest: _rideCache.ActiveDestination,
-                        meetup: _rideCache.ActiveMeetupPoint,
-                        routeColor: colorProfile.RouteColor,
-                        riderName: rider.Key,
-                        isMainRoute: false);
-                }
+                // Spiderweb strictly from the Rider -> Meetup Point
+                _ = CalculateAndDrawRoute(
+                    origin: rider.Value,
+                    dest: _rideCache.ActiveMeetupPoint,
+                    meetup: null,
+                    routeColor: colorProfile.RouteColor,
+                    riderName: rider.Key,
+                    isMainRoute: false);
             }
         }
-    }
+    }   
     private async void OnGenerateMeetupClicked(object sender, EventArgs e)
     {
         // Manual override for Late Joiners
@@ -1092,8 +1115,7 @@ public partial class LobbyPage : ContentPage
                     ActionDrawer.IsVisible = true;
                     ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
 
-                    _locationTracker?.StartTracking(GroupNameLabel.Text, Riders.Count(x => x.IsOnline));
-
+                   
                     break;
 
                 case GroupState.NotNavigating:
@@ -1313,18 +1335,15 @@ public partial class LobbyPage : ContentPage
 
             if (finalSummary != null)
             {
-                // Populate the UI
-                SummaryDestLabel.Text = finalSummary.DestinationName;
-                SummaryDistLabel.Text = $"{finalSummary.TotalDistanceKm} km";
-                SummaryTopSpeedLabel.Text = $"{finalSummary.TopSpeedKmh} km/h";
-                SummaryAvgSpeedLabel.Text = $"{finalSummary.AverageMovingSpeedKmh} km/h";
-
-                // Format times cleanly
-                SummaryMovingTimeLabel.Text = finalSummary.MovingTime.ToString(@"hh\:mm\:ss");
-                SummaryTotalTimeLabel.Text = finalSummary.TotalElapsedTime.ToString(@"hh\:mm\:ss");
-
-                // Show the modal!
-                RideSummaryOverlay.IsVisible = true;
+                // THE FIX: Pass data cleanly to the component!
+                RideSummaryOverlay.Show(
+                    destination: finalSummary.DestinationName,
+                    distance: $"{finalSummary.TotalDistanceKm} km",
+                    movingTime: finalSummary.MovingTime.ToString(@"hh\:mm\:ss"),
+                    avgSpeed: $"{finalSummary.AverageMovingSpeedKmh} km/h",
+                    topSpeed: $"{finalSummary.TopSpeedKmh} km/h",
+                    totalTime: finalSummary.TotalElapsedTime.ToString(@"hh\:mm\:ss")
+                );
             }
         });
 
@@ -1673,6 +1692,18 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(async () =>
         {
+            if (alertType == "MeetupArrival")
+            {
+                if (_amIAdmin)
+                {
+                    // Clean up their name (removes the "(Offline)" tag if it's there)
+                    var riderModel = Riders.FirstOrDefault(r => r.GoogleId == senderName || r.Name.StartsWith(senderName));
+                    string cleanName = riderModel?.Name?.Replace(" (Offline)", "") ?? senderName;
+
+                    _voiceEngine.Speak($"{cleanName} has reached the meetup point.");
+                }
+                return; // Exit early so we don't show the red Emergency overlay!
+            }
             if (alertType == "Lagging" || alertType == "Splinter" || alertType == "VoicePrompt")
             {
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
@@ -1686,55 +1717,21 @@ public partial class LobbyPage : ContentPage
 
             if (alertType == "Emergency")
             {
-                SensoryAlertOverlay.BackgroundColor = Colors.Red;
-                AlertTitleLabel.Text = "EMERGENCY STOP!";
-                AlertIconLabel.Text = "🛑";
-                durationSeconds = 10;
                 voiceMessage = $"Emergency Stop triggered by {senderName}. Please pull over safely immediately.";
             }
             else if (alertType == "Refuel")
             {
-                SensoryAlertOverlay.BackgroundColor = Colors.DarkOrange;
-                AlertTitleLabel.Text = "REFUEL STOP";
-                AlertIconLabel.Text = "⛽";
-                durationSeconds = 5;
                 voiceMessage = $"{senderName} needs a refuel break. Prepare to stop at the next gas station.";
-
-                //await ShowPoisTemporarilyAsync(new List<string> { "gas_station" }, "⛽");
             }
             else if (alertType == "Rest")
             {
-                SensoryAlertOverlay.BackgroundColor = Colors.DodgerBlue;
-                AlertTitleLabel.Text = "REST STOP";
-                AlertIconLabel.Text = "☕";
-                durationSeconds = 5;
                 voiceMessage = $"{senderName} requested a rest stop. Prepare to pull over soon.";
-
-                //await ShowPoisTemporarilyAsync(new List<string> { "restaurant", "cafe" }, "🍽️");
             }
-
-            AlertSenderLabel.Text = $"Triggered by: {senderName}";
-            SensoryAlertOverlay.IsVisible = true;
 
             _voiceEngine.Speak(voiceMessage);
 
-            var cts = new CancellationTokenSource();
-            cts.CancelAfter(TimeSpan.FromSeconds(durationSeconds));
-
-            try
-            {
-                while (!cts.IsCancellationRequested)
-                {
-                    Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(500));
-                    await SensoryAlertOverlay.FadeToAsync(0.8, 250);
-                    await SensoryAlertOverlay.FadeToAsync(0.2, 250);
-                }
-            }
-            catch (TaskCanceledException) { }
-
-            Vibration.Default.Cancel();
-            SensoryAlertOverlay.IsVisible = false;
-            SensoryAlertOverlay.Opacity = 0;
+            // THE FIX: Let the component handle its own 3-second flashing animation!
+            await SensoryAlertOverlay.TriggerAlertAsync(senderName);
 
             SetActionButtonsEnabled(true);
         });
@@ -1978,16 +1975,12 @@ public partial class LobbyPage : ContentPage
         _currentSpeaker = speakerName;
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            PttOverlay.IsVisible = true;
             if (speakerName == _myName)
             {
-                PttStatusLabel.Text = "MIC OPEN";
-                PttStatusLabel.TextColor = Colors.MediumSeaGreen;
-                PttSpeakerLabel.Text = "You can now speak to the group.";
+                PttOverlay.ShowMicOpen();
 
                 _pttCts?.Cancel();
                 _pttCts = new CancellationTokenSource();
-                PttCountdownLabel.IsVisible = true;
                 _ = RunPttTimeoutAsync(_pttCts.Token);
 
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
@@ -1996,10 +1989,7 @@ public partial class LobbyPage : ContentPage
             else
             {
                 _pttCts?.Cancel();
-                PttCountdownLabel.IsVisible = false;
-                PttStatusLabel.Text = "RECEIVING";
-                PttStatusLabel.TextColor = Colors.DodgerBlue;
-                PttSpeakerLabel.Text = $"{speakerName} is speaking...";
+                PttOverlay.ShowListening(speakerName);
             }
         });
     }
@@ -2010,7 +2000,7 @@ public partial class LobbyPage : ContentPage
         {
             while (_pttTimeRemaining > 0 && !token.IsCancellationRequested)
             {
-                MainThread.BeginInvokeOnMainThread(() => PttCountdownLabel.Text = $"Auto-closing in {_pttTimeRemaining}s...");
+                MainThread.BeginInvokeOnMainThread(() => PttOverlay.UpdateCountdown(_pttTimeRemaining));
                 await Task.Delay(1000, token);
                 _pttTimeRemaining--;
             }
@@ -2019,7 +2009,7 @@ public partial class LobbyPage : ContentPage
             {
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    PttCountdownLabel.Text = "Maximum time reached!";
+                    PttOverlay.ShowMaximumTimeReached();
                     _voiceEngine.Speak("Microphone closed.");
                 });
 
@@ -2045,8 +2035,7 @@ public partial class LobbyPage : ContentPage
         MainThread.BeginInvokeOnMainThread(() =>
         {
             _pttCts?.Cancel();
-            PttOverlay.IsVisible = false;
-            PttCountdownLabel.IsVisible = false;
+            PttOverlay.Hide();
         });
     }
     private async void OnHardwarePttPressed(object sender, EventArgs e)
@@ -2104,12 +2093,12 @@ public partial class LobbyPage : ContentPage
                 // THE FIX: If text is fully cleared (user hit the 'X'), wipe the map routes!
                 if (string.IsNullOrWhiteSpace(query))
                 {
-                    if (_activeRouteLine != null)
-                    {
-                        LiveMap.MapElements.Remove(_activeRouteLine);
-                        _activeRouteLine = null;
-                        _activeRouteSteps.Clear();
-                    }
+
+                    LiveMap.MapElements.Remove(_activeRouteLine);
+                    LiveMap.MapElements.Clear();
+                    _activeRouteLine = null;
+                    _activeRouteSteps.Clear();
+
                     var oldPins = LiveMap.Pins.Where(p => p.Type == PinType.Place && p.Label != "You").ToList();
                     foreach (var p in oldPins) LiveMap.Pins.Remove(p);
 
@@ -2119,6 +2108,8 @@ public partial class LobbyPage : ContentPage
                         _rideCache.HardResetAll();
                         _ = ChangeGroupState(GroupState.NotNavigating);
                     }
+
+                    FitMapToBounds();
                 }
             });
             return;
@@ -2366,7 +2357,7 @@ public partial class LobbyPage : ContentPage
                 status = await Permissions.RequestAsync<Permissions.LocationWhenInUse>();
                 if (status != PermissionStatus.Granted)
                 {
-                    MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+                    MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.Show());
                     return;
                 }
             }
@@ -2415,7 +2406,7 @@ public partial class LobbyPage : ContentPage
                 _lastKnownLocation = currentLocation;
                 MainThread.BeginInvokeOnMainThread(() =>
                 {
-                    LocationDisabledOverlay.IsVisible = false;
+                    LocationDisabledOverlay.Hide();
                     DrawerStatsTab.IsVisible = true;
 
                     var usedColors = MapPins.Where(pin => pin.Username != "You").Select(pin => pin.PinColor).ToHashSet();
@@ -2442,11 +2433,11 @@ public partial class LobbyPage : ContentPage
         }
         catch (FeatureNotEnabledException)
         {
-            MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+            MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.Show());
         }
         catch (PermissionException)
         {
-            MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.IsVisible = true);
+            MainThread.BeginInvokeOnMainThread(() => LocationDisabledOverlay.Show());
         }
         catch (Exception ex)
         {
