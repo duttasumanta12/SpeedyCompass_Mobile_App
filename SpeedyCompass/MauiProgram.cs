@@ -42,6 +42,7 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<IVoiceCopilotEngine, VoiceCopilotEngine>();
             builder.Services.AddSingleton<IRoutingEngine, RoutingEngine>();
             builder.Services.AddSingleton<ITelemetryEngine, TelemetryEngine>();
+            builder.Services.AddSingleton<RouteDeviationEngine>();
 
             // --- NEW: Register HttpClientFactory and your Page ---
             builder.Services.AddHttpClient("CompassBackend", client =>

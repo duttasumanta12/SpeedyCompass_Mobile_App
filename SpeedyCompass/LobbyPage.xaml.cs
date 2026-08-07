@@ -52,7 +52,6 @@ public partial class LobbyPage : ContentPage
     private Polyline _activeRouteLine;
 
     private readonly ConcurrentDictionary<string, RiderPin> _riderViewModels = new();
-    private readonly Random _randomColorGen = new();
 
     private bool _isSimulating = false;
     private bool _haveIReachedMeetup = false;
@@ -81,6 +80,7 @@ public partial class LobbyPage : ContentPage
     private readonly IVoiceCopilotEngine _voiceEngine;
     private readonly IRoutingEngine _routingEngine;
     private readonly ITelemetryEngine _telemetryEngine;
+    private readonly RouteDeviationEngine? _deviationEngine;
     private CancellationTokenSource _rideCts;
     private DateTime _lastNetworkBroadcastTime = DateTime.MinValue;
     private Location _lastNetworkBroadcastLocation = null;
@@ -150,6 +150,7 @@ public partial class LobbyPage : ContentPage
         _rideCache = IPlatformApplication.Current?.Services.GetService<RideStateService>();
         _routingEngine = IPlatformApplication.Current?.Services.GetService<IRoutingEngine>();
         _telemetryEngine = IPlatformApplication.Current?.Services.GetService<ITelemetryEngine>();
+        _deviationEngine = IPlatformApplication.Current?.Services.GetService<RouteDeviationEngine>();
 
         this.groupDetails = groupDetails;
 
@@ -576,43 +577,38 @@ public partial class LobbyPage : ContentPage
                 }
 
                 // =====================================================================
-                // --- SMART HEADING + DISTANCE REROUTE MATRIX ---
+                // --- MULTI-FACTOR DEVIATION ANALYSIS (Google Maps Style) ---
                 // =====================================================================
-                bool currentPingIsOffRoute = false;
+                var deviationAnalysis = _deviationEngine.AnalyzeRouteDeviation(
+                    currentLocation,
+                    currentRouteSnapshot,
+                    _rideCache.CurrentRouteIndex,
+                    currentLocation?.Course ?? 0,  // Current heading
+                    currentSpeed,                   // Speed in km/h
+                    _rideCache.OffRouteStrikeCount);
 
-                if (currentSpeed > 5) // Only judge them if they are actually driving!
-                {
-                    // RULE 1: The "Too Far" Fallback (>150m away)
-                    if (minDistance > 0.15)
-                    {
-                        currentPingIsOffRoute = true;
-                    }
-                    // RULE 2: The "Wrong Turn" Vector Check (>50m away AND wrong heading)
-                    else if (minDistance > 0.05 && closestActualIndex < currentRouteSnapshot.Count - 1 && currentLocation?.Course != null)
-                    {
-                        double expectedHeading = CalculateBearing(currentRouteSnapshot[closestActualIndex], currentRouteSnapshot[closestActualIndex + 1]);
-                        double headingDiff = Math.Abs(currentLocation.Course.Value - expectedHeading);
-                        if (headingDiff > 180) headingDiff = 360 - headingDiff;
+                // Update strike system based on analysis severity
+                _rideCache.OffRouteStrikeCount = _deviationEngine.UpdateDeviationStrikes(
+                    deviationAnalysis,
+                    _rideCache.OffRouteStrikeCount);
 
-                        if (headingDiff > 60) currentPingIsOffRoute = true;
-                    }
-                }
+                // Determine if we're officially off-route (using smart thresholds)
+                int strikeThreshold = _deviationEngine.GetRerouteStrikeThreshold(deviationAnalysis);
+                bool officiallyLost = _rideCache.OffRouteStrikeCount >= strikeThreshold;
 
-                // =====================================================================
-                // --- THE FIX: YOUR 3-STRIKE DEBOUNCER IDEA ---
-                // =====================================================================
-                if (currentPingIsOffRoute)
-                {
-                    _rideCache.OffRouteStrikeCount++;
-                }
-                else
-                {
-                    // If they matched the route on this ping, instantly forgive them!
-                    _rideCache.OffRouteStrikeCount = 0;
-                }
+                // Should we actually reroute?
+                bool shouldReroute = _deviationEngine.ShouldPerformReroute(
+                    deviationAnalysis,
+                    officiallyLost,
+                    _rideCache.LastRerouteTime);
 
-                // It takes 3 consecutive bad pings (strikes) to officially trigger a reroute
-                bool officiallyLost = _rideCache.OffRouteStrikeCount >= 3;
+                AppLogger.Info("Routing",
+                    $"Severity={deviationAnalysis.Severity}, " +
+                    $"Distance={deviationAnalysis.DistanceToRouteMeters:F0}m, " +
+                    $"Heading={deviationAnalysis.HeadingDifferenceDegreesFromRoute:F0}°, " +
+                    $"Strikes={_rideCache.OffRouteStrikeCount}/{strikeThreshold}, " +
+                    $"Reroute={shouldReroute}");
+
 
                 // =====================================================================
                 // --- NEW: PROGRESS BAR & NEXT TURN MATH ---
@@ -661,17 +657,21 @@ public partial class LobbyPage : ContentPage
                 return new
                 {
                     IsOffRoute = officiallyLost,
+                    ShouldReroute = shouldReroute, // Add this
+                    UserMessage = deviationAnalysis.UserMessage, // Add this
+                    AlertColor = deviationAnalysis.AlertColor, // Add this
+
                     NewRouteIndex = closestActualIndex,
                     DistLeftStr = $"{Math.Round(distLeft, 1)} km",
                     TotalTravelStr = $"{Math.Round(_rideCache.CumulativeDistanceKm, 1)}",
                     TotalRouteStr = $"{Math.Round(_rideCache.CumulativeDistanceKm + distLeft, 1)} km",
                     ProgressVal = progressVal,
-                    EtaStr = eta.ToString("h:mm tt"), // Formats strictly to "10:10 PM"
+                    ProgressPercentStr = progressPercentStr,
+                    EtaStr = eta.ToString("h:mm tt"),
                     ShowNextTurn = showNextTurn,
                     NextTurnDistStr = nextTurnDistStr,
                     NextTurnInstr = nextTurnInstruction,
-                    NextTurnIcon = nextTurnIcon,
-                    ProgressPercentStr = progressPercentStr, // Add this!   
+                    NextTurnIcon = nextTurnIcon
                 };
             }, _rideCts.Token);
 
@@ -710,19 +710,23 @@ public partial class LobbyPage : ContentPage
             }
 
             // 2. THE FIX: UPDATE UI *BEFORE* RETURNING FOR REROUTE
-            MainThread.BeginInvokeOnMainThread(() => {
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
                 if (_rideCts.IsCancellationRequested) return;
                 try
                 {
                     if (telemetryData.IsOffRoute)
                     {
-                        MyDistanceLabel.Text = "Rerouting...";
+                        // THE FIX: Use dynamic messages (e.g. "Wrong turn", "Recalculating...")
+                        MyDistanceLabel.Text = telemetryData.UserMessage ?? "Rerouting...";
+                        MyDistanceLabel.TextColor = telemetryData.AlertColor;
                         MyEtaLabel.IsVisible = false;
                         NextTurnOverlay.IsVisible = false;
                     }
                     else
                     {
                         MyDistanceLabel.Text = telemetryData.DistLeftStr;
+                        MyDistanceLabel.TextColor = Colors.DodgerBlue; // Reset to default color!
                         MyEtaLabel.IsVisible = true;
                         MyEtaLabel.Text = telemetryData.EtaStr;
 
@@ -750,39 +754,38 @@ public partial class LobbyPage : ContentPage
             });
 
             // 3. NOW HANDLE THE ACTUAL REROUTING LOGIC
-            if (telemetryData.IsOffRoute)
+            if (telemetryData.ShouldReroute)
             {
-                if ((DateTime.Now - _rideCache.LastRerouteTime).TotalSeconds > 15)
+                AppLogger.Info("Routing", "Deviation Engine triggered recalculation.");
+                _rideCache.LastRerouteTime = DateTime.Now;
+
+                _ = Task.Run(async () =>
                 {
-                    AppLogger.Info("Routing", "Rider is off route. Triggering recalculation.");
-                    _rideCache.LastRerouteTime = DateTime.Now;
+                    try
+                    {
+                        // Ensure we pass the meetup point if it exists during a reroute
+                        Location meetupLoc = _rideCache.ActiveMeetupPoint;
 
-                    _ = Task.Run(async () => {
-                        try
+                        string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination, meetupLoc);
+
+                        if (!string.IsNullOrEmpty(newPolyline))
                         {
-                            // Ensure we pass the meetup point if it exists during a reroute
-                            Location meetupLoc = _rideCache.ActiveMeetupPoint;
-
-                            string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination, meetupLoc);
-
-                            if (!string.IsNullOrEmpty(newPolyline))
+                            var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
+                            if (settings != null && settings.EnableDynamicRouting)
                             {
-                                var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
-                                if (settings != null && settings.EnableDynamicRouting)
-                                {
-                                    if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
-                                    else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
-                                }
+                                if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
+                                else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
                             }
                         }
-                        catch (Exception ex)
-                        {
-                            AppLogger.Error("Routing", ex, "Failed to recalculate route during deviation.");
-                        }
-                    }, _rideCts.Token);
-                }
-                return; // Safely return now that the UI is updated and rerouting is triggered
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("Routing", ex, "Failed to recalculate route during deviation.");
+                    }
+                }, _rideCts.Token);
             }
+            return; // Safely return now that the UI is updated and rerouting is triggered
+
         }
         catch (OperationCanceledException)
         {

@@ -22,6 +22,7 @@ namespace SpeedyCompass.Platforms.Android
         private readonly Dictionary<string, BitmapDescriptor> _iconMap = [];
         private INotifyCollectionChanged? _observablePins;
         private readonly Dictionary<string, BitmapDescriptor> _usernameIconCache = [];
+        private MapCallbackHandler _mapCallbackHandler; // Track callback handler for cleanup
 
         // Store the template in memory after reading it once
         private static string _cachedSvgTemplate = null;
@@ -40,14 +41,58 @@ namespace SpeedyCompass.Platforms.Android
         protected override void ConnectHandler(MapView platformView)
         {
             base.ConnectHandler(platformView);
-            var mapReady = new MapCallbackHandler(this);
-            PlatformView.GetMapAsync(mapReady);
+            _mapCallbackHandler = new MapCallbackHandler(this);
+            PlatformView.GetMapAsync(_mapCallbackHandler);
         }
 
         protected override void DisconnectHandler(MapView platformView)
         {
             CleanupCollectionSubscriptions();
+            
+            // Cleanup map callback handler
+            _mapCallbackHandler?.Cleanup();
+            _mapCallbackHandler?.Dispose();
+            _mapCallbackHandler = null;
+            
+            // Dispose cached bitmaps to free native memory
+            foreach (var descriptor in _iconMap.Values)
+            {
+                // BitmapDescriptor doesn't have direct Dispose, but we can clear the cache
+                // to allow the underlying bitmaps to be garbage collected
+            }
+            _iconMap.Clear();
+            
+            foreach (var descriptor in _usernameIconCache.Values)
+            {
+                // Same as above - clear to allow GC
+            }
+            _usernameIconCache.Clear();
+            
+            // Unsubscribe from map events
+            if (Map != null)
+            {
+                Map.MarkerClick -= MarkerClick;
+            }
+            
+            // Clear marker map
+            MarkerMap.Clear();
+            
             base.DisconnectHandler(platformView);
+        }
+
+        private void CleanupCollectionSubscriptions()
+        {
+            if (_observablePins != null)
+            {
+                _observablePins.CollectionChanged -= OnCustomPinsCollectionChanged;
+                _observablePins = null;
+            }
+
+            // Unsubscribe from individual pin events to prevent memory leaks
+            foreach (var entry in MarkerMap.Values)
+            {
+                entry.Pin.PropertyChanged -= OnPinPropertyChanged;
+            }
         }
 
         private static void MapPinsMapper(IMapHandler handler, Microsoft.Maui.Maps.IMap map)
@@ -63,21 +108,6 @@ namespace SpeedyCompass.Platforms.Android
                 }
 
                 mapHandler.RefreshPins();
-            }
-        }
-
-        private void CleanupCollectionSubscriptions()
-        {
-            if (_observablePins != null)
-            {
-                _observablePins.CollectionChanged -= OnCustomPinsCollectionChanged;
-                _observablePins = null;
-            }
-
-            // Unsubscribe from individual pin events to prevent memory leaks
-            foreach (var entry in MarkerMap.Values)
-            {
-                entry.Pin.PropertyChanged -= OnPinPropertyChanged;
             }
         }
 
@@ -101,27 +131,37 @@ namespace SpeedyCompass.Platforms.Android
         }
         private BitmapDescriptor GetOrCreateCanvasIcon(string username, Microsoft.Maui.Graphics.Color userColor)
         {
-            if (_usernameIconCache.TryGetValue(username, out var cachedDescriptor)) return cachedDescriptor;
+            if (_usernameIconCache.TryGetValue(username, out var cachedDescriptor)) 
+                return cachedDescriptor;
 
             float density = this.Context.Resources.DisplayMetrics.Density;
             int size = (int)(20 * density); // 20dp simple dot
 
             var bitmap = Bitmap.CreateBitmap(size, size, Bitmap.Config.Argb8888);
-            using var canvas = new Canvas(bitmap);
-            using var paint = new Paint { AntiAlias = true };
+            try
+            {
+                using var canvas = new Canvas(bitmap);
+                using var paint = new Paint { AntiAlias = true };
 
-            // White outline
-            paint.Color = Color.White;
-            paint.SetStyle(Paint.Style.Fill);
-            canvas.DrawCircle(size / 2f, size / 2f, size / 2f, paint);
+                // White outline
+                paint.Color = Color.White;
+                paint.SetStyle(Paint.Style.Fill);
+                canvas.DrawCircle(size / 2f, size / 2f, size / 2f, paint);
 
-            // Colored inner dot
-            paint.Color = userColor.ToPlatform();
-            canvas.DrawCircle(size / 2f, size / 2f, (size / 2f) - (2 * density), paint);
+                // Colored inner dot
+                paint.Color = userColor.ToPlatform();
+                canvas.DrawCircle(size / 2f, size / 2f, (size / 2f) - (2 * density), paint);
 
-            var descriptor = BitmapDescriptorFactory.FromBitmap(bitmap);
-            _usernameIconCache[username] = descriptor;
-            return descriptor;
+                var descriptor = BitmapDescriptorFactory.FromBitmap(bitmap);
+                _usernameIconCache[username] = descriptor;
+                return descriptor;
+            }
+            finally
+            {
+                // CRITICAL: Dispose bitmap after descriptor is created
+                // BitmapDescriptorFactory.FromBitmap makes a copy, so we can safely recycle the original
+                bitmap?.Recycle();
+            }
         }
 
         private async void AddPins()
@@ -187,27 +227,53 @@ namespace SpeedyCompass.Platforms.Android
         {
             // Cache by name AND color so we only ever generate each color once!
             string cacheKey = $"{icon}_{color.ToArgbHex()}";
-            if (_iconMap.TryGetValue(cacheKey, out BitmapDescriptor? value)) return value;
+            if (_iconMap.TryGetValue(cacheKey, out BitmapDescriptor? value)) 
+                return value;
 
             var drawable = Context.Resources.GetIdentifier(icon, "drawable", Context.PackageName);
-            if (drawable == 0) return BitmapDescriptorFactory.DefaultMarker(); // Safe fallback if image is missing
+            if (drawable == 0) 
+                return BitmapDescriptorFactory.DefaultMarker(); // Safe fallback if image is missing
 
             var bitmap = BitmapFactory.DecodeResource(Context.Resources, drawable);
-            var scaled = Bitmap.CreateScaledBitmap(bitmap, 80, 80, false); // Adjust size as needed
-            bitmap.Recycle();
+            if (bitmap == null)
+                return BitmapDescriptorFactory.DefaultMarker();
 
-            // Apply a blazing-fast native GPU tint to the static white image
-            var tintedBitmap = Bitmap.CreateBitmap(scaled.Width, scaled.Height, Bitmap.Config.Argb8888);
-            using var canvas = new Canvas(tintedBitmap);
-            using var paint = new Paint();
-            paint.SetColorFilter(new PorterDuffColorFilter(color.ToPlatform(), PorterDuff.Mode.SrcIn));
+            try
+            {
+                var scaled = Bitmap.CreateScaledBitmap(bitmap, 80, 80, false);
+                try
+                {
+                    // Apply a blazing-fast native GPU tint to the static white image
+                    var tintedBitmap = Bitmap.CreateBitmap(scaled.Width, scaled.Height, Bitmap.Config.Argb8888);
+                    try
+                    {
+                        using var canvas = new Canvas(tintedBitmap);
+                        using var paint = new Paint();
+                        paint.SetColorFilter(new PorterDuffColorFilter(color.ToPlatform(), PorterDuff.Mode.SrcIn));
 
-            canvas.DrawBitmap(scaled, 0, 0, paint);
-            scaled.Recycle();
+                        canvas.DrawBitmap(scaled, 0, 0, paint);
 
-            var descriptor = BitmapDescriptorFactory.FromBitmap(tintedBitmap);
-            _iconMap[cacheKey] = descriptor;
-            return descriptor;
+                        var descriptor = BitmapDescriptorFactory.FromBitmap(tintedBitmap);
+                        _iconMap[cacheKey] = descriptor;
+                        return descriptor;
+                    }
+                    finally
+                    {
+                        // CRITICAL: Dispose tintedBitmap after descriptor is created
+                        tintedBitmap?.Recycle();
+                    }
+                }
+                finally
+                {
+                    // CRITICAL: Dispose scaled bitmap
+                    scaled?.Recycle();
+                }
+            }
+            finally
+            {
+                // CRITICAL: Dispose original bitmap
+                bitmap?.Recycle();
+            }
         }
 
         public void MarkerClick(object sender, GoogleMap.MarkerClickEventArgs args)
@@ -304,33 +370,77 @@ namespace SpeedyCompass.Platforms.Android
 
     public class MapCallbackHandler : Java.Lang.Object, IOnMapReadyCallback
     {
-        private readonly CustomMapHandler mapHandler;
-        public MapCallbackHandler(CustomMapHandler mapHandler) { this.mapHandler = mapHandler; }
+        private readonly CustomMapHandler _mapHandler;
+        private GoogleMap _googleMap;
+        
+        // Store event handlers to enable proper cleanup
+        private EventHandler _cameraMoveHandler;
+        private EventHandler<GoogleMap.PoiClickEventArgs> _poiClickHandler;
+
+        public MapCallbackHandler(CustomMapHandler mapHandler) 
+        { 
+            _mapHandler = mapHandler; 
+        }
 
         public void OnMapReady(GoogleMap googleMap)
         {
-            mapHandler.UpdateValue(nameof(CustomMap.CustomPins));
-            googleMap.MarkerClick += mapHandler.MarkerClick;
+            _googleMap = googleMap;
+            
+            _mapHandler.UpdateValue(nameof(CustomMap.CustomPins));
+            googleMap.MarkerClick += _mapHandler.MarkerClick;
 
-            googleMap.CameraMove += (s, e) => mapHandler.ProjectPinsToScreen();
-            googleMap.PoiClick += (sender, e) =>
+            // CRITICAL: Use named methods instead of lambdas for proper cleanup
+            _cameraMoveHandler = (s, e) => _mapHandler.ProjectPinsToScreen();
+            googleMap.CameraMove += _cameraMoveHandler;
+            
+            _poiClickHandler = (sender, e) =>
             {
-                if (mapHandler.VirtualView is CustomMap customMap && e.Poi != null)
+                if (_mapHandler.VirtualView is CustomMap customMap && e.Poi != null)
                 {
                     var loc = new Location(e.Poi.LatLng.Latitude, e.Poi.LatLng.Longitude);
-
                     // Push it straight up to MAUI XAML!
                     customMap.InvokePoiClicked(loc, e.Poi.Name, e.Poi.PlaceId);
                 }
             };
+            googleMap.PoiClick += _poiClickHandler;
         }
+
+        // CRITICAL: Cleanup method to be called from DisconnectHandler
+        public void Cleanup()
+        {
+            if (_googleMap != null)
+            {
+                _googleMap.MarkerClick -= _mapHandler.MarkerClick;
+                
+                if (_cameraMoveHandler != null)
+                    _googleMap.CameraMove -= _cameraMoveHandler;
+                
+                if (_poiClickHandler != null)
+                    _googleMap.PoiClick -= _poiClickHandler;
+                
+                _googleMap = null;
+            }
+            
+            _cameraMoveHandler = null;
+            _poiClickHandler = null;
+        }
+
         public void OnPoiClick(PointOfInterest poi)
         {
-            if (mapHandler.VirtualView is CustomMap customMap)
+            if (_mapHandler.VirtualView is CustomMap customMap)
             {
                 var loc = new Location(poi.LatLng.Latitude, poi.LatLng.Longitude);
                 customMap.InvokePoiClicked(loc, poi.Name, poi.PlaceId);
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Cleanup();
+            }
+            base.Dispose(disposing);
         }
     }
 }
