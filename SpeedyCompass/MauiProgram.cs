@@ -38,10 +38,14 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<MsalAuthService>();
             builder.Services.AddSingleton<RideStateService>();
             builder.Services.AddSingleton<SignalRService>();
+            builder.Services.AddSingleton<DeviceCapabilityService>();
+            builder.Services.AddSingleton<RideSimulatorService>();
 
+            builder.Services.AddSingleton<MapCameraEngine>();
             builder.Services.AddSingleton<IVoiceCopilotEngine, VoiceCopilotEngine>();
             builder.Services.AddSingleton<IRoutingEngine, RoutingEngine>();
             builder.Services.AddSingleton<ITelemetryEngine, TelemetryEngine>();
+            builder.Services.AddSingleton<IPlaceDiscoveryService, PlaceDiscoveryService>();
             builder.Services.AddSingleton<RouteDeviationEngine>();
 
             // --- NEW: Register HttpClientFactory and your Page ---

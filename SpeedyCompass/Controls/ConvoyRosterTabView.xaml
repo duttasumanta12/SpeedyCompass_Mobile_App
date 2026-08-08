@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:local="clr-namespace:SpeedyCompass"
+             xmlns:models="clr-namespace:SpeedyCompass.Models"
+             x:Class="SpeedyCompass.Controls.ConvoyRosterTabView">
+
+    <VerticalStackLayout Spacing="15">
+        <!-- Status & PIN -->
+        <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="8" Margin="0,0,0,5">
+            <BoxView x:Name="StatusDot" WidthRequest="10" HeightRequest="10" CornerRadius="5" BackgroundColor="Orange" VerticalOptions="Center"/>
+            <Label x:Name="StatusLabel" Text="Connecting..." VerticalOptions="Center" FontSize="13" FontAttributes="Bold" TextColor="Gray"/>
+        </StackLayout>
+
+        <Border x:Name="AdminPinCard" IsVisible="False" StrokeThickness="0" Margin="0,0,0,10">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                    <GradientStop Color="#0066CC" Offset="0.0" />
+                    <GradientStop Color="#003399" Offset="1.0" />
+                </LinearGradientBrush>
+            </Border.Background>
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="16" />
+            </Border.StrokeShape>
+            <Grid ColumnDefinitions="*, Auto" Padding="20">
+                <StackLayout Grid.Column="0" VerticalOptions="Center" Spacing="0">
+                    <Label Text="CONVOY PIN" FontSize="11" FontAttributes="Bold" TextColor="#AADDFF" CharacterSpacing="1"/>
+                    <!-- THE FIX: Explicit Name instead of {Binding} -->
+                    <Label x:Name="ConvoyPinLabel" Text="------" FontSize="32" FontAttributes="Bold" TextColor="White" CharacterSpacing="4"/>
+                    <Label Text="Share this with riders to join" FontSize="12" TextColor="#AADDFF" Margin="0,2,0,0"/>
+                </StackLayout>
+                <Button Grid.Column="1" Text="📋 Copy" BackgroundColor="#33FFFFFF" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="45" Padding="15,0" Clicked="OnCopyPinClicked" VerticalOptions="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- UNIFIED RIDERS & TELEMETRY LIST -->
+        <Label Text="LIVE CONVOY SPREAD" FontSize="12" FontAttributes="Bold" TextColor="Gray" CharacterSpacing="1"/>
+        <CollectionView x:Name="RidersCollectionView" SelectionMode="None" MaximumHeightRequest="300">
+            <CollectionView.ItemTemplate>
+                <DataTemplate x:DataType="models:Rider">
+                    <Border StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" Margin="0,0,0,10">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="14"/>
+                        </Border.StrokeShape>
+                        <Border.GestureRecognizers>
+                            <!-- The CommandParameter passes the tapped Rider back to code-behind! -->
+                            <TapGestureRecognizer Tapped="OnRiderTapped" CommandParameter="{Binding .}" />
+                        </Border.GestureRecognizers>
+                        <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="15" Padding="15">
+                            <Ellipse Grid.Column="0" WidthRequest="12" HeightRequest="12" VerticalOptions="Center" StrokeThickness="0">
+                                <Ellipse.Triggers>
+                                    <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="True">
+                                        <Setter Property="Fill" Value="MediumSeaGreen" />
+                                    </DataTrigger>
+                                    <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="False">
+                                        <Setter Property="Fill" Value="Red" />
+                                    </DataTrigger>
+                                </Ellipse.Triggers>
+                            </Ellipse>
+                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                                <Label Text="{Binding Name}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#222, Dark=White}"/>
+
+                                <StackLayout Orientation="Horizontal" Spacing="8">
+                                    <Label Text="{Binding SpeedStr}" FontSize="12" TextColor="DodgerBlue" FontAttributes="Bold"/>
+                                    <Label Text="{Binding StatusStr}" FontSize="12" TextColor="{Binding StatusColor}" FontAttributes="Bold"/>
+                                </StackLayout>
+                            </VerticalStackLayout>
+                            <Border Grid.Column="2" BackgroundColor="{Binding RoleColor}" StrokeThickness="0" Padding="10,5" VerticalOptions="Center">
+                                <Border.StrokeShape>
+                                    <RoundRectangle CornerRadius="8"/>
+                                </Border.StrokeShape>
+                                <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="11" FontAttributes="Bold" CharacterSpacing="1"/>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </CollectionView.ItemTemplate>
+        </CollectionView>
+    </VerticalStackLayout>
+</ContentView>

@@ -289,17 +289,9 @@ namespace SpeedyCompass.Platforms.Android
         {
             if (Map == null) return;
 
-            int screenHeight = Context.Resources.DisplayMetrics.HeightPixels;
-            float density = Context.Resources.DisplayMetrics.Density;
-
-            // Pad the top by 40% of the screen height (pushes the center down)
-            int topPadding = (int)(screenHeight * 0.40);
-
-            // Pad the bottom by 180dp (protects the pin from hiding behind the Action Drawer)
-            int bottomPadding = (int)(180 * density);
-
-            // Apply the padding to the native Android map engine
-            Map.SetPadding(0, topPadding, 0, bottomPadding);
+            // 1. THE FIX: REMOVE Map.SetPadding!
+            // MAUI's Margin="0,0,0,160" already perfectly sizes the map box.
+            // Piling Native padding on top of it squished the camera viewport to zero!
 
             bool autoTilt = Preferences.Default.Get("Map_AutoTilt", true);
             bool autoZoom = Preferences.Default.Get("Map_AutoZoom", true);
@@ -312,26 +304,18 @@ namespace SpeedyCompass.Platforms.Android
                 double.TryParse(speedStr, out speedKmh);
             }
 
-            // THE FIX: Respect Manual Zoom!
-            // Grab exactly where the camera is right now so we don't cause jitter.
+            // Grab exactly where the camera is right now to prevent jitter
             float targetZoom = Map.CameraPosition.Zoom;
 
             // Only override the zoom if they explicitly enabled Auto-Zoom in settings
             if (autoZoom)
             {
-                if (speedKmh > 100) targetZoom = 15f;       // Highway (Zoomed out to see far ahead)
+                if (speedKmh > 100) targetZoom = 15f;       // Highway
                 else if (speedKmh > 60) targetZoom = 16.5f;   // Arterial/City
-                else targetZoom = 18f;                      // Slow/Turning (Zoomed in tight)
+                else targetZoom = 18f;                      // Slow/Turning
             }
 
-            // Dynamic Auto-Tilt
-            float targetTilt = 0f;
-            if (autoTilt && speedKmh > 10)
-            {
-                targetTilt = 60f; // 3D Horizon view when moving
-            }
-
-            // Default to North (0), or respect HeadingUp if toggled
+            float targetTilt = (autoTilt && speedKmh > 10) ? 60f : 0f;
             float targetBearing = headingUp ? (float)pin.Heading : 0f;
 
             var cameraPosition = new CameraPosition.Builder()
@@ -366,6 +350,20 @@ namespace SpeedyCompass.Platforms.Android
                 pin.ScreenY = screenPoint.Y / density;
             }
         }
+        public void UpdateMapTheme(bool isNightMode)
+        {
+            if (Map == null) return;
+
+            if (isNightMode)
+            {
+                string darkJson = @"[{""elementType"":""geometry"",""stylers"":[{""color"":""#242f3e""}]},{""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#746855""}]},{""elementType"":""labels.text.stroke"",""stylers"":[{""color"":""#242f3e""}]},{""featureType"":""administrative.locality"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#d59563""}]},{""featureType"":""poi"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#d59563""}]},{""featureType"":""poi.park"",""elementType"":""geometry"",""stylers"":[{""color"":""#263c3f""}]},{""featureType"":""poi.park"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#6b9a76""}]},{""featureType"":""road"",""elementType"":""geometry"",""stylers"":[{""color"":""#38414e""}]},{""featureType"":""road"",""elementType"":""geometry.stroke"",""stylers"":[{""color"":""#212a37""}]},{""featureType"":""road"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#9ca5b3""}]},{""featureType"":""road.highway"",""elementType"":""geometry"",""stylers"":[{""color"":""#746855""}]},{""featureType"":""road.highway"",""elementType"":""geometry.stroke"",""stylers"":[{""color"":""#1f2835""}]},{""featureType"":""road.highway"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#f3d19c""}]},{""featureType"":""transit"",""elementType"":""geometry"",""stylers"":[{""color"":""#2f3948""}]},{""featureType"":""transit.station"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#d59563""}]},{""featureType"":""water"",""elementType"":""geometry"",""stylers"":[{""color"":""#17263c""}]},{""featureType"":""water"",""elementType"":""labels.text.fill"",""stylers"":[{""color"":""#515c6d""}]},{""featureType"":""water"",""elementType"":""labels.text.stroke"",""stylers"":[{""color"":""#17263c""}]}]";
+                Map.SetMapStyle(new MapStyleOptions(darkJson));
+            }
+            else
+            {
+                Map.SetMapStyle(null); // Restores Daytime colors
+            }
+        }
     }
 
     public class MapCallbackHandler : Java.Lang.Object, IOnMapReadyCallback
@@ -388,6 +386,10 @@ namespace SpeedyCompass.Platforms.Android
             
             _mapHandler.UpdateValue(nameof(CustomMap.CustomPins));
             googleMap.MarkerClick += _mapHandler.MarkerClick;
+
+            // Fallback to standard theme until the GPS gets a lock!
+            bool initialNightMode = Application.Current.RequestedTheme == AppTheme.Dark;
+            _mapHandler.UpdateMapTheme(initialNightMode);
 
             // CRITICAL: Use named methods instead of lambdas for proper cleanup
             _cameraMoveHandler = (s, e) => _mapHandler.ProjectPinsToScreen();
