@@ -342,7 +342,7 @@ public partial class LobbyPage : ContentPage
             _hwButtonService.PttReleased -= OnHardwarePttReleased;
         }
 
-        _isSimulating = false;
+        _simulatorService.StopSimulation();
         _locationTracker?.StopTracking();
 
 #if ANDROID
@@ -731,23 +731,39 @@ public partial class LobbyPage : ContentPage
     }
     private async Task GenerateMeetupPointAsync()
     {
-        if (_rideCache.CurrentRoutePoints == null || _rideCache.OtherRiderLocations.Count == 0) return;
-        MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Show("Checking Rider Positions..."));
+        if (_rideCache.CurrentRoutePoints == null || _rideCache.OtherRiderLocations.Count == 0 || _rideCache.ActiveDestination == null) return;
+
+        MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Show("Calculating Convergence..."));
+        _voiceEngine.Speak("Calculating a safe meetup point for the group. Please wait.");
 
         try
         {
-            // THE FIX: Pass the CurrentRouteIndex into the engine!
-            var meetupPoint = _routingEngine.CalculateDynamicMeetupPoint(
+            // Ask the RoutingEngine to run the hybrid Convergence math!
+            var meetupPoint = await _routingEngine.CalculateDynamicMeetupPointAsync(
                 _rideCache.CurrentRoutePoints,
+                _rideCache.CurrentRouteIndex,
                 _rideCache.OtherRiderLocations.Values.ToList(),
-                _rideCache.CurrentRouteIndex);
+                _rideCache.ActiveDestination);
 
+            // If the Engine returns null, everyone is safe. Clear the pin!
             if (meetupPoint == null)
-                await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0); // Clear it
+            {
+                await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0);
+            }
             else
+            {
                 await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, meetupPoint.Latitude, meetupPoint.Longitude);
+            }
         }
-        finally { MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Hide()); }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Meetup Error: {ex.Message}");
+            await DisplayAlert("Convergence Error", "Could not calculate a safe merge point.", "OK");
+        }
+        finally
+        {
+            MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Hide());
+        }
     }
     private void OnMeetupPointSet(double lat, double lng)
     {
@@ -953,7 +969,7 @@ public partial class LobbyPage : ContentPage
                     _poiManager.ClearTemporaryPois();
 
                     _locationTracker?.StopTracking();
-                    _isSimulating = false;
+                    _simulatorService.StopSimulation();
 
                     FitMapToBounds();
 #if ANDROID

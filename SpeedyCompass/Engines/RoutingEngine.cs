@@ -61,7 +61,7 @@ public interface IRoutingEngine
     List<Location> DecodeGooglePolyline(string encodedPoints);
     string EncodeLocationList(List<Location> points);
     Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps);
-    Location CalculateDynamicMeetupPoint(List<Location> currentRoute, List<Location> riderLocations, int currentRouteIndex);
+    Task<Location> CalculateDynamicMeetupPointAsync(List<Location> currentRoute, int currentRouteIndex, List<Location> riderLocations, Location destination);
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
 }
 
@@ -368,18 +368,22 @@ public class RoutingEngine : IRoutingEngine
             return result;
         }, cancellationToken);
     }
-    public Location CalculateDynamicMeetupPoint(List<Location> currentRoute, List<Location> riderLocations, int currentRouteIndex)
+    public async Task<Location> CalculateDynamicMeetupPointAsync(
+        List<Location> currentRoute,
+        int currentRouteIndex,
+        List<Location> riderLocations,
+        Location destination)
     {
-        if (currentRoute == null || currentRoute.Count == 0 || riderLocations.Count == 0) return null;
+        if (currentRoute == null || currentRoute.Count == 0 || riderLocations.Count == 0 || destination == null) return null;
 
-        bool isAnyoneLost = false;
+        var lostRiders = new List<Location>();
 
-        // 1. Is anyone actually off the blue line?
+        // 1. FAST FILTER: Identify who is actually lost. 
+        // (Optimization: We don't waste Google APIs on riders who are on the path)
         foreach (var loc in riderLocations)
         {
             bool isOnPath = false;
-            // Check every 5th coordinate to see if they are on the road (150m buffer)
-            for (int i = 0; i < currentRoute.Count; i += 5)
+            for (int i = Math.Max(0, currentRouteIndex - 5); i < currentRoute.Count; i += 3)
             {
                 if (Location.CalculateDistance(loc, currentRoute[i], DistanceUnits.Kilometers) < 0.15)
                 {
@@ -387,27 +391,59 @@ public class RoutingEngine : IRoutingEngine
                     break;
                 }
             }
-
-            if (!isOnPath) { isAnyoneLost = true; break; }
+            if (!isOnPath) lostRiders.Add(loc);
         }
 
-        // 2. If no one is lost, return null (meaning: clear the meetup pin)
-        if (!isAnyoneLost) return null;
+        // 2. AUTO-CLEAR: If everyone is on the path, clear the meetup point!
+        if (lostRiders.Count == 0) return null;
 
-        // 3. THE FIX: Anchor to current progress, not the start of the route!
-        // Start safely at 0 if the index is somehow invalid
-        int targetIndex = Math.Max(0, currentRouteIndex);
-        double accumulatedDist = 0;
+        int furthestConvergenceIndex = Math.Max(0, currentRouteIndex);
 
-        // Project 5km ahead of the Lead rider
-        while (targetIndex < currentRoute.Count - 1 && accumulatedDist < 5.0)
+        // 3. GOOGLE QUERY: Fetch routes for the stray riders simultaneously
+        var routeTasks = lostRiders.Select(loc => GetRouteDataAsync(loc, destination)).ToList();
+        var strayRoutes = await Task.WhenAll(routeTasks);
+
+        // 4. FORWARD MERGE: Find where their new routes merge onto our blue line
+        foreach (var strayRoute in strayRoutes)
         {
-            accumulatedDist += Location.CalculateDistance(currentRoute[targetIndex], currentRoute[targetIndex + 1], DistanceUnits.Kilometers);
-            targetIndex++;
+            if (strayRoute?.DecodedPoints == null || strayRoute.DecodedPoints.Count == 0) continue;
+
+            int mergeIndex = -1;
+
+            // Scan forward along the Lead's route to find the intersection
+            for (int i = Math.Max(0, currentRouteIndex); i < currentRoute.Count; i += 2)
+            {
+                var leadPt = currentRoute[i];
+
+                // Does the stray rider's route hit this coordinate?
+                bool doesMergeHere = strayRoute.DecodedPoints.Any(strayPt =>
+                    Location.CalculateDistance(leadPt, strayPt, DistanceUnits.Kilometers) < 0.15);
+
+                if (doesMergeHere)
+                {
+                    mergeIndex = i;
+                    break; // Found the earliest point they rejoin the main road!
+                }
+            }
+
+            // We must set the meetup point at the FURTHEST merge point to ensure ALL lost riders catch up
+            if (mergeIndex > furthestConvergenceIndex)
+            {
+                furthestConvergenceIndex = mergeIndex;
+            }
         }
 
-        // 4. THE SAFEGUARD: If we ran out of route before hitting 5km, just use the destination!
-        return currentRoute[targetIndex];
+        // 5. THE SAFETY BUFFER: Add ~5km ahead of the merge point!
+        double accumulatedDist = 0;
+        int finalTargetIndex = furthestConvergenceIndex;
+
+        while (finalTargetIndex < currentRoute.Count - 1 && accumulatedDist < 5.0)
+        {
+            accumulatedDist += Location.CalculateDistance(currentRoute[finalTargetIndex], currentRoute[finalTargetIndex + 1], DistanceUnits.Kilometers);
+            finalTargetIndex++;
+        }
+
+        return currentRoute[finalTargetIndex];
     }
 
     private void EncodeDifference(System.Text.StringBuilder str, int diff)
