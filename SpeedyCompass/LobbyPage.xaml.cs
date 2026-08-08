@@ -471,8 +471,8 @@ public partial class LobbyPage : ContentPage
             double speedKmh = e.SpeedMph * 1.60934;
             _ = _telemetryEngine.EvaluateEdgeTelemetryAsync(e.Location, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
 
-            _ = _telemetryEngine.EvaluateSpeedLimitAsync(e.Location, speedKmh, (limit, isSpeeding) =>
-            {
+            //_ = _telemetryEngine.EvaluateSpeedLimitAsync(e.Location, speedKmh, (limit, isSpeeding) =>
+            //{
                 //if (!_rideCache.RunningInBackground)
                 //{
                 //    MainThread.BeginInvokeOnMainThread(() =>
@@ -489,7 +489,7 @@ public partial class LobbyPage : ContentPage
                 //        SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
                 //    });
                 //}
-            });
+            //});
 
             _voiceEngine?.ProcessTurnByTurn(e.Location, _activeRouteSteps);
         }
@@ -582,9 +582,9 @@ public partial class LobbyPage : ContentPage
                 var deviationAnalysis = _deviationEngine.AnalyzeRouteDeviation(
                     currentLocation,
                     currentRouteSnapshot,
-                    _rideCache.CurrentRouteIndex,
-                    currentLocation?.Course ?? 0,  // Current heading
-                    currentSpeed,                   // Speed in km/h
+                    closestActualIndex,  // THE FIX 2: Pass closestActualIndex, not CurrentRouteIndex!
+                    currentLocation?.Course ?? 0,
+                    currentSpeed,
                     _rideCache.OffRouteStrikeCount);
 
                 // Update strike system based on analysis severity
@@ -607,6 +607,7 @@ public partial class LobbyPage : ContentPage
                     $"Distance={deviationAnalysis.DistanceToRouteMeters:F0}m, " +
                     $"Heading={deviationAnalysis.HeadingDifferenceDegreesFromRoute:F0}°, " +
                     $"Strikes={_rideCache.OffRouteStrikeCount}/{strikeThreshold}, " +
+                    $"Reason={deviationAnalysis.Reason:F0}, " +
                     $"Reroute={shouldReroute}");
 
 
@@ -759,10 +760,12 @@ public partial class LobbyPage : ContentPage
                 AppLogger.Info("Routing", "Deviation Engine triggered recalculation.");
                 _rideCache.LastRerouteTime = DateTime.Now;
 
+
                 _ = Task.Run(async () =>
                 {
                     try
                     {
+                        _voiceEngine.Speak("Rerouting...");
                         // Ensure we pass the meetup point if it exists during a reroute
                         Location meetupLoc = _rideCache.ActiveMeetupPoint;
 
@@ -876,6 +879,12 @@ public partial class LobbyPage : ContentPage
                 {
                     if (isMainRoute)
                     {
+                        // =====================================================================
+                        // THE FIX 1: Reset the route trackers for the new blue line!
+                        // =====================================================================
+                        _rideCache.CurrentRouteIndex = 0;
+                        _rideCache.OffRouteStrikeCount = 0;
+
                         if (PreNavDistLabel != null)
                         {
                             PreNavDistLabel.Text = $"{distKm} km, ETA {etaText}";
@@ -917,15 +926,15 @@ public partial class LobbyPage : ContentPage
                     else
                     {
                         // Draw a secondary spiderweb route
-                        var otherLine = new Polyline
-                        {
-                            StrokeColor = routeColor ?? Colors.MediumPurple,
-                            StrokeWidth = 15f
-                        };
-                        foreach (var coord in decodedPoints) otherLine.Geopath.Add(coord);
+                        //var otherLine = new Polyline
+                        //{
+                        //    StrokeColor = routeColor ?? Colors.MediumPurple,
+                        //    StrokeWidth = 15f
+                        //};
+                        //foreach (var coord in decodedPoints) otherLine.Geopath.Add(coord);
 
-                        LiveMap.MapElements.Add(otherLine);
-                        _otherRiderRoutes.Add(otherLine);
+                        //LiveMap.MapElements.Add(otherLine);
+                        //_otherRiderRoutes.Add(otherLine);
                     }
                 });
 
@@ -938,19 +947,57 @@ public partial class LobbyPage : ContentPage
     // --- NEW VOICE NAV VARIABLES ---
     private List<RouteStep> _activeRouteSteps = new();
 
-    private void OnLeadRouteUpdated(string encodedPolyline)
+    private async void OnLeadRouteUpdated(string encodedPolyline)
     {
-        _rideCache.CurrentRoutePoints = _routingEngine.DecodeGooglePolyline(encodedPolyline);
+        MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("Lead rider has updated the route. Syncing map."));
+
+        // 1. Decode the Lead's new path
+        var leadRoutePoints = _routingEngine.DecodeGooglePolyline(encodedPolyline);
+        if (leadRoutePoints == null || leadRoutePoints.Count == 0) return;
+
+        var currentLoc = _rideCache.LastOdometerLocation ?? _lastKnownLocation;
+
+        if (currentLoc != null)
+        {
+            double distToLeadStart = Location.CalculateDistance(currentLoc, leadRoutePoints.First(), DistanceUnits.Kilometers);
+
+            // 2. THE FIX: If we are more than 100 meters behind the new route, we must stitch a catch-up line!
+            if (distToLeadStart > 0.1)
+            {
+                AppLogger.Info("Routing", $"Rider is {Math.Round(distToLeadStart * 1000)}m behind Lead's new route. Stitching gap...");
+
+                try
+                {
+                    // Silently ask Google how to drive from our current spot to the start of the Lead's new route
+                    var catchUpResult = await _routingEngine.GetRouteDataAsync(currentLoc, leadRoutePoints.First());
+
+                    if (catchUpResult != null && catchUpResult.DecodedPoints.Count > 0)
+                    {
+                        // Stitch the catch-up segment to the front of the Lead's route!
+                        leadRoutePoints.InsertRange(0, catchUpResult.DecodedPoints);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("Routing", ex, "Failed to stitch catch-up route.");
+                }
+            }
+        }
+
+        // 3. Update the cache and reset the strike counters so the Deviation Engine stays calm
+        _rideCache.CurrentRoutePoints = leadRoutePoints;
+        _rideCache.CurrentRouteIndex = 0;
+        _rideCache.OffRouteStrikeCount = 0; // Forgive any strikes that happened during the gap!
+
+        // 4. Safely redraw the new, continuous stitched line
         MainThread.BeginInvokeOnMainThread(() =>
         {
             var oldLines = LiveMap.MapElements.OfType<Polyline>().ToList();
             foreach (var line in oldLines) LiveMap.MapElements.Remove(line);
 
-            _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 8 };
+            _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 22f };
             foreach (var coord in _rideCache.CurrentRoutePoints) _activeRouteLine.Geopath.Add(coord);
             LiveMap.MapElements.Add(_activeRouteLine);
-
-            _voiceEngine.Speak("Map synced with Lead rider.");
         });
     }
 
@@ -2382,6 +2429,19 @@ public partial class LobbyPage : ContentPage
                         int lagLimit = groupDetails?.Settings?.MaxLagDistanceMeters ?? 1000;
                         gapColor = distToThemMeters > lagLimit ? Colors.Red : Colors.Orange;
                     }
+                    // =======================================================
+                    // THE FIX: REROUTE "GHOST RIDER" CATCHER
+                    // If the new route just started (our index is near 0), 
+                    // and they snapped to the beginning of it, but are > 100m away, 
+                    // they are absolutely trailing behind on the old road!
+                    // =======================================================
+                    else if (theirIndex <= 5 && _rideCache.CurrentRouteIndex <= 5 && distToThemMeters > 100)
+                    {
+                        gapStatus = $"{distDisplay} Behind";
+
+                        int lagLimit = groupDetails?.Settings?.MaxLagDistanceMeters ?? 1000;
+                        gapColor = distToThemMeters > lagLimit ? Colors.Red : Colors.Orange;
+                    }
                     else
                     {
                         gapStatus = $"{distDisplay} Away";
@@ -2531,11 +2591,10 @@ public partial class LobbyPage : ContentPage
             GlobalLoadingOverlay.Hide();
         }
     }
-    private async Task SimulateMovementAlongRouteAsync()
+    private async Task SimulateMovementAlongRouteAsync(bool triggerDeviationTest = true)
     {
         if (_rideCache.CurrentRoutePoints == null || _rideCache.CurrentRoutePoints.Count == 0) return;
 
-        // FIX: Prevent multiple overlapping simulations if they stop/start the route
         if (_isSimulating) return;
 
         await Task.Delay(2000);
@@ -2543,22 +2602,25 @@ public partial class LobbyPage : ContentPage
 
         if (_locationTracker != null) _locationTracker.IsSimulating = true;
 
-        // Freeze a copy of the route! 
         var simulationPath = _rideCache.CurrentRoutePoints.ToList();
         int currentIndex = 0;
 
-        AppLogger.Info("Simulator", "Starting route simulation...");
+        int deviationIndex = triggerDeviationTest ? Math.Max(5, simulationPath.Count / 5) : -1;
+        bool isCurrentlyDeviating = false;
+        double currentSimHeading = 0;
+        Location currentSimLoc = simulationPath[0];
+
+        AppLogger.Info("Simulator", $"Starting route simulation. Deviation Test: {triggerDeviationTest}");
 
         while (currentIndex < simulationPath.Count)
         {
-            // THE FIX 4: Check the cancellation token (_rideCts) to kill zombie threads instantly!
             if (groupDetails.CurrentState != GroupState.Navigating || !_isSimulating || (_rideCts != null && _rideCts.IsCancellationRequested))
             {
                 _isSimulating = false;
                 break;
             }
 
-            double speedKmh = 60;
+            double speedKmh = 4;
 
             if (speedKmh == 0)
             {
@@ -2566,11 +2628,46 @@ public partial class LobbyPage : ContentPage
                 continue;
             }
 
-            var point = simulationPath[currentIndex];
+            // =====================================================================
+            // 1. THE DRIFT DEVIATION GENERATOR (Drives off-route into a field)
+            // =====================================================================
+            if (currentIndex == deviationIndex && !isCurrentlyDeviating)
+            {
+                AppLogger.Info("Simulator", "⚠️ INITIATING DEVIATION TEST. Driving off-route!");
+                isCurrentlyDeviating = true;
 
-            double fakeHeading = _lastKnownLocation != null
-                ? CalculateBearing(_lastKnownLocation, point)
-                : 0;
+                if (currentIndex < simulationPath.Count - 1)
+                    currentSimHeading = (CalculateBearing(simulationPath[currentIndex], simulationPath[currentIndex + 1]) + 90) % 360;
+                else
+                    currentSimHeading = 90;
+            }
+
+            if (isCurrentlyDeviating)
+            {
+                // Drive 25 meters per tick perpendicular to the road
+                double distMeters = 25.0;
+                double latOffset = (distMeters * Math.Cos(currentSimHeading * Math.PI / 180.0)) / 111111.0;
+                double lngOffset = (distMeters * Math.Sin(currentSimHeading * Math.PI / 180.0)) / (111111.0 * Math.Cos(currentSimLoc.Latitude * Math.PI / 180.0));
+
+                currentSimLoc = new Location(currentSimLoc.Latitude + latOffset, currentSimLoc.Longitude + lngOffset);
+            }
+            else
+            {
+                currentSimLoc = simulationPath[currentIndex];
+                if (currentIndex < simulationPath.Count - 1)
+                {
+                    currentSimHeading = CalculateBearing(simulationPath[currentIndex], simulationPath[currentIndex + 1]);
+                }
+                currentIndex++;
+            }
+
+            var point = new Location(currentSimLoc.Latitude, currentSimLoc.Longitude)
+            {
+                Course = currentSimHeading,
+                Speed = speedKmh / 3.6, // Location objects expect meters per second!
+                Accuracy = 5,
+                Timestamp = DateTimeOffset.UtcNow
+            };
 
             int delayMs = 2000;
             if (_lastKnownLocation != null)
@@ -2590,64 +2687,49 @@ public partial class LobbyPage : ContentPage
                 {
                     if (_myPinVm != null)
                     {
-                        // THE FIX 3: Unleash the smooth animation!
-                        AnimatePinMovement(_myPinVm, point, fakeHeading, (uint)delayMs);
-                        string newSpeedStr = $"{Math.Round(speedKmh)} km/h";
-                        _myPinVm.Speed = newSpeedStr;
-
-                        // THE FIX: Push the simulated speed directly to the Drawer UI!
-                        //if (MySpeedLabel != null) MySpeedLabel.Text = newSpeedStr;
-
-                        // THE FIX 2: Make the camera follow the simulator too!
-                        //if (_myPinVm.IsAutoCentering)
-                        //{
-                        //    double radiusKm = speedKmh > 80 ? 1.5 : (speedKmh > 40 ? 1.0 : 0.5);
-                        //    var newRegion = MapSpan.FromCenterAndRadius(point, Distance.FromKilometers(radiusKm));
-                        //    LiveMap.MoveToRegion(newRegion); // Smoothly glide the map!
-                        //}
+                        AnimatePinMovement(_myPinVm, point, currentSimHeading, (uint)delayMs);
+                        _myPinVm.Speed = $"{Math.Round(speedKmh)} km/h";
                     }
                 });
             }
 
             _lastKnownLocation = point;
 
-            // --- THE FIX 1: Use the NEW Gatekeeper we just built! ---
             if (ShouldBroadcastToNetwork(point, speedKmh))
             {
                 _lastNetworkBroadcastTime = DateTime.UtcNow;
                 _lastNetworkBroadcastLocation = point;
 
-                await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, fakeHeading);
-                AppLogger.Info("Simulator", $"Broadcasted at {Math.Round(speedKmh)} km/h");
+                await _signalRService.UpdateLocation(GroupNameLabel.Text, _myName, point.Latitude, point.Longitude, currentSimHeading);
             }
 
+            // This evaluates your RouteDeviationEngine and triggers rerouting if lost
             await TrimRouteVisuals(point);
 
+            // =====================================================================
+            // 2. THE REROUTE CATCHER & SNAPPER
+            // =====================================================================
+            // Once the engine triggers a reroute, Google sends back a new polyline 
+            // and resets OffRouteStrikeCount to 0. We catch it here and snap back on!
+            if (isCurrentlyDeviating && _rideCache.OffRouteStrikeCount == 0 && _rideCache.CurrentRoutePoints.Count > 0)
+            {
+                double distToNewRoute = Location.CalculateDistance(point, _rideCache.CurrentRoutePoints[0], DistanceUnits.Kilometers);
+
+                if (distToNewRoute < 0.3) // Within 300 meters of the new route start
+                {
+                    AppLogger.Info("Simulator", "✅ REROUTE CAUGHT! Snapping simulator to new route.");
+
+                    simulationPath = _rideCache.CurrentRoutePoints.ToList();
+                    currentIndex = 0;
+                    isCurrentlyDeviating = false;
+                    deviationIndex = -1;
+                }
+            }
+
             await _telemetryEngine.EvaluateEdgeTelemetryAsync(point, speedKmh, _myName, groupDetails.GroupName, _amIAdmin);
-
-            // Fire the Speed Limit Engine
-            //_ = _telemetryEngine.EvaluateSpeedLimitAsync(point, speedKmh, (limit, isSpeeding) =>
-            //{
-            //    if (_rideCache.RunningInBackground) return;
-            //    MainThread.BeginInvokeOnMainThread(() =>
-            //    {
-            //        if (limit == 0)
-            //        {
-            //            SpeedLimitBadge.IsVisible = false;
-            //            return;
-            //        }
-
-            //        SpeedLimitBadge.IsVisible = true;
-            //        SpeedLimitLabel.Text = limit.ToString();
-            //        MySpeedLabel.TextColor = isSpeeding ? Colors.Red : Colors.DodgerBlue;
-            //        SpeedLimitBadge.Stroke = isSpeeding ? Colors.Red : Colors.Gray;
-            //    });
-            //});
-
             _voiceEngine?.ProcessTurnByTurn(point, _activeRouteSteps);
 
             await Task.Delay(delayMs);
-            currentIndex++;
         }
 
         _isSimulating = false;

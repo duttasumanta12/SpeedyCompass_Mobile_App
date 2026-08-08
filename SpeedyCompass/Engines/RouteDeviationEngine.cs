@@ -140,21 +140,24 @@ namespace SpeedyCompass.Engines
             // ============================================================
             // FACTOR 4: ROAD GEOMETRY ANALYSIS
             // ============================================================
-            var (onAlternateRoad, alternateRoadConfidence) = CheckAlternateRoadPossibility(
-                currentLocation,
-                routePoints,
-                closestIndex,
-                currentHeading);
-
-            if (onAlternateRoad && alternateRoadConfidence > 0.7)
+            if (distanceToRouteMeters > speedBasedThreshold * 0.5)
             {
-                // They might be on a valid parallel route (e.g., service road)
-                analysis.Severity = DeviationSeverity.Minor;
-                analysis.Reason = "On possible alternate road (same direction)";
-                analysis.ConfidenceScore = alternateRoadConfidence;
-                analysis.UserMessage = "On alternate route";
-                analysis.AlertColor = Colors.Orange;
-                return analysis;
+                var (onAlternateRoad, alternateRoadConfidence) = CheckAlternateRoadPossibility(
+                    currentLocation,
+                    routePoints,
+                    closestIndex,
+                    currentHeading);
+
+                if (onAlternateRoad && alternateRoadConfidence > 0.7)
+                {
+                    // They might be on a valid parallel route (e.g., service road)
+                    analysis.Severity = DeviationSeverity.Minor;
+                    analysis.Reason = $"On possible alternate road ({distanceToRouteMeters:F0}m away, same direction)";
+                    analysis.ConfidenceScore = alternateRoadConfidence;
+                    analysis.UserMessage = "On alternate route";
+                    analysis.AlertColor = Colors.Orange;
+                    return analysis;
+                }
             }
 
             // ============================================================
@@ -341,7 +344,7 @@ namespace SpeedyCompass.Engines
             {
                 DeviationSeverity.Severe => 1,      // Immediate reroute
                 DeviationSeverity.Moderate => 2,    // Quick reroute (1-2 bad pings)
-                DeviationSeverity.Minor => 4,       // Lenient reroute (multiple drifts)
+                DeviationSeverity.Minor => 10,       // Lenient reroute (multiple drifts)
                 _ => 999                             // Never reroute if on-route
             };
         }
