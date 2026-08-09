@@ -77,7 +77,8 @@
                                DeleteClicked="OnDeleteGroupClicked" />
         </Grid>
 
-        <controls:CreateGroupOverlay x:Name="CreateGroupOverlay" GroupCreated="OnGroupCreated" />
+        <!-- THE FIX: The unified settings component handles group creation now! -->
+        <controls:ConvoySettingsOverlay x:Name="ConvoySettingsOverlay" SettingsSubmitted="OnSettingsSubmitted" />
         <controls:JoinGroupOverlay x:Name="JoinGroupOverlay" JoinConfirmed="OnJoinConfirmed" />
 
         <!-- ========================================== -->

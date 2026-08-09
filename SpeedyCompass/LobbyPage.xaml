@@ -224,8 +224,8 @@
                                           OpenSettingsRequested="OnOpenSettingsClicked" 
                                           RetryRequested="OnRetryLocationClicked" />
 
-            <controls:AdminSettingsOverlay x:Name="AdminSettingsOverlay" 
-                                       SettingsSaved="OnAdminSettingsSaved" />
+            <controls:ConvoySettingsOverlay x:Name="ConvoySettingsOverlay" 
+                                SettingsSubmitted="OnSettingsSubmitted" />
 
             <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" Grid.RowSpan="100" 
                              Grid.ColumnSpan="100" 

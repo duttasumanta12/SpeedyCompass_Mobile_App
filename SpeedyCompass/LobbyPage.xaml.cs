@@ -1702,32 +1702,46 @@ public partial class LobbyPage : ContentPage
 
         ToggleNavigationPerspective(true);
     }
-    private async void OnAdminSettingsClicked(object sender, EventArgs e)
+    private void OnAdminSettingsClicked(object sender, EventArgs e)
     {
-        AdminSettingsOverlay.Show();
+        if (groupDetails?.Settings != null)
+        {
+            var s = groupDetails.Settings;
+
+            // THE FIX: Launch the Unified Component in Edit Mode, passing the current server values!
+            // Note: Pitstop slider expects km, but the server stores meters, so we divide by 1000.
+            ConvoySettingsOverlay.ShowForEdit(
+                size: s.MaxGroupSize,
+                lag: s.MaxLagDistanceMeters,
+                splinter: s.SplinterWarningDistanceMeters,
+                pitstop: s.PitstopDistanceMeters / 1000,
+                dynamicRouting: s.EnableDynamicRouting,
+                minUpdate: s.MinUpdateDistanceMeters,
+                maxUpdate: s.MaxUpdateDistanceMeters);
+        }
     }
-    // --- NEW: Slider Value Handlers ---
-    
 
-    private void OnCloseSettingsClicked(object sender, EventArgs e) => AdminSettingsOverlay.IsVisible = false;
-    
-    private async void OnAdminSettingsSaved(object sender, SettingsSavedEventArgs e)
+    private async void OnSettingsSubmitted(object sender, ConvoySettingsSubmittedEventArgs e)
     {
-        AppLogger.Info("Settings", $"Saving lag: {e.MaxLagDistance}m, Splinter: {e.SplinterWarning}m");
+        // THE FIX: LobbyPage ONLY handles Edit mode. (MainPage handles Creation)
+        if (e.IsCreationMode) return;
 
+        AppLogger.Info("Settings", $"Saving lag: {e.MaxLagDistanceMeters}m, Splinter: {e.SplinterWarningDistanceMeters}m");
+
+        // Send the updated packet to the server
         await _signalRService.UpdateGroupSettings(GroupNameLabel.Text, new GroupSettingsDto
         {
-            MaxLagDistanceMeters = (int)e.MaxLagDistance,
-            SplinterWarningDistanceMeters = (int)e.SplinterWarning,
+            MaxLagDistanceMeters = e.MaxLagDistanceMeters,
+            SplinterWarningDistanceMeters = e.SplinterWarningDistanceMeters,
             MaxGroupSize = e.MaxGroupSize,
-            PitstopDistanceMeters = (int)e.PitstopReminder * 1000,
-            MinUpdateDistanceMeters = (int)e.MinBroadcastDistance,
-            MaxUpdateDistanceMeters = (int)e.MaxBroadcastDistance,
+            PitstopDistanceMeters = e.PitstopDistanceMeters * 1000, // convert slider km back to meters!
+            MinUpdateDistanceMeters = e.MinBroadcastDistanceMeters,
+            MaxUpdateDistanceMeters = e.MaxBroadcastDistanceMeters,
             ArrivalGeofenceMeters = 1000,
-            EnableDynamicRouting = e.DynamicRoutingEnabled,
+            EnableDynamicRouting = e.EnableDynamicRouting,
             LeadRiderGoogleId = CurrentGoogleId
         });
-        AdminSettingsOverlay.IsVisible = false;
+
         Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
     }
     private void OnPttLocked(string speakerName)

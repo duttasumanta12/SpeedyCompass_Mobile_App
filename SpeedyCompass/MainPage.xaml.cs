@@ -344,21 +344,28 @@ public partial class MainPage : ContentPage
     // ==========================================
     private void OnOpenCreateGroupModalClicked(object sender, EventArgs e)
     {
-        CreateGroupOverlay.Show();
+        ConvoySettingsOverlay.ShowForCreate();
     }
 
-    private async void OnGroupCreated(object sender, GroupCreatedEventArgs e)
+    private async void OnSettingsSubmitted(object sender, ConvoySettingsSubmittedEventArgs e)
     {
+        // Safety check: MainPage only handles creation, not editing!
+        if (!e.IsCreationMode) return;
+
         GlobalLoadingOverlay.Show("Generating Convoy PIN...");
 
         string generatedPin = new Random().Next(100000, 999999).ToString();
 
+        // THE FIX: Pass all the advanced settings directly to the backend!
         var initialSettings = new GroupSettingsDto
         {
             MaxGroupSize = e.MaxGroupSize,
             MaxLagDistanceMeters = e.MaxLagDistanceMeters,
             SplinterWarningDistanceMeters = e.SplinterWarningDistanceMeters,
-            PitstopDistanceMeters = 0
+            PitstopDistanceMeters = e.PitstopDistanceMeters,
+            EnableDynamicRouting = e.EnableDynamicRouting,
+            MinUpdateDistanceMeters = e.MinBroadcastDistanceMeters,
+            MaxUpdateDistanceMeters = e.MaxBroadcastDistanceMeters
         };
 
         try
@@ -368,6 +375,8 @@ public partial class MainPage : ContentPage
             var groupDetails = await _signalRService.GetGroupDetails(e.GroupName);
 
             await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
+
+            GlobalLoadingOverlay.Show("Joining Convoy...");
 
             await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
