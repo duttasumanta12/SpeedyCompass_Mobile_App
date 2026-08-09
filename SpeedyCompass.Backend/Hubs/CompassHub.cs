@@ -180,7 +180,8 @@ public class CompassHub : Hub
                 MaxGroupSize = initialSettings.MaxGroupSize,
                 MaxLagDistanceMeters = initialSettings.MaxLagDistanceMeters,
                 SplinterWarningDistanceMeters = initialSettings.SplinterWarningDistanceMeters,
-                PitstopDistanceMeters = initialSettings.PitstopDistanceMeters
+                PitstopDistanceMeters = initialSettings.PitstopDistanceMeters,
+                EnableDynamicRouting = initialSettings.EnableDynamicRouting
             },
             CurrentState = GroupState.NotNavigating
         };
