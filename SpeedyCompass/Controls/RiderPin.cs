@@ -36,20 +36,7 @@ public class RiderPin : System.ComponentModel.INotifyPropertyChanged
     public double Heading
     {
         get => _heading;
-        set
-        {
-            // 1. Calculate the shortest angular difference (handling the 359 to 1 degree wrap-around)
-            double diff = Math.Abs(_heading - value);
-            if (diff > 180.0) diff = 360.0 - diff;
-
-            // 2. Only update if the turn is > 3 degrees, OR if it's the very first location fix
-            if (diff > 3.0 || _isFirstHeading)
-            {
-                _heading = value;
-                OnPropertyChanged(); // This now ONLY fires when it actually matters
-                _isFirstHeading = false;
-            }
-        }
+        set { _heading = value; OnPropertyChanged(); }
     }
     private bool _isAutoCentering = true;
     public bool IsAutoCentering

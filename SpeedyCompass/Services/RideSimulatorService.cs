@@ -44,6 +44,10 @@ public class RideSimulatorService
 
         int deviationIndex = triggerDeviationTest ? Math.Max(5, simulationPath.Count / 5) : -1;
         bool isCurrentlyDeviating = false;
+
+        // THE FIX: The Tripwire!
+        bool hasTriggeredStrikes = false;
+
         double currentSimHeading = 0;
         Location currentSimLoc = simulationPath[0];
 
@@ -57,7 +61,7 @@ public class RideSimulatorService
                 break;
             }
 
-            double speedKmh = 60; // Hardcoded default for testing
+            double speedKmh = 60;
 
             if (speedKmh == 0)
             {
@@ -65,34 +69,33 @@ public class RideSimulatorService
                 continue;
             }
 
-            // --- 1. Deviation Generator ---
+            // 1. TRIGGER THE DEVIATION
             if (currentIndex == deviationIndex && !isCurrentlyDeviating)
             {
-                AppLogger.Info("Simulator", "⚠️ INITIATING DEVIATION TEST. Fetching detour route...");
+                AppLogger.Info("Simulator", "⚠️ INITIATING DEVIATION TEST. Forcing bike off-road...");
                 isCurrentlyDeviating = true;
+                hasTriggeredStrikes = false; // Reset the tripwire
 
                 if (currentIndex < simulationPath.Count - 1)
                     currentSimHeading = CalculateBearing(simulationPath[currentIndex], simulationPath[currentIndex + 1]);
 
-                double detourHeading = (currentSimHeading + 90) % 360;
-                double distMeters = 2000.0;
-                double latOffset = (distMeters * Math.Cos(detourHeading * Math.PI / 180.0)) / 111111.0;
-                double lngOffset = (distMeters * Math.Sin(detourHeading * Math.PI / 180.0)) / (111111.0 * Math.Cos(simulationPath[currentIndex].Latitude * Math.PI / 180.0));
+                double detourHeading = (currentSimHeading + 45) % 360;
+                var fakePath = new List<Location>();
+                var devLoc = currentSimLoc;
 
-                var fakeDetourDestination = new Location(simulationPath[currentIndex].Latitude + latOffset, simulationPath[currentIndex].Longitude + lngOffset);
-
-                try
+                // THE FIX: Give it 100 points so it doesn't run out before Google Maps responds!
+                for (int i = 0; i < 100; i++)
                 {
-                    var detourResult = await _routingEngine.GetRouteDataAsync(simulationPath[currentIndex], fakeDetourDestination);
+                    double distMeters = 30.0;
+                    double latOffset = (distMeters * Math.Cos(detourHeading * Math.PI / 180.0)) / 111111.0;
+                    double lngOffset = (distMeters * Math.Sin(detourHeading * Math.PI / 180.0)) / (111111.0 * Math.Cos(devLoc.Latitude * Math.PI / 180.0));
 
-                    if (detourResult != null && detourResult.DecodedPoints.Count > 0)
-                    {
-                        AppLogger.Info("Simulator", "✅ Real-road detour fetched! Swapping simulator tracks.");
-                        simulationPath = detourResult.DecodedPoints.ToList();
-                        currentIndex = 0;
-                    }
+                    devLoc = new Location(devLoc.Latitude + latOffset, devLoc.Longitude + lngOffset);
+                    fakePath.Add(devLoc);
                 }
-                catch (Exception ex) { AppLogger.Error("Simulator", ex, "Failed to fetch real-road detour."); }
+
+                simulationPath = fakePath;
+                currentIndex = 0;
             }
 
             currentSimLoc = simulationPath[currentIndex];
@@ -110,30 +113,42 @@ public class RideSimulatorService
                 Timestamp = DateTimeOffset.UtcNow
             };
 
-            int delayMs = 2000; // Simulated delay
+            int delayMs = 2000;
 
-            // Fire the location back to LobbyPage so it can run the exact same UI updates and network broadcasts as the real hardware!
             OnLocationGenerated?.Invoke(point, speedKmh, currentSimHeading);
 
-            // --- 2. Reroute Snapper ---
-            if (isCurrentlyDeviating && _rideCache.OffRouteStrikeCount == 0 && _rideCache.CurrentRoutePoints.Count > 0)
+            // =====================================================================
+            // 2. THE TRIPWIRE SNAPPER
+            // =====================================================================
+            if (isCurrentlyDeviating)
             {
-                double distToNewRoute = Location.CalculateDistance(point, _rideCache.CurrentRoutePoints[0], DistanceUnits.Kilometers);
-                if (distToNewRoute < 0.3)
+                // A. Wait for the Telemetry Engine to realize we are off-route!
+                if (_rideCache.OffRouteStrikeCount > 0)
                 {
-                    AppLogger.Info("Simulator", "✅ REROUTE CAUGHT! Snapping simulator to new route.");
+                    hasTriggeredStrikes = true;
+                }
+
+                // B. If we successfully triggered the alarms, AND the UI reset them to 0...
+                // It means LobbyPage successfully fetched and drew the new Spliced Detour!
+                if (hasTriggeredStrikes && _rideCache.OffRouteStrikeCount == 0)
+                {
+                    AppLogger.Info("Simulator", "✅ REROUTE CAUGHT! Snapping simulator to the Splice Seam.");
+
                     simulationPath = _rideCache.CurrentRoutePoints.ToList();
-                    currentIndex = 0;
+
+                    // Snap exactly to the seam!
+                    currentIndex = _rideCache.CurrentRouteIndex;
+
                     isCurrentlyDeviating = false;
-                    deviationIndex = -1;
+                    deviationIndex = -1; // Prevent doing it again
                 }
             }
 
             await Task.Delay(delayMs);
         }
 
-        _isSimulating = false;
-        locationTracker?.IsSimulating = false;
+        //_isSimulating = false;
+        //if (locationTracker != null) locationTracker.IsSimulating = false;
         OnSimulationEnded?.Invoke();
         AppLogger.Info("Simulator", "Simulation ended cleanly.");
     }

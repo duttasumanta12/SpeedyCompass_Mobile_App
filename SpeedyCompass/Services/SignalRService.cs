@@ -201,6 +201,7 @@ public class SignalRService
                 if (!string.IsNullOrEmpty(_activeGoogleId) && !string.IsNullOrEmpty(_activeGroupName))
                 {
                     await _hubConnection.InvokeAsync("RestoreConnectionState", _activeGoogleId, _activeUserName, _activeGroupName);
+                    ConnectionStatusChanged?.Invoke("Connected", Colors.Green);
                 }
             }
             catch (Exception ex) { LogException("Reconnected State Sync", ex); }

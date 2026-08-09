@@ -41,6 +41,8 @@ namespace SpeedyCompass.Services
         public int CurrentRouteIndex { get; set; } = 0;
         public bool RunningInBackground { get; internal set; }
         public int OffRouteStrikeCount { get; set; } = 0;
+        // Stores the trail of where we have physically driven
+        public List<Location> DrivenBreadcrumbs { get; set; } = new List<Location>();
 
         // ==========================================
         // EDGE CASE RESET HANDLERS

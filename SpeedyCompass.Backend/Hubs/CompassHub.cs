@@ -645,13 +645,13 @@ public class CompassHub : Hub
         await Groups.AddToGroupAsync(newConnectionId, groupName);
         await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
 
-        if (session != null)
-        {
-            if (session.CurrentState == GroupState.Navigating)
-                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
-            else if (!string.IsNullOrEmpty(session.DestName))
-                await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
-        }
+        //if (session != null)
+        //{
+        //    if (session.CurrentState == GroupState.Navigating)
+        //        await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
+        //    else if (!string.IsNullOrEmpty(session.DestName))
+        //        await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
+        //}
     }
 
     public async Task PauseNavigation(string groupName, string reason, string adminName)

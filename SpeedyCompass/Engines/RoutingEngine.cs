@@ -24,6 +24,7 @@ public class RouteUIData
     public string EtaText { get; set; }
     public List<Location> DecodedPoints { get; set; }
     public List<RouteStep> VoiceSteps { get; set; }
+    public int SpliceIndex { get; internal set; }
 }
 
 // 2. DTO for the Telemetry UI updates
@@ -53,6 +54,7 @@ public class RouteTelemetryResult
     public string VoiceInstructionToSpeak { get; set; }
     public bool UpdatedHasAnnouncedArrival { get; set; }
     public Location UpdatedLastAnnouncedTurn { get; set; }
+    public double DistLeftKm { get; set; } // <-- Add this!
 }
 
 public interface IRoutingEngine
@@ -60,8 +62,8 @@ public interface IRoutingEngine
     Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false);
     List<Location> DecodeGooglePolyline(string encodedPoints);
     string EncodeLocationList(List<Location> points);
-    Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps);
-    Task<Location> CalculateDynamicMeetupPointAsync(List<Location> currentRoute, int currentRouteIndex, List<Location> riderLocations, Location destination);
+    Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute);
+    Task<Location> CalculateDynamicMeetupPointAsync();
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
 }
 
@@ -69,11 +71,13 @@ public class RoutingEngine : IRoutingEngine
 {
     private readonly HttpClient _httpClient;
     private readonly string _googleApiKey;
+    private readonly RideStateService _rideCache;
 
-    public RoutingEngine(IConfiguration configuration)
+    public RoutingEngine(IConfiguration configuration, RideStateService rideCache)
     {
         _httpClient = new HttpClient();
         _googleApiKey = configuration["GoogleApiKey"] ?? "AIzaSyA8t2qkOm6A9K8ZM-uYyJp5gnLVZCEHWzk";
+        _rideCache = rideCache;
     }
 
     public async Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false)
@@ -193,18 +197,27 @@ public class RoutingEngine : IRoutingEngine
     // =====================================================================
     // 1. ROUTE POLYLINE ORCHESTRATOR
     // =====================================================================
-    public async Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps)
+    public async Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute = false)
     {
         var routeData = await GetRouteDataAsync(origin, dest, meetup, includeVoiceSteps);
         if (string.IsNullOrEmpty(routeData?.EncodedPolyline) || routeData.DecodedPoints.Count == 0) return null;
 
-        // Build the physical map line in the engine!
-        var polyline = new Polyline
+        var combinedPoints = new List<Location>();
+        int seamIndex = 0; // <-- ADD THIS
+
+        if (isReroute && _rideCache.CurrentRoutePoints != null)
         {
-            StrokeColor = routeColor,
-            StrokeWidth = 22f
-        };
-        foreach (var coord in routeData.DecodedPoints) polyline.Geopath.Add(coord);
+            var historySlice = _rideCache.CurrentRoutePoints.Take(_rideCache.CurrentRouteIndex).ToList();
+            combinedPoints.AddRange(historySlice);
+
+            // <-- ADD THIS: The exact coordinate where you are right now!
+            seamIndex = historySlice.Count;
+        }
+
+        combinedPoints.AddRange(routeData.DecodedPoints);
+
+        var polyline = new Polyline { StrokeColor = routeColor, StrokeWidth = 22f };
+        foreach (var coord in combinedPoints) polyline.Geopath.Add(coord);
 
         return new RouteUIData
         {
@@ -212,8 +225,9 @@ public class RoutingEngine : IRoutingEngine
             MapLine = polyline,
             DistanceKm = routeData.DistanceKm.ToString(),
             EtaText = routeData.EtaText,
-            DecodedPoints = routeData.DecodedPoints,
-            VoiceSteps = routeData.VoiceSteps ?? new List<RouteStep>()
+            DecodedPoints = combinedPoints,
+            VoiceSteps = routeData.VoiceSteps ?? new List<RouteStep>(),
+            SpliceIndex = seamIndex // <-- PASS IT BACK TO THE UI!
         };
     }
 
@@ -314,7 +328,8 @@ public class RoutingEngine : IRoutingEngine
                 ProgressVal = distLeft == 0 ? 1.0 : rideCache.CumulativeDistanceKm / (rideCache.CumulativeDistanceKm + distLeft),
                 EtaStr = eta.ToString("h:mm tt"),
                 UpdatedHasAnnouncedArrival = currentHasAnnouncedArrival,
-                UpdatedLastAnnouncedTurn = currentLastAnnouncedTurn
+                UpdatedLastAnnouncedTurn = currentLastAnnouncedTurn,
+                DistLeftKm = distLeft
             };
             result.ProgressPercentStr = $"{(int)(result.ProgressVal * 100)}%";
 
@@ -368,18 +383,20 @@ public class RoutingEngine : IRoutingEngine
             return result;
         }, cancellationToken);
     }
-    public async Task<Location> CalculateDynamicMeetupPointAsync(
-        List<Location> currentRoute,
-        int currentRouteIndex,
-        List<Location> riderLocations,
-        Location destination)
+    public async Task<Location> CalculateDynamicMeetupPointAsync()
     {
-        if (currentRoute == null || currentRoute.Count == 0 || riderLocations.Count == 0 || destination == null) return null;
+        // Pull everything directly from the injected cache
+        var currentRoute = _rideCache.CurrentRoutePoints;
+        int currentRouteIndex = _rideCache.CurrentRouteIndex;
+        var riderLocations = _rideCache.OtherRiderLocations.Values.ToList();
+        var destination = _rideCache.ActiveDestination;
+
+        if (currentRoute == null || currentRoute.Count == 0 || riderLocations.Count == 0 || destination == null)
+            return null;
 
         var lostRiders = new List<Location>();
 
-        // 1. FAST FILTER: Identify who is actually lost. 
-        // (Optimization: We don't waste Google APIs on riders who are on the path)
+        // 1. FAST FILTER
         foreach (var loc in riderLocations)
         {
             bool isOnPath = false;
@@ -394,46 +411,42 @@ public class RoutingEngine : IRoutingEngine
             if (!isOnPath) lostRiders.Add(loc);
         }
 
-        // 2. AUTO-CLEAR: If everyone is on the path, clear the meetup point!
+        // 2. AUTO-CLEAR
         if (lostRiders.Count == 0) return null;
 
         int furthestConvergenceIndex = Math.Max(0, currentRouteIndex);
 
-        // 3. GOOGLE QUERY: Fetch routes for the stray riders simultaneously
+        // 3. GOOGLE QUERY
         var routeTasks = lostRiders.Select(loc => GetRouteDataAsync(loc, destination)).ToList();
         var strayRoutes = await Task.WhenAll(routeTasks);
 
-        // 4. FORWARD MERGE: Find where their new routes merge onto our blue line
+        // 4. FORWARD MERGE
         foreach (var strayRoute in strayRoutes)
         {
             if (strayRoute?.DecodedPoints == null || strayRoute.DecodedPoints.Count == 0) continue;
 
             int mergeIndex = -1;
 
-            // Scan forward along the Lead's route to find the intersection
             for (int i = Math.Max(0, currentRouteIndex); i < currentRoute.Count; i += 2)
             {
                 var leadPt = currentRoute[i];
-
-                // Does the stray rider's route hit this coordinate?
                 bool doesMergeHere = strayRoute.DecodedPoints.Any(strayPt =>
                     Location.CalculateDistance(leadPt, strayPt, DistanceUnits.Kilometers) < 0.15);
 
                 if (doesMergeHere)
                 {
                     mergeIndex = i;
-                    break; // Found the earliest point they rejoin the main road!
+                    break;
                 }
             }
 
-            // We must set the meetup point at the FURTHEST merge point to ensure ALL lost riders catch up
             if (mergeIndex > furthestConvergenceIndex)
             {
                 furthestConvergenceIndex = mergeIndex;
             }
         }
 
-        // 5. THE SAFETY BUFFER: Add ~5km ahead of the merge point!
+        // 5. SAFETY BUFFER
         double accumulatedDist = 0;
         int finalTargetIndex = furthestConvergenceIndex;
 

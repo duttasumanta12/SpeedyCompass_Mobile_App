@@ -16,7 +16,7 @@ public class RiderRelativeStatus
 public interface ITelemetryEngine
 {
     Task EvaluateSpeedLimitAsync(Location loc, double currentSpeedKmh, Action<int, bool> updateUiCallback);
-    Task EvaluateEdgeTelemetryAsync(Location myLoc, double mySpeedKmh, string myName, string groupName, bool amIAdmin);
+    Task EvaluateEdgeTelemetryAsync(Location loc, double speedKmh, string riderName, string groupName, bool isAdmin, double actualRouteDistanceKm);
     Task<RideSummary> ProcessAndSaveRideTelemetryAsync(string groupName);
     public RiderRelativeStatus CalculateRiderStatus(string riderId, Location newLoc, Location myLoc, RideStateService rideCache, GroupSettingsDto settings);
 }
@@ -89,7 +89,7 @@ public class TelemetryEngine : ITelemetryEngine
     // =====================================================================
     // --- 2. EDGE TELEMETRY & WARNINGS ENGINE ---
     // =====================================================================
-    public async Task EvaluateEdgeTelemetryAsync(Location myLoc, double mySpeedKmh, string myName, string groupName, bool amIAdmin)
+    public async Task EvaluateEdgeTelemetryAsync(Location myLoc, double mySpeedKmh, string myName, string groupName, bool amIAdmin, double actualRouteDistanceKm)
     {
         var settings = _rideCache.CurrentSettings;
         if (settings == null) return;
@@ -113,10 +113,7 @@ public class TelemetryEngine : ITelemetryEngine
             // 2. Arrival Alert
             if (_rideCache.ActiveDestination != null && (DateTime.Now - _rideCache.LastArrivalAlert).TotalMinutes > 15)
             {
-                double distToDest = Location.CalculateDistance(myLoc, _rideCache.ActiveDestination, DistanceUnits.Kilometers) * 1000;
-                double arrivalThreshold = settings.ArrivalGeofenceMeters > 0 ? settings.ArrivalGeofenceMeters : 1000;
-
-                if (distToDest < arrivalThreshold)
+                if (actualRouteDistanceKm > 0 && actualRouteDistanceKm <= 1.0)
                 {
                     _rideCache.LastArrivalAlert = DateTime.Now;
                     await _signalRService.SendArrivalAlert(groupName);

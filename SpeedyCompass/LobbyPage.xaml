@@ -54,7 +54,15 @@
                                     </Border.Shadow>
                                     <VerticalStackLayout Spacing="0">
                                         <Label Text="{Binding Username}" TextColor="White" FontSize="10" FontAttributes="Bold" HorizontalOptions="Center" LineBreakMode="TailTruncation" MaxLines="1"/>
-                                        <Label Text="{Binding Speed}" TextColor="DodgerBlue" FontSize="12" FontAttributes="Bold" HorizontalOptions="Center"/>
+
+                                        <!-- THE FIX: Automatically hide this label if the user is "You" -->
+                                        <Label Text="{Binding Speed}" TextColor="DodgerBlue" FontSize="12" FontAttributes="Bold" HorizontalOptions="Center">
+                                            <Label.Triggers>
+                                                <DataTrigger TargetType="Label" Binding="{Binding Username}" Value="You">
+                                                    <Setter Property="IsVisible" Value="False" />
+                                                </DataTrigger>
+                                            </Label.Triggers>
+                                        </Label>
                                     </VerticalStackLayout>
                                 </Border>
 

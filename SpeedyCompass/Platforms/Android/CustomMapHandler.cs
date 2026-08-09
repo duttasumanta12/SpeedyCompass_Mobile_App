@@ -222,6 +222,41 @@ namespace SpeedyCompass.Platforms.Android
                 }
             });
         }
+        // =====================================================================
+        // THE FIX: BULLETPROOF 3D NAVIGATION PERSPECTIVE
+        // =====================================================================
+        public void SetNavigationPerspective(bool enableNavPerspective)
+        {
+            if (Map == null || PlatformView == null) return;
+
+            if (enableNavPerspective)
+            {
+                // 1. Get the ACTUAL rendered pixel height of the Map, not the phone screen!
+                int mapHeight = PlatformView.Height;
+
+                if (mapHeight == 0)
+                {
+                    // If the layout hasn't finished drawing yet, wait 1 frame and try again
+                    PlatformView.Post(() => SetNavigationPerspective(enableNavPerspective));
+                    return;
+                }
+
+                // 2. Pad the top by 50% of the map's real height.
+                // This forces the "center" targeting crosshair down into the bottom 1/4th of the screen!
+                int topPad = (int)(mapHeight * 0.7f);
+
+                Map.SetPadding(0, topPad, 0, 0);
+            }
+            else
+            {
+                // Reset perfectly to the center
+                Map.SetPadding(0, 0, 0, 0);
+            }
+
+            // 3. THE FIX: Force the MAUI pins to instantly recalculate their 
+            // screen X/Y coordinates so they drop down to match the new optical center!
+            ProjectPinsToScreen();
+        }
 
         private BitmapDescriptor GetIcon(string icon, Microsoft.Maui.Graphics.Color color)
         {
@@ -290,7 +325,7 @@ namespace SpeedyCompass.Platforms.Android
             if (Map == null) return;
 
             // 1. THE FIX: REMOVE Map.SetPadding!
-            // MAUI's Margin="0,0,0,160" already perfectly sizes the map box.
+            // MAUI's Margin="0,0,0,140" already perfectly sizes the map box.
             // Piling Native padding on top of it squished the camera viewport to zero!
 
             bool autoTilt = Preferences.Default.Get("Map_AutoTilt", true);
@@ -311,7 +346,7 @@ namespace SpeedyCompass.Platforms.Android
             if (autoZoom)
             {
                 if (speedKmh > 100) targetZoom = 15f;       // Highway
-                else if (speedKmh > 60) targetZoom = 16.5f;   // Arterial/City
+                else if (speedKmh >= 30) targetZoom = 16.5f;   // Arterial/City
                 else targetZoom = 18f;                      // Slow/Turning
             }
 

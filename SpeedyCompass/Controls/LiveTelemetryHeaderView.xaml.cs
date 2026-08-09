@@ -41,4 +41,11 @@ public partial class LiveTelemetryHeaderView : ContentView
         MyProgressPercentLabel.Text = progressPercent;
         RouteProgressBar.ProgressTo(progressVal, 500, Easing.Linear);
     }
+    public void UpdateSpeed(string speedStr)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (MySpeedLabel != null) MySpeedLabel.Text = speedStr;
+        });
+    }
 }

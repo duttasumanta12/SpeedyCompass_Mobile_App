@@ -13,20 +13,24 @@
 
         <Grid ColumnDefinitions="1.2*, 1*, Auto" ColumnSpacing="10">
 
-            <!-- Left: Location & Destination -->
-            <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="4">
+            <!-- Left: Speed, Location & Destination -->
+            <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
+
+                <!-- THE FIX: Highly visible Speedometer -->
+                <Label x:Name="MySpeedLabel" Text="0 km/h" FontSize="22" FontAttributes="Bold" TextColor="MediumSeaGreen" Margin="0,0,0,4"/>
+
                 <StackLayout Orientation="Horizontal" Spacing="4">
-                    <Label Text="Distance" FontSize="14" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}"/>
-                    <Label x:Name="MyDistanceLabel" Text="-- km" FontSize="14" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                    <Label Text="Distance" FontSize="12" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" VerticalOptions="Center"/>
+                    <Label x:Name="MyDistanceLabel" Text="-- km" FontSize="12" FontAttributes="Bold" TextColor="DodgerBlue" VerticalOptions="Center"/>
                 </StackLayout>
 
-                <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, *" RowSpacing="4" ColumnSpacing="5">
+                <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, *" RowSpacing="2" ColumnSpacing="5">
                     <!-- Origin Coordinates -->
-                    <Label Grid.Row="0" Grid.Column="0" Text="🏁" FontSize="10" TextColor="Gray" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <Label Grid.Row="0" Grid.Column="0" Text="🏁" FontSize="10" TextColor="Gray" VerticalOptions="Start" Margin="0,1,0,0"/>
                     <Label Grid.Row="0" Grid.Column="1" x:Name="TelemetryOriginLabel" Text="Acquiring GPS..." FontSize="11" TextColor="Gray" LineBreakMode="TailTruncation" MaxLines="1" VerticalOptions="Start"/>
 
-                    <!-- Destination (THE FIX: Multiline support added here!) -->
-                    <Label Grid.Row="1" Grid.Column="0" Text="📍" FontSize="10" TextColor="DodgerBlue" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <!-- Destination -->
+                    <Label Grid.Row="1" Grid.Column="0" Text="📍" FontSize="10" TextColor="DodgerBlue" VerticalOptions="Start" Margin="0,1,0,0"/>
                     <Label Grid.Row="1" Grid.Column="1" x:Name="TelemetryDestLabel" Text="Destination" FontSize="11" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" LineBreakMode="WordWrap" MaxLines="3" VerticalOptions="Start"/>
                 </Grid>
             </VerticalStackLayout>
