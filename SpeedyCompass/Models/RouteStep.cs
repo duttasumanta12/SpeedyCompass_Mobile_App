@@ -10,5 +10,8 @@ namespace SpeedyCompass.Models
         public Location TurnLocation { get; set; }
         public string Instruction { get; set; }
         public bool VoiceAlertPlayed { get; set; } = false;
+        public bool StepCompleted { get; internal set; }
+        public bool ShortRangeAlertPlayed { get; internal set; }
+        public bool LongRangeAlertPlayed { get; internal set; }
     }
 }

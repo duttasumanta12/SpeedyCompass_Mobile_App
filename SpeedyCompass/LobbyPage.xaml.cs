@@ -534,9 +534,9 @@ public partial class LobbyPage : ContentPage
             if (telemetry.SpeakDestinationReached)
                 MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("You have arrived at your destination."));
 
-            //// Use Google-Maps-like staged turn announcements from VoiceCopilotEngine
-            //if (voiceEnabled)
-            //    _voiceEngine.ProcessTurnByTurn(currentLocation, _activeRouteSteps);
+            // Use Google-Maps-like staged turn announcements from VoiceCopilotEngine
+            if (voiceEnabled)
+                _voiceEngine.ProcessTurnByTurn(currentLocation, _activeRouteSteps);
 
             // 3. MEETUP LOGIC
             if (_rideCache.ActiveMeetupPoint != null)

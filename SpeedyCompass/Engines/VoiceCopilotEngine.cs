@@ -1,90 +1,214 @@
 ﻿using SpeedyCompass.Models;
+using SpeedyCompass.Services;
+using SpeedyCompass.Shared.Models;
+using System.Text.RegularExpressions;
 
 namespace SpeedyCompass.Engines;
 
 public class VoiceCopilotEngine : IVoiceCopilotEngine
 {
+    private readonly HardwareButtonService _hwButton;
+    private readonly SemaphoreSlim _speechGate = new(1, 1);
+    private readonly object _speechLock = new();
+
+    private DateTime _lastSpokenAtUtc = DateTime.MinValue;
+    private string _lastSpokenText = string.Empty;
+
+    private const int MinSpeechGapMs = 1100;
+    private const int DuplicateCooldownMs = 6000;
+
+    public VoiceCopilotEngine(HardwareButtonService hwButton)
+    {
+        _hwButton = hwButton;
+    }
+
     public void Speak(string message)
     {
-        _ = TextToSpeech.Default.SpeakAsync(message);
+        if (string.IsNullOrWhiteSpace(message)) return;
+
+        var normalized = NormalizeSpeech(message);
+        if (!ShouldSpeak(normalized)) return;
+
+        _ = SpeakInternalAsync(normalized);
     }
 
     public void ProcessTurnByTurn(Location currentGPS, List<RouteStep> activeSteps)
     {
         if (!Preferences.Default.Get("Map_VoiceNav", true)) return;
-        if (activeSteps == null || !activeSteps.Any()) return;
+        if (currentGPS == null || activeSteps == null || activeSteps.Count == 0) return;
 
-        // 1. AUTO-SKIP PASSED STEPS
+        // 1) Cleanup passed steps
         for (int i = 0; i < activeSteps.Count; i++)
         {
             var step = activeSteps[i];
-            if (step.VoiceAlertPlayed) continue;
+            if (step.StepCompleted) continue;
 
-            double distToThis = Location.CalculateDistance(currentGPS, step.TurnLocation, DistanceUnits.Kilometers) * 1000;
-            if (distToThis < 25) { step.VoiceAlertPlayed = true; continue; }
+            double distToThis = DistanceMeters(currentGPS, step.TurnLocation);
+
+            if (distToThis <= 25)
+            {
+                step.StepCompleted = true;
+                continue;
+            }
 
             if (i + 1 < activeSteps.Count)
             {
-                double distToNext = Location.CalculateDistance(currentGPS, activeSteps[i + 1].TurnLocation, DistanceUnits.Kilometers) * 1000;
-                if (distToNext < distToThis) { step.VoiceAlertPlayed = true; continue; }
+                double distToNext = DistanceMeters(currentGPS, activeSteps[i + 1].TurnLocation);
+                if (distToNext < distToThis)
+                {
+                    step.StepCompleted = true;
+                    continue;
+                }
             }
+
             break;
         }
 
-        // 2. IDENTIFY ACTIVE TURN
-        var nextStep = activeSteps.FirstOrDefault(s => !s.VoiceAlertPlayed);
+        var nextStep = activeSteps.FirstOrDefault(s => !s.StepCompleted && !s.ShortRangeAlertPlayed);
         if (nextStep == null) return;
 
-        double distanceMeters = Location.CalculateDistance(currentGPS, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
+        double distanceMeters = DistanceMeters(currentGPS, nextStep.TurnLocation);
+        double speedKmh = (currentGPS.Speed ?? 0) * 3.6;
+        string instruction = CleanVoiceInstruction(nextStep.Instruction);
 
-        // 3. DYNAMIC TRIGGER MATH
-        double speedKmh = (currentGPS.Speed ?? 11.11) * 3.6;
-        double dynamicTriggerDist = Math.Clamp((speedKmh / 3.6) * 10, 100, 350);
-
-        var previousStep = activeSteps.LastOrDefault(s => s.VoiceAlertPlayed);
-        if (previousStep != null)
+        // 2) Far context alert (Google Maps-like "continue, then ...")
+        if (!nextStep.LongRangeAlertPlayed && distanceMeters is > 1200 and <= 4000)
         {
-            double distBetween = Location.CalculateDistance(previousStep.TurnLocation, nextStep.TurnLocation, DistanceUnits.Kilometers) * 1000;
-            if (distBetween < 250) dynamicTriggerDist = Math.Clamp(distBetween * 0.6, 30, dynamicTriggerDist);
+            nextStep.LongRangeAlertPlayed = true;
+            Speak($"Continue for {FormatDistance(distanceMeters)}, then {instruction}");
+            return;
         }
 
-        // 4. SPEAK
-        if (distanceMeters <= dynamicTriggerDist)
+        // 3) Prepare alert
+        // Reusing VoiceAlertPlayed as the mid-range prep flag.
+        double prepTrigger = Math.Clamp((speedKmh / 3.6) * 20, 250, 900);
+        if (!nextStep.VoiceAlertPlayed && distanceMeters <= prepTrigger && distanceMeters > 120)
         {
             nextStep.VoiceAlertPlayed = true;
-            int spokenDistance = Math.Max(50, (int)(Math.Round(distanceMeters / 50.0) * 50));
-            string cleanInstruction = CleanVoiceInstruction(nextStep.Instruction);
-            Speak($"In {spokenDistance} meters, {cleanInstruction}");
+            Speak($"Prepare to {instruction} in {FormatDistance(distanceMeters)}");
+            return;
         }
+
+        // 4) Final alert ("In X meters ...")
+        double finalTrigger = Math.Clamp((speedKmh / 3.6) * 10, 80, 300);
+
+        var lastCompleted = activeSteps.LastOrDefault(s => s.StepCompleted);
+        if (lastCompleted != null)
+        {
+            double distBetween = DistanceMeters(lastCompleted.TurnLocation, nextStep.TurnLocation);
+            if (distBetween < 250)
+            {
+                finalTrigger = Math.Clamp(distBetween * 0.6, 30, finalTrigger);
+            }
+        }
+
+        if (distanceMeters <= finalTrigger)
+        {
+            nextStep.ShortRangeAlertPlayed = true;
+            nextStep.LongRangeAlertPlayed = true;
+
+            int spokenMeters = Math.Max(30, (int)(Math.Round(distanceMeters / 10.0) * 10));
+            if (spokenMeters <= 40)
+                Speak($"Now, {instruction}");
+            else
+                Speak($"In {spokenMeters} meters, {instruction}");
+        }
+    }
+
+    private async Task SpeakInternalAsync(string message)
+    {
+        try
+        {
+            await _speechGate.WaitAsync();
+
+            int waitMs = 0;
+            lock (_speechLock)
+            {
+                var elapsed = (DateTime.UtcNow - _lastSpokenAtUtc).TotalMilliseconds;
+                if (elapsed < MinSpeechGapMs)
+                {
+                    waitMs = (int)(MinSpeechGapMs - elapsed);
+                }
+            }
+
+            if (waitMs > 0) await Task.Delay(waitMs);
+
+            await TextToSpeech.Default.SpeakAsync(message, new SpeechOptions
+            {
+                Pitch = 1.0f,
+                Volume = 1.0f
+            });
+
+            lock (_speechLock)
+            {
+                _lastSpokenAtUtc = DateTime.UtcNow;
+                _lastSpokenText = message;
+            }
+        }
+        catch
+        {
+            // Intentionally swallow TTS failures so navigation loop never crashes.
+        }
+        finally
+        {
+            _speechGate.Release();
+        }
+    }
+
+    private bool ShouldSpeak(string normalized)
+    {
+        lock (_speechLock)
+        {
+            bool isDuplicate = string.Equals(_lastSpokenText, normalized, StringComparison.OrdinalIgnoreCase);
+            bool stillCoolingDown = (DateTime.UtcNow - _lastSpokenAtUtc).TotalMilliseconds < DuplicateCooldownMs;
+
+            if (isDuplicate && stillCoolingDown) return false;
+            return true;
+        }
+    }
+
+    private static string NormalizeSpeech(string text)
+    {
+        return Regex.Replace(text.Trim(), @"\s+", " ");
+    }
+
+    private static double DistanceMeters(Location a, Location b)
+    {
+        return Location.CalculateDistance(a, b, DistanceUnits.Kilometers) * 1000.0;
+    }
+
+    private static string FormatDistance(double meters)
+    {
+        if (meters >= 1000)
+        {
+            double km = Math.Round(meters / 1000.0, 1);
+            return $"{km:0.#} kilometers";
+        }
+
+        int rounded = Math.Max(50, (int)(Math.Round(meters / 10.0) * 10));
+        return $"{rounded} meters";
     }
 
     private string CleanVoiceInstruction(string rawInstruction)
     {
-        if (string.IsNullOrWhiteSpace(rawInstruction)) return "";
+        if (string.IsNullOrWhiteSpace(rawInstruction)) return string.Empty;
 
-        // 1. Remove all HTML tags (e.g. <b>, <div>, <wbr>)
-        string clean = System.Text.RegularExpressions.Regex.Replace(rawInstruction, "<.*?>", " ");
-
-        // 2. Decode HTML entities (e.g. &amp; becomes &, &nbsp; becomes a space)
+        string clean = rawInstruction.Replace("div", "span");
+        clean = Regex.Replace(clean, "<.*?>", " ");
         clean = System.Net.WebUtility.HtmlDecode(clean);
 
-        // 3. Expand common road abbreviations so the voice doesn't stutter or mispronounce them
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bNH\b", "National Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bSH\b", "State Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bRd\b", "Road", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bSt\b", "Street", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\bHwy\b", "Highway", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\bNH\b", "National Highway", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\bSH\b", "State Highway", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\bRd\b", "Road", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\bSt\b", "Street", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\bHwy\b", "Highway", RegexOptions.IgnoreCase);
+        clean = Regex.Replace(clean, @"\bAve\b", "Avenue", RegexOptions.IgnoreCase);
 
-        // 4. INJECT PACING: Native TTS engines pause whenever they hit a comma.
-        // We force a pause between the action and the road name, and before destinations.
         clean = clean.Replace(" onto ", ", onto, ");
         clean = clean.Replace(" towards ", ", towards, ");
-        clean = clean.Replace(" to stay on ", ", to stay on, ");
         clean = clean.Replace(" and ", ", and, ");
 
-        // 5. Clean up any weird double spaces created by the replacements
-        clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s+", " ").Trim();
-
+        clean = Regex.Replace(clean, @"\s+", " ").Trim();
         return clean;
     }
 }
