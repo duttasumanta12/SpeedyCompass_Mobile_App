@@ -195,7 +195,7 @@ public partial class LobbyPage : ContentPage
 
         DestinationSearchControl.SetState(_amIAdmin, false, _amIAdmin, false);
 
-        DrawerStatsTab.SetRidersSource(Riders);
+        RosterControl.SetRidersSource(Riders);
 
         // Hook up SignalR events
         _signalRService.ConnectionStatusChanged += OnConnectionStatusChanged;
@@ -262,8 +262,8 @@ public partial class LobbyPage : ContentPage
             if (groupDetails != null)
             {
                 ConvoyPin = groupDetails.JoinCode ?? "------";
-                DrawerStatsTab.SetConvoyPin(ConvoyPin);
-                DrawerStatsTab.SetAdminPinCardVisible(_amIAdmin);
+                RosterControl.SetConvoyPin(ConvoyPin);
+                RosterControl.SetAdminPinCardVisible(_amIAdmin);
 
                 // THE FIX: Push EVERYTHING through the Gatekeeper the moment you enter the room!
 
@@ -362,6 +362,7 @@ public partial class LobbyPage : ContentPage
             //_ = _signalRService.LeaveLobby();
         }
         await _signalRService.StopAsync();
+        BindingContext = null;
     }
     private async void OnNativePoiClicked(object sender, PoiClickedEventArgs e)
     {
@@ -428,9 +429,9 @@ public partial class LobbyPage : ContentPage
             }
 
             Riders = updatedRiders;
-            DrawerStatsTab.SetRidersSource(Riders);
+            RosterControl.SetRidersSource(Riders);
 
-            DrawerStatsTab.SetAdminPinCardVisible(_amIAdmin);
+            RosterControl.SetAdminPinCardVisible(_amIAdmin);
             TabAdminBtn.IsVisible = _amIAdmin;
 
             _locationTracker?.UpdateRiderCount(Riders.Count(r => r.IsOnline));
@@ -529,12 +530,13 @@ public partial class LobbyPage : ContentPage
             _hasAnnouncedArrival = telemetry.UpdatedHasAnnouncedArrival;
             _lastAnnouncedTurn = telemetry.UpdatedLastAnnouncedTurn;
 
-            // 2. SPEAK ALERTS (Triggered by the Engine)
+            // 2. SPEAK ALERTS
             if (telemetry.SpeakDestinationReached)
                 MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("You have arrived at your destination."));
 
-            if (telemetry.SpeakNextTurn)
-                MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak(telemetry.VoiceInstructionToSpeak));
+            //// Use Google-Maps-like staged turn announcements from VoiceCopilotEngine
+            //if (voiceEnabled)
+            //    _voiceEngine.ProcessTurnByTurn(currentLocation, _activeRouteSteps);
 
             // 3. MEETUP LOGIC
             if (_rideCache.ActiveMeetupPoint != null)
@@ -940,6 +942,7 @@ public partial class LobbyPage : ContentPage
             ActionDrawer.TranslateTo(0, 0, 250, Easing.CubicOut);
     }
 
+    // 🔄 REPLACE entire method in LobbyPage.xaml.cs
     private void OnDrawerTabClicked(object sender, EventArgs e)
     {
         TabActionsBtn.BackgroundColor = Colors.Transparent; TabActionsBtn.TextColor = Colors.Gray;
@@ -948,7 +951,8 @@ public partial class LobbyPage : ContentPage
         TabAdminBtn.BackgroundColor = Colors.Transparent; TabAdminBtn.TextColor = Colors.Gray;
 
         DrawerActionsTab.IsVisible = false;
-        DrawerStatsTab.IsVisible = false;
+        // THE FIX: Target ConvoyTabContainer instead of DrawerStatsTab
+        ConvoyTabContainer.IsVisible = false;
         DrawerMapSettingsTab.IsVisible = false;
         DrawerAdminTab.IsVisible = false;
 
@@ -975,7 +979,8 @@ public partial class LobbyPage : ContentPage
         {
             TabStatsBtn.BackgroundColor = Colors.DodgerBlue;
             TabStatsBtn.TextColor = Colors.White;
-            DrawerStatsTab.IsVisible = true;
+            // THE FIX: Target ConvoyTabContainer instead of DrawerStatsTab
+            ConvoyTabContainer.IsVisible = true;
         }
 
         if (ActionDrawer.TranslationY >= (_drawerFullHeight - _drawerPeekHeight) - 10)
@@ -1081,6 +1086,9 @@ public partial class LobbyPage : ContentPage
                     // Auto-switch drawer to the "Safety" Actions tab
                     OnDrawerTabClicked(TabActionsBtn, EventArgs.Empty);
 
+                    double maxTranslation = _drawerFullHeight - _drawerPeekHeight;
+                    _ = ActionDrawer.TranslateToAsync(0, maxTranslation, 250, Easing.CubicOut);
+
                     DestinationSearchControl.SetState(isVisible: false, isReadOnly: false, showBanner: false, showConfirm: false);
 
                     FloatingMapControls.IsVisible = true;
@@ -1103,6 +1111,7 @@ public partial class LobbyPage : ContentPage
                 case GroupState.PausedBreak:
                 case GroupState.PausedHazard:
                 case GroupState.PausedMechanical:
+                    _simulatorService.StopSimulation();
                     _locationTracker?.StopTracking();
                     SetActionButtonsEnabled(false);
 #if DEBUG
@@ -1214,10 +1223,10 @@ public partial class LobbyPage : ContentPage
             });
 
 #if DEBUG
-            //if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
-            //{
-            //    _ = _simulatorService?.StartSimulationAsync(groupDetails.CurrentState, _rideCts.Token);
-            //}
+            if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
+            {
+                _ = _simulatorService?.StartSimulationAsync(groupDetails.CurrentState, _rideCts.Token);
+            }
 #endif
         }
         if (!isSyncRequired)
@@ -1345,7 +1354,7 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            DrawerStatsTab.UpdateConnectionStatus(status, color);
+            RosterControl.UpdateConnectionStatus(status, color);
         });
 
         if (color == Colors.MediumSeaGreen)
@@ -2114,5 +2123,10 @@ public partial class LobbyPage : ContentPage
     private void OnTrafficToggled(object sender, bool isTrafficEnabled)
     {
         LiveMap.IsTrafficEnabled = isTrafficEnabled;
+    }
+    private async void OnBackButtonClicked(object sender, EventArgs e)
+    {
+        // Simple and standard MAUI navigation: Pop this page off the stack!
+        await Navigation.PopAsync();
     }
 }

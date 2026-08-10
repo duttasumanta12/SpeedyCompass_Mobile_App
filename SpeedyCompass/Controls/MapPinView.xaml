@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="SpeedyCompass.Controls.MapPinView"
+             x:Name="this"
+             InputTransparent="True"
+             CascadeInputTransparent="True">
+
+    <!-- THE MAGIC OFFSET: We move the component's center (-50, -75) here 
+         so LobbyPage just binds ScreenX/ScreenY directly! -->
+    <Grid TranslationX="-50" 
+          TranslationY="-75" 
+          WidthRequest="100" 
+          HorizontalOptions="Center" 
+          InputTransparent="True">
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Bubble Border -->
+        <Border Grid.Row="0" 
+                BackgroundColor="#E61E1E1E" 
+                Stroke="{Binding PinColor, Source={x:Reference this}}" 
+                StrokeThickness="2" 
+                StrokeShape="RoundRectangle 10" 
+                Padding="8,4" 
+                HorizontalOptions="Fill"
+                InputTransparent="True">
+            <Border.Shadow>
+                <Shadow Brush="Black" Offset="0,4" Opacity="0.3" Radius="5"/>
+            </Border.Shadow>
+
+            <VerticalStackLayout Spacing="0" InputTransparent="True">
+                <!-- Username -->
+                <Label Text="{Binding Username, Source={x:Reference this}}" 
+                       TextColor="White" 
+                       FontSize="10" 
+                       FontAttributes="Bold" 
+                       HorizontalOptions="Center" 
+                       LineBreakMode="TailTruncation" 
+                       MaxLines="1"/>
+
+                <!-- Speed: Hide logic moved inside component -->
+                <Label Text="{Binding Speed, Source={x:Reference this}}" 
+                       TextColor="DodgerBlue" 
+                       FontSize="12" 
+                       FontAttributes="Bold" 
+                       HorizontalOptions="Center">
+                    <Label.Triggers>
+                        <!-- Reference the view itself to check Username -->
+                        <DataTrigger TargetType="Label" 
+                                     Binding="{Binding Username, Source={x:Reference this}}" 
+                                     Value="You">
+                            <Setter Property="IsVisible" Value="False" />
+                        </DataTrigger>
+                    </Label.Triggers>
+                </Label>
+            </VerticalStackLayout>
+        </Border>
+
+        <!-- Tail (referencing local PinColor) -->
+        <Path Grid.Row="1" 
+              Data="M 0,0 L 12,0 L 6,8 Z" 
+              Fill="{Binding PinColor, Source={x:Reference this}}" 
+              HorizontalOptions="Center" 
+              Margin="0,-2,0,0"/>
+    </Grid>
+</ContentView>
