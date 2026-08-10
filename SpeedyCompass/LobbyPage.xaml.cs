@@ -671,6 +671,25 @@ public partial class LobbyPage : ContentPage
                     if (PreNavDistLabel != null)
                         PreNavDistLabel.Text = $"{routeUi.DistanceKm} km, ETA {routeUi.EtaText}";
 
+                    // =====================================================================
+                    // THE FIX: SEED TELEMETRY HEADER IMMEDIATELY
+                    // If we are actively navigating (or paused), take this static route 
+                    // data and inject it into the active header so we don't wait for GPS movement.
+                    // =====================================================================
+                    if (groupDetails.CurrentState >= GroupState.Navigating && !isReroute)
+                    {
+                        TelemetryHeaderControl.UpdateTelemetryStats(
+                            distText: $"{routeUi.DistanceKm} km",
+                            distColor: Colors.DodgerBlue, // Standard route color
+                            totalTravel: "0.0 km",        // We are at the starting line
+                            totalRoute: $"{routeUi.DistanceKm} km",
+                            progressVal: 0.0,
+                            progressPercent: "0%",
+                            eta: routeUi.EtaText,
+                            isOffRoute: false
+                        );
+                    }
+
                     if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
 
                     _activeRouteLine = routeUi.MapLine;
@@ -1195,10 +1214,10 @@ public partial class LobbyPage : ContentPage
             });
 
 #if DEBUG
-            if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
-            {
-                _ = _simulatorService?.StartSimulationAsync(groupDetails.CurrentState, _rideCts.Token);
-            }
+            //if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
+            //{
+            //    _ = _simulatorService?.StartSimulationAsync(groupDetails.CurrentState, _rideCts.Token);
+            //}
 #endif
         }
         if (!isSyncRequired)
