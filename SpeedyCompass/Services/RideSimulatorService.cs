@@ -221,8 +221,8 @@ public class RideSimulatorService
         {
             // 6. THE FIX: Bulletproof Cleanup. 
             // This runs guaranteed, even if the task was cancelled, broke, or completed cleanly.
-            _isSimulating = false;
-            if (_locationTracker != null) _locationTracker.IsSimulating = false;
+            //_isSimulating = false;
+            //if (_locationTracker != null) _locationTracker.IsSimulating = false;
 
             _simGate.Release();
             OnSimulationEnded?.Invoke();

@@ -101,6 +101,7 @@ public partial class LobbyPage : ContentPage
     private CancellationTokenSource _lifecycleCts;
     private readonly object _routeStateLock = new();
     private readonly LobbyStateMachine _stateMachine = new();
+    private GroupState? _pendingCatchUpState = null;
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
     (Color.FromArgb("#00E676"), Color.FromArgb("#00B259")), // 01: Neon Green -> Emerald
@@ -1075,9 +1076,63 @@ public partial class LobbyPage : ContentPage
     // --- STATE MACHINE --
     private Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "", bool forceSync = false)
     {
+        // THE CATCH-UP PROTOCOL SHIELD
+        // If the Admin pauses or completes, but we are > 500m away, we reject 
+        // the state change locally so the map keeps guiding us to them!
+        // =====================================================================
+        if (!_amIAdmin && groupDetails != null && groupDetails.CurrentState == GroupState.Navigating)
+        {
+            bool isPausingOrCompleting = newState >= GroupState.PausedBreak && newState <= GroupState.Completed;
+
+            if (isPausingOrCompleting && !forceSync) // forceSync allows manual overrides
+            {
+                var adminLoc = GetAdminLocation();
+                if (adminLoc != null && _lastKnownLocation != null)
+                {
+                    double distToAdminKm = Location.CalculateDistance(_lastKnownLocation, adminLoc, DistanceUnits.Kilometers);
+
+                    // If we are more than 500 meters behind the Admin
+                    if (distToAdminKm > 0.5)
+                    {
+                        AppLogger.Info("CatchUp", $"Intercepted {newState}. Rider is {Math.Round(distToAdminKm, 1)}km behind Admin.");
+
+                        _pendingCatchUpState = newState;
+
+                        string action = newState == GroupState.Completed ? "completed the route" : "paused the ride";
+                        _voiceEngine.Speak($"The admin has {action} ahead of you. Keep riding to catch up.");
+
+                        // Abort the state transition! The UI and GPS stay in full Navigating mode!
+                        return Task.CompletedTask;
+                    }
+                }
+            }
+        }
+
+        // If we make it here, clear the pending state (we are actively syncing)
+        _pendingCatchUpState = null;
         // We offload the logic to the pure C# engine. It handles all validation!
         _stateMachine.TryTransition(newState, triggerUser, reason, forceSync);
         return Task.CompletedTask;
+    }
+    private Location GetAdminLocation()
+    {
+        if (groupDetails == null || string.IsNullOrEmpty(groupDetails.AdminGoogleId)) return null;
+
+        // 1. Identify the Admin from the Roster
+        var adminRider = Riders.FirstOrDefault(r => r.GoogleId == groupDetails.AdminGoogleId);
+        if (adminRider == null) return null;
+
+        // Remove UI tags to match the raw dictionary key
+        string rawName = adminRider.Name.Replace(" (Offline)", "").Replace(" (You)", "");
+
+        // 2. Grab their exact coordinates from the live telemetry cache
+        if (_rideCache.OtherRiderLocations.TryGetValue(rawName, out var loc))
+            return loc;
+
+        if (_riderViewModels.TryGetValue(rawName, out var vm))
+            return vm.Location;
+
+        return null;
     }
     // =====================================================================
     // UI STATE RENDERER LAYER
@@ -1473,6 +1528,7 @@ public partial class LobbyPage : ContentPage
         // to create an immutable snapshot before handing it to the background!
         if (points == null)
         {
+            if (MapPins.Count == 0) return;
             if (MainThread.IsMainThread)
             {
                 RunMapMath(MapPins.Select(p => p.Location).ToList());
@@ -2326,9 +2382,17 @@ public partial class LobbyPage : ContentPage
 
                     if (_riderViewModels.TryGetValue(update.RiderId, out var existingVm))
                     {
-                        existingVm.Location = status.InterpolatedLocation;
-                        existingVm.Heading = update.Heading;
                         existingVm.Speed = status.SpeedStr;
+                        if (_currentNavMode == MapNavigationMode.Immersive)
+                        {
+                            AnimatePinMovement(existingVm, status.InterpolatedLocation, update.Heading, 1000);
+                        }
+                        else
+                        {
+                            // Live Radar (Overview) mode: We keep it as an instant snap to save GPU rendering
+                            existingVm.Location = status.InterpolatedLocation;
+                            existingVm.Heading = update.Heading;
+                        }
                     }
                     else
                     {
@@ -2383,6 +2447,32 @@ public partial class LobbyPage : ContentPage
         }
 
         _lastKnownLocation = e.Location;
+
+        // =====================================================================
+        // CATCH-UP PROTOCOL: AUTO-SNAPPER
+        // Check if we finally arrived at the Admin's parking spot!
+        // =====================================================================
+        if (_pendingCatchUpState != null)
+        {
+            var adminLoc = GetAdminLocation();
+            if (adminLoc != null)
+            {
+                double distToAdminKm = Location.CalculateDistance(e.Location, adminLoc, DistanceUnits.Kilometers);
+
+                // If we close the gap to under 200 meters, we have arrived!
+                if (distToAdminKm <= 0.2)
+                {
+                    AppLogger.Info("CatchUp", "Rider caught up to Admin. Applying pending state.");
+                    _voiceEngine.Speak("You have caught up with the group.");
+
+                    var targetState = _pendingCatchUpState.Value;
+                    _pendingCatchUpState = null; // Clear it to allow the transition
+
+                    // Force the sync so the UI finally snaps to Paused/Completed
+                    ChangeGroupState(targetState, "Auto-CatchUp", forceSync: true).SafeFireAndForget();
+                }
+            }
+        }
 
         if (ShouldBroadcastToNetwork(e.Location, currentSpeedKmh))
         {
