@@ -55,6 +55,13 @@ namespace SpeedyCompass.Services
         {
             try
             {
+                List<Location> breadcrumbsSnapshot;
+
+                // THE FIX: Take a locked copy before JSON serialization runs!
+                lock (this.DrivenBreadcrumbs)
+                {
+                    breadcrumbsSnapshot = this.DrivenBreadcrumbs.ToList();
+                }
                 // 1. Map to strict DTO
                 var dto = new RideSnapshotDto
                 {
@@ -69,7 +76,7 @@ namespace SpeedyCompass.Services
                     LastOdometerLocation = this.LastOdometerLocation,
                     MaxSpeedKmh = this.MaxSpeedKmh,
                     TopSpeedKmh = this.TopSpeedKmh,
-                    DrivenBreadcrumbs = this.DrivenBreadcrumbs,
+                    DrivenBreadcrumbs = breadcrumbsSnapshot,
 
                     // Convert ConcurrentDictionary to standard Dictionary for safe serialization
                     OtherRiderLocations = new Dictionary<string, Location>(this.OtherRiderLocations)

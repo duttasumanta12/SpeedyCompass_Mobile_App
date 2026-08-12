@@ -18,6 +18,8 @@ using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
+
 #if ANDROID
 using static Android.Provider.Contacts.Intents;
 using BatteryState = Microsoft.Maui.Devices.BatteryState;
@@ -93,6 +95,12 @@ public partial class LobbyPage : ContentPage
     private readonly MapCameraEngine? _mapCameraEngine;
     private bool? _isCurrentlyNight = null;
     private DateTime _lastSolarCheckTime = DateTime.MinValue;
+    private readonly Channel<LocalLocationUpdate> _localLocationChannel;
+    private readonly Channel<(string RiderId, double Lat, double Lng, double Heading)> _networkLocationChannel;
+    private readonly SemaphoreSlim _rerouteGate = new(1, 1);
+    private CancellationTokenSource _lifecycleCts;
+    private readonly object _routeStateLock = new();
+    private readonly LobbyStateMachine _stateMachine = new();
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
     (Color.FromArgb("#00E676"), Color.FromArgb("#00B259")), // 01: Neon Green -> Emerald
@@ -180,6 +188,16 @@ public partial class LobbyPage : ContentPage
     {
         InitializeComponent();
         BindingContext = this;
+        // 1. Initialize Bounded Queues
+        _localLocationChannel = Channel.CreateBounded<LocalLocationUpdate>(new BoundedChannelOptions(5)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest
+        });
+
+        _networkLocationChannel = Channel.CreateBounded<(string, double, double, double)>(new BoundedChannelOptions(50)
+        {
+            FullMode = BoundedChannelFullMode.DropOldest
+        });
         LiveMap.NativePoiClicked += OnNativePoiClicked;
 
         DeviceDisplay.Current.KeepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
@@ -213,6 +231,8 @@ public partial class LobbyPage : ContentPage
         }
 
         this.groupDetails = groupDetails;
+        _stateMachine.Initialize(this.groupDetails.CurrentState);
+        _stateMachine.StateChanged += OnStateTransitioned;
 
 #if ANDROID
         _locationTracker = IPlatformApplication.Current?.Services.GetService<ILocationTracker>();
@@ -267,6 +287,14 @@ public partial class LobbyPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+
+        // Start the sequential consumer loops
+        if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested)
+        {
+            _lifecycleCts = new CancellationTokenSource();
+            _ = ProcessLocalLocationsAsync(_lifecycleCts.Token);
+            _ = ProcessNetworkLocationsAsync(_lifecycleCts.Token);
+        }
         if (_hasJoined) return;
 
         try
@@ -354,7 +382,7 @@ public partial class LobbyPage : ContentPage
             });
 
             // 3. SignalR Optimization (Tell server to only send heartbeats, not full coordinates)
-            _ = _signalRService.ToggleBackgroundListenerMode(GroupNameLabel.Text, true);
+            _signalRService.ToggleBackgroundListenerMode(GroupNameLabel.Text, true).SafeFireAndForget();
         }
         else
         {
@@ -400,7 +428,10 @@ public partial class LobbyPage : ContentPage
     {
         base.OnDisappearing();
 
-        _ = _rideCache.SaveSnapshotAsync();
+        // Kill the consumer loops
+        _lifecycleCts?.Cancel();
+
+        _rideCache.SaveSnapshotAsync().SafeFireAndForget();
 
         _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
         _signalRService.RosterUpdated -= OnRosterUpdated;
@@ -528,111 +559,11 @@ public partial class LobbyPage : ContentPage
     }
 
     // --- LOCATION PROCESSING & TELEMETRY ---
-    private async void  OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
+    // 🔄 REPLACE existing method
+    private void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
-        double currentSpeedKmh = e.SpeedMph * 1.60934;
-        if (!_rideCache.RunningInBackground)
-        {
-            EvaluateDayNightCycle(e.Location);
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                LocationDisabledOverlay.Hide();
-                if (_myPinVm != null)
-                {
-                    
-                    string newSpeedStr = $"{Math.Round(currentSpeedKmh)} km/h";
-                    // =====================================================================
-                    // THE FIX: Track and push the Top Speed!
-                    // =====================================================================
-                    if (currentSpeedKmh > _rideCache.MaxSpeedKmh)
-                    {
-                        _rideCache.MaxSpeedKmh = currentSpeedKmh;
-                        TelemetryHeaderControl.UpdateTopSpeed($"{Math.Round(_rideCache.MaxSpeedKmh)} km/h");
-                    }
-                    // 1. Send the speed to the new Header Badge!
-                    TelemetryHeaderControl.UpdateSpeed(newSpeedStr);
-
-                    // THE FIX: 60-FPS Fluid Animation for the Local Pin!
-                    // This tells the UI to glide the pin smoothly to the new spot over 1000ms
-                    AnimatePinMovement(_myPinVm, e.Location, e.Heading, 1000);
-                    _myPinVm.Speed = newSpeedStr;
-
-                    // THE FIX: Update your OWN listing in the unified Convoy drawer
-                    var myModel = Riders.FirstOrDefault(r => r.GoogleId == CurrentGoogleId);
-                    if (myModel != null)
-                    {
-                        myModel.SpeedStr = newSpeedStr;
-                        myModel.StatusStr = "Local"; // Replaces "Standby/Nearby" with "Local"
-                        myModel.StatusColor = Colors.Transparent;
-                    }
-                }
-                // =====================================================================
-                // THE FIX: LIVE RADAR AUTO-FRAMING!
-                // If Overview Mode is active, re-frame the map every 15 seconds to 
-                // guarantee all moving convoy riders remain perfectly on screen.
-                // =====================================================================
-                if (MapFollowButton.IsVisible) // If this button is visible, we are in Overview Mode!
-                {
-                    if ((DateTime.Now - _lastAutoFrameTime).TotalSeconds > 15)
-                    {
-                        _lastAutoFrameTime = DateTime.Now;
-                        FitMapToBounds();
-                    }
-                }
-            });
-        }
-
-        _lastKnownLocation = e.Location;
-
-        if (ShouldBroadcastToNetwork(e.Location, currentSpeedKmh))
-        {
-            _lastNetworkBroadcastTime = DateTime.UtcNow;
-            _lastNetworkBroadcastLocation = e.Location;
-
-            // Offload network call so it doesn't block the buttery-smooth UI glide!
-            _ = Task.Run(async () => {
-                try
-                {
-                    await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading);
-                    AppLogger.Info("Network", $"Broadcasted location at {Math.Round(currentSpeedKmh)} km/h");
-                }
-                catch (Exception ex) { AppLogger.Error("Network", ex, "Failed to broadcast location."); }
-            });
-        }   
-
-        if (groupDetails?.CurrentState == GroupState.Navigating)
-        {
-            var lastCrumb = _rideCache.DrivenBreadcrumbs.LastOrDefault();
-            if (lastCrumb == null || Location.CalculateDistance(lastCrumb, e.Location, DistanceUnits.Kilometers) > 0.05)
-            {
-                _rideCache.DrivenBreadcrumbs.Add(e.Location);
-            }
-            double speedKmh = currentSpeedKmh;
-
-            // =====================================================================
-            // THE FIX: INJECT HARDWARE SENSORS INTO THE LOCATION OBJECT
-            // MAUI's Location.Speed expects Meters Per Second (m/s)
-            // =====================================================================
-            e.Location.Speed = speedKmh / 3.6;
-            e.Location.Course = e.Heading;
-
-            if (_currentNavMode == MapNavigationMode.Immersive)
-            {
-                _ = TrimRouteVisuals(e.Location);
-            }
-            else
-            {
-                // PIPELINE A (BACKGROUND OPTIMIZED): 
-                // Zero deviation math. Zero polyline building. Zero GPU.
-                // We simply tick the odometer so shared stats stay accurate!
-                if (_rideCache.LastOdometerLocation != null)
-                {
-                    double stepDist = Location.CalculateDistance(_rideCache.LastOdometerLocation, e.Location, DistanceUnits.Kilometers);
-                    if (stepDist > 0.01 && stepDist < 20) _rideCache.CumulativeDistanceKm += stepDist;
-                }
-                _rideCache.LastOdometerLocation = e.Location;
-            }
-        }
+        // Instantly queue the hardware update. No blocking!
+        _localLocationChannel.Writer.TryWrite(e);
     }
 
     private async Task TrimRouteVisuals(Location currentLocation)
@@ -644,25 +575,50 @@ public partial class LobbyPage : ContentPage
         {
             bool voiceEnabled = Preferences.Default.Get("Map_VoiceNav", true);
 
-            // Let the engine run the 150 lines of math on the background thread!
-            var telemetry = await _routingEngine.ProcessRouteTelemetryAsync(
-                currentLocation, _rideCache, _deviationEngine, _activeRouteSteps, _hasAnnouncedArrival, _lastAnnouncedTurn, voiceEnabled, _rideCts.Token);
+            List<RouteStep> stepsSnapshot;
+            DateTime rerouteTimeBeforeMath; // Track this to prevent overwriting a new route!
 
-            // 1. UPDATE CACHE & TRIPWIRES
+            lock (_routeStateLock)
+            {
+                stepsSnapshot = _activeRouteSteps.ToList();
+                rerouteTimeBeforeMath = _rideCache.LastRerouteTime;
+            }
+
+            // 1. Let the engine run its math and POP passed turns off the snapshot
+            var telemetry = await _routingEngine.ProcessRouteTelemetryAsync(
+                currentLocation, _rideCache, _deviationEngine, stepsSnapshot, _hasAnnouncedArrival, _lastAnnouncedTurn, voiceEnabled, _rideCts.Token);
+
             _rideCache.CurrentRouteIndex = telemetry.NewRouteIndex;
             _rideCache.LastOdometerLocation = currentLocation;
             _hasAnnouncedArrival = telemetry.UpdatedHasAnnouncedArrival;
             _lastAnnouncedTurn = telemetry.UpdatedLastAnnouncedTurn;
 
-            // 2. SPEAK ALERTS
             if (telemetry.SpeakDestinationReached)
                 MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("You have arrived at your destination."));
 
-            // Use Google-Maps-like staged turn announcements from VoiceCopilotEngine
             if (_currentNavMode == MapNavigationMode.Immersive &&
                     groupDetails?.CurrentState == GroupState.Navigating &&
                     voiceEnabled)
-                _voiceEngine.ProcessTurnByTurn(currentLocation, _activeRouteSteps);
+            {
+                // Voice engine might also pop steps, pass the snapshot here too
+                _voiceEngine.ProcessTurnByTurn(currentLocation, stepsSnapshot);
+            }
+
+            // =====================================================================
+            // THE FIX: SYNC THE TRIMMED LIST BACK TO RAM
+            // If the engines deleted passed turns from the snapshot, we must 
+            // save those deletions back to the live list!
+            // =====================================================================
+            lock (_routeStateLock)
+            {
+                // Safety check: Make sure a background Reroute didn't draw a brand 
+                // new path while we were waiting for the math to finish!
+                if (_rideCache.LastRerouteTime == rerouteTimeBeforeMath)
+                {
+                    _activeRouteSteps.Clear();
+                    _activeRouteSteps.AddRange(stepsSnapshot);
+                }
+            }
 
             // 3. MEETUP LOGIC
             if (_rideCache.ActiveMeetupPoint != null)
@@ -674,13 +630,13 @@ public partial class LobbyPage : ContentPage
                     MainThread.BeginInvokeOnMainThread(() =>
                     {
                         _voiceEngine.Speak(_amIAdmin ? "Meetup point reached. Please wait here." : "You have reached the meetup point.");
-                        _ = _signalRService.SendGroupAlert(GroupNameLabel.Text, "MeetupArrival", _myName);
+                        _signalRService.SendGroupAlert(GroupNameLabel.Text, "MeetupArrival", _myName).SafeFireAndForget();
                     });
                 }
                 else if (_haveIReachedMeetup && distToMeetup > 0.2 && _amIAdmin)
                 {
                     _haveIReachedMeetup = false;
-                    _ = _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0);
+                    _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0).SafeFireAndForget();
                 }
             }
 
@@ -691,7 +647,7 @@ public partial class LobbyPage : ContentPage
 
                 TelemetryHeaderControl.UpdateTelemetryStats(
                     distText: telemetry.IsOffRoute ? (telemetry.UserMessage ?? "Rerouting...") : telemetry.DistLeftStr,
-                    distColor: telemetry.IsOffRoute ? telemetry.AlertColor : Colors.DodgerBlue, //GetColorsForRider(CurrentGoogleId).RouteColor,
+                    distColor: telemetry.IsOffRoute ? telemetry.AlertColor : Colors.DodgerBlue,
                     totalTravel: telemetry.TotalTravelStr,
                     totalRoute: telemetry.TotalRouteStr,
                     progressVal: telemetry.ProgressVal,
@@ -709,42 +665,46 @@ public partial class LobbyPage : ContentPage
                 }
             });
 
-            // 5. REROUTING LOGIC
+            // 5. REROUTING LOGIC WITH SEMAPHORE GATE
             if (telemetry.ShouldReroute)
             {
                 _rideCache.LastRerouteTime = DateTime.Now;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        _voiceEngine.Speak("Rerouting...");
-                        string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination, _rideCache.ActiveMeetupPoint, isReroute: true);
 
-                        if (!string.IsNullOrEmpty(newPolyline))
+                if (await _rerouteGate.WaitAsync(0))
+                {
+                    Task.Run(async () =>
+                    {
+                        try
                         {
-                            var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
-                            if (settings != null && settings.EnableDynamicRouting)
+                            _voiceEngine.Speak("Rerouting...");
+                            string newPolyline = await CalculateAndDrawRoute(currentLocation, _rideCache.ActiveDestination, _rideCache.ActiveMeetupPoint, isReroute: true);
+
+                            if (!string.IsNullOrEmpty(newPolyline))
                             {
-                                if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
-                                else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
+                                var settings = await _signalRService.GetGroupSettings(GroupNameLabel.Text);
+                                if (settings != null && settings.EnableDynamicRouting)
+                                {
+                                    if (_amIAdmin) await _signalRService.BroadcastLeadRoute(GroupNameLabel.Text, newPolyline);
+                                    else await _signalRService.ReportRouteDeviation(GroupNameLabel.Text, _myName);
+                                }
                             }
                         }
-                    }
-                    catch (Exception ex) { AppLogger.Error("Routing", ex, "Failed to recalculate."); }
-                }, _rideCts.Token);
+                        finally
+                        {
+                            _rerouteGate.Release();
+                        }
+                    }, _rideCts.Token).SafeFireAndForget(ex => AppLogger.Error("Routing", ex, "Failed to recalculate."));
+                }
             }
 
-            // =====================================================================
-            // 6. THE FIX: RUN EDGE TELEMETRY USING FLAWLESS ROAD DISTANCE
-            // =====================================================================
             double currentSpeedKmh = (currentLocation.Speed ?? 0) * 3.6;
-            _ = _telemetryEngine.EvaluateEdgeTelemetryAsync(
+            await _telemetryEngine.EvaluateEdgeTelemetryAsync(
                 currentLocation,
                 currentSpeedKmh,
                 _myName,
                 GroupNameLabel.Text,
                 _amIAdmin,
-                telemetry.DistLeftKm); // <-- Passes the exact polyline distance!
+                telemetry.DistLeftKm);
         }
         catch (OperationCanceledException) { }
     }
@@ -755,7 +715,7 @@ public partial class LobbyPage : ContentPage
 
         // THE FIX: Return the app to the idle Lobby state so the
         // Search Bar and other lobby controls fully unlock again!
-        await ChangeGroupState(GroupState.NotNavigating, forceSync: true);
+        ChangeGroupState(GroupState.NotNavigating, forceSync: true).SafeFireAndForget();
     }
     // --- NEW: Trackers for the "Spiderweb" Meetup Routes ---
     private List<Polyline> _otherRiderRoutes = new();
@@ -823,8 +783,12 @@ public partial class LobbyPage : ContentPage
                     _activeRouteLine = routeUi.MapLine;
                     LiveMap.MapElements.Add(_activeRouteLine);
 
-                    _activeRouteSteps.Clear();
-                    if (routeUi.VoiceSteps != null) _activeRouteSteps.AddRange(routeUi.VoiceSteps);
+                    // THE FIX: Lock the write!
+                    lock (_routeStateLock)
+                    {
+                        _activeRouteSteps.Clear();
+                        if (routeUi.VoiceSteps != null) _activeRouteSteps.AddRange(routeUi.VoiceSteps);
+                    }
                 }
                 else
                 {
@@ -1006,13 +970,13 @@ public partial class LobbyPage : ContentPage
                 var colorProfile = GetColorsForRider(rider.Key);
 
                 // Spiderweb strictly from the Rider -> Meetup Point
-                _ = CalculateAndDrawRoute(
+                CalculateAndDrawRoute(
                     origin: rider.Value,
                     dest: _rideCache.ActiveMeetupPoint,
                     meetup: null,
                     routeColor: colorProfile.RouteColor,
                     riderName: rider.Key,
-                    isMainRoute: false);
+                    isMainRoute: false).SafeFireAndForget();
             }
         }
     }   
@@ -1108,151 +1072,145 @@ public partial class LobbyPage : ContentPage
         if (ActionDrawer.TranslationY >= (_drawerFullHeight - _drawerPeekHeight) - 10)
             ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
     }
-
-    // --- STATE MACHINE ---
-    // 🔄 REPLACE entire method
-    private async Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "", bool forceSync = false)
+    // --- STATE MACHINE --
+    private Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "", bool forceSync = false)
     {
-        if (!forceSync && this.groupDetails.CurrentState == newState) return;
-
-        // =====================================================================
-        // 4. THE ULTIMATE SHIELD: Prevent silent background loops from 
-        // destroying an active navigation session.
-        // =====================================================================
-        if (this.groupDetails.CurrentState >= GroupState.Navigating && newState < GroupState.Navigating)
-        {
-            // If the state is downgrading, but there is no explicit human "triggerUser", 
-            // it is a network glitch. Reject it!
-            if (string.IsNullOrEmpty(triggerUser) && !forceSync)
-            {
-                AppLogger.Info("State", $"Blocked illegal state downgrade to {newState} due to missing human trigger.");
-                return;
-            }
-        }
-
-        this.groupDetails.CurrentState = newState;
+        // We offload the logic to the pure C# engine. It handles all validation!
+        _stateMachine.TryTransition(newState, triggerUser, reason, forceSync);
+        return Task.CompletedTask;
+    }
+    // =====================================================================
+    // UI STATE RENDERER LAYER
+    // =====================================================================
+    private void OnStateTransitioned(object sender, StateTransitionEventArgs e)
+    {
+        // 1. Keep our local models in sync
+        this.groupDetails.CurrentState = e.NewState;
         _stateStartTime = DateTime.Now;
 
+        // 2. Safely push all visual changes to the UI Thread
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            switch (newState)
+            switch (e.NewState)
             {
-                case GroupState.DestinationSet:
-                    OnDestinationSet(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
-                    DestinationSearchControl.SetDestinationText(groupDetails.DestName);
-                    // Toggle Headers
-                    IdleHeader.IsVisible = false;
-                    PreNavigationHeader.IsVisible = true;
-                    TelemetryHeaderControl.IsVisible = false;
-
-                    DestinationSearchControl.SetState(isVisible: _amIAdmin, isReadOnly: true, showBanner: false, showConfirm: false);
-
-                    ActionDrawer.IsVisible = true;
-                    ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
-                    FloatingMapControls.IsVisible = true;
-
-                    break;
-
+                case GroupState.DestinationSet: RenderDestinationSetState(); break;
                 case GroupState.NotNavigating:
-                case GroupState.Completed:
-                    // Toggle Headers
-                    IdleHeader.IsVisible = true;
-                    PreNavigationHeader.IsVisible = false;
-                    TelemetryHeaderControl.IsVisible = false;
-
-                    // THE FIX: Show appropriate header message based on Role
-                    AdminIdleHeader.IsVisible = _amIAdmin;
-                    RiderIdleHeader.IsVisible = !_amIAdmin;
-
-                    ActionDrawer.IsVisible = true;
-                    ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
-
-                    FloatingMapControls.IsVisible = false;
-#if DEBUG
-                    //SimSpeedFrame.IsVisible = false;
-#endif
-                    DestinationSearchControl.Reset();
-                    DestinationSearchControl.SetState(isVisible: _amIAdmin, isReadOnly: false, showBanner: _amIAdmin, showConfirm: true);
-
-                    // BULLETPROOF CLEANUP
-                    NextTurnOverlay.IsVisible = false;
-                    LiveMap.MapElements.Clear();
-                    LiveMap.Pins.Clear();
-                    _activeRouteLine = null;
-                    _activeRouteSteps.Clear();
-                    ClearOtherRiderRoutes();
-                    _poiManager.ClearTemporaryPois();
-
-                    _locationTracker?.StopTracking();
-                    _simulatorService.StopSimulation();
-
-                    FitMapToBounds();
-                    ToggleNavigationPerspective(false);
-#if ANDROID
-                    MainActivity.IsInNavigationMode = false;
-#endif
-                    if (newState == GroupState.Completed)
-                        _voiceEngine.Speak($"Navigation completed by {triggerUser}. Great ride!");
-
-                    UpdateAdminButtonsVisibility();
-
-                    //if (MySpeedLabel != null) MySpeedLabel.Text = "0 km/h";
-                    break;
-
-                case GroupState.Navigating:
-                    // Toggle Headers
-                    IdleHeader.IsVisible = false;
-                    PreNavigationHeader.IsVisible = false;
-                    TelemetryHeaderControl.IsVisible = true;
-
-                    // Auto-switch drawer to the "Safety" Actions tab
-                    OnDrawerTabClicked(TabActionsBtn, EventArgs.Empty);
-
-                    double maxTranslation = _drawerFullHeight - _drawerPeekHeight;
-                    _ = ActionDrawer.TranslateToAsync(0, maxTranslation, 250, Easing.CubicOut);
-
-                    DestinationSearchControl.SetState(isVisible: false, isReadOnly: false, showBanner: false, showConfirm: false);
-
-                    FloatingMapControls.IsVisible = true;
-#if DEBUG
-                    //SimSpeedFrame.IsVisible = true;
-#endif
-
-                    TabAdminBtn.IsVisible = _amIAdmin;
-                    TelemetryHeaderControl.SetDestinationName(groupDetails.DestName);
-                    SetActionButtonsEnabled(true);
-                    _locationTracker?.StartTracking(GroupNameLabel.Text, Riders.Count(x => x.IsOnline));
-
-#if ANDROID
-                    MainActivity.IsInNavigationMode = true;
-#endif
-                    if (string.IsNullOrEmpty(triggerUser))
-                        _voiceEngine.Speak("Navigation active. Ride safe!");
-                    break;
-
+                case GroupState.Completed: RenderIdleState(e); break;
+                case GroupState.Navigating: RenderNavigatingState(e); break;
                 case GroupState.PausedBreak:
                 case GroupState.PausedHazard:
-                case GroupState.PausedMechanical:
-                    _simulatorService.StopSimulation();
-                    _locationTracker?.StopTracking();
-                    SetActionButtonsEnabled(false);
-#if DEBUG
-                    //SimSpeedFrame.IsVisible = false;
-#endif
-
-                    string context = newState == GroupState.PausedBreak ? "for a break" :
-                                     newState == GroupState.PausedHazard ? "due to a hazard" :
-                                     "for mechanical repairs";
-
-                    string spokenReason = string.IsNullOrEmpty(reason) ? context : reason;
-                    _voiceEngine.Speak($"Navigation paused by {triggerUser} {spokenReason}. Tracking suspended.");
-
-                    ActionDrawer.TranslateToAsync(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
-                    break;
+                case GroupState.PausedMechanical: RenderPausedState(e); break;
             }
+
             UpdateAdminButtonsVisibility();
         });
-        _ = _rideCache.SaveSnapshotAsync();
+
+        // 3. Snapshot the new state to the SQLite/Disk Outbox
+        _rideCache.SaveSnapshotAsync().SafeFireAndForget();
+    }
+
+    private void RenderDestinationSetState()
+    {
+        OnDestinationSet(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
+        DestinationSearchControl.SetDestinationText(groupDetails.DestName);
+
+        IdleHeader.IsVisible = false;
+        PreNavigationHeader.IsVisible = true;
+        TelemetryHeaderControl.IsVisible = false;
+
+        DestinationSearchControl.SetState(isVisible: _amIAdmin, isReadOnly: true, showBanner: false, showConfirm: false);
+
+        ActionDrawer.IsVisible = true;
+        ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+        FloatingMapControls.IsVisible = true;
+    }
+
+    private void RenderIdleState(StateTransitionEventArgs e)
+    {
+        IdleHeader.IsVisible = true;
+        PreNavigationHeader.IsVisible = false;
+        TelemetryHeaderControl.IsVisible = false;
+
+        AdminIdleHeader.IsVisible = _amIAdmin;
+        RiderIdleHeader.IsVisible = !_amIAdmin;
+
+        ActionDrawer.IsVisible = true;
+        ActionDrawer.TranslationY = _drawerFullHeight - _drawerPeekHeight;
+        FloatingMapControls.IsVisible = false;
+
+        DestinationSearchControl.Reset();
+        DestinationSearchControl.SetState(isVisible: _amIAdmin, isReadOnly: false, showBanner: _amIAdmin, showConfirm: true);
+
+        // Map Cleanup
+        NextTurnOverlay.IsVisible = false;
+        LiveMap.MapElements.Clear();
+        LiveMap.Pins.Clear();
+        _activeRouteLine = null;
+        lock (_routeStateLock) { _activeRouteSteps.Clear(); }
+        ClearOtherRiderRoutes();
+        _poiManager.ClearTemporaryPois();
+
+        _locationTracker?.StopTracking();
+        _simulatorService.StopSimulation();
+
+        FitMapToBounds();
+        ToggleNavigationPerspective(false);
+
+#if ANDROID
+        MainActivity.IsInNavigationMode = false;
+#endif
+
+        if (e.NewState == GroupState.Completed && !string.IsNullOrEmpty(e.TriggerUser))
+        {
+            _voiceEngine.Speak($"Navigation completed by {e.TriggerUser}. Great ride!");
+        }
+    }
+
+    private void RenderNavigatingState(StateTransitionEventArgs e)
+    {
+        IdleHeader.IsVisible = false;
+        PreNavigationHeader.IsVisible = false;
+        TelemetryHeaderControl.IsVisible = true;
+
+        OnDrawerTabClicked(TabActionsBtn, EventArgs.Empty);
+
+        double maxTranslation = _drawerFullHeight - _drawerPeekHeight;
+        _ = ActionDrawer.TranslateToAsync(0, maxTranslation, 250, Easing.CubicOut);
+
+        DestinationSearchControl.SetState(isVisible: false, isReadOnly: false, showBanner: false, showConfirm: false);
+        FloatingMapControls.IsVisible = true;
+        TabAdminBtn.IsVisible = _amIAdmin;
+
+        TelemetryHeaderControl.SetDestinationName(groupDetails.DestName);
+        SetActionButtonsEnabled(true);
+        _locationTracker?.StartTracking(GroupNameLabel.Text, Riders.Count(x => x.IsOnline));
+
+#if ANDROID
+        MainActivity.IsInNavigationMode = true;
+#endif
+
+        if (string.IsNullOrEmpty(e.TriggerUser) && e.OldState < GroupState.Navigating)
+        {
+            _voiceEngine.Speak("Navigation active. Ride safe!");
+        }
+    }
+
+    private void RenderPausedState(StateTransitionEventArgs e)
+    {
+        _simulatorService.StopSimulation();
+        _locationTracker?.StopTracking();
+        SetActionButtonsEnabled(false);
+
+        string context = e.NewState == GroupState.PausedBreak ? "for a break" :
+                         e.NewState == GroupState.PausedHazard ? "due to a hazard" :
+                         "for mechanical repairs";
+
+        string spokenReason = string.IsNullOrEmpty(e.Reason) ? context : e.Reason;
+
+        if (!string.IsNullOrEmpty(e.TriggerUser))
+            _voiceEngine.Speak($"Navigation paused by {e.TriggerUser} {spokenReason}. Tracking suspended.");
+
+        _ = ActionDrawer.TranslateToAsync(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
     }
 
     // --- EVENT TRIGGERS ---
@@ -1505,16 +1463,45 @@ public partial class LobbyPage : ContentPage
         DrawerActionsTab.Opacity = isEnabled ? 1.0 : 0.4;
     }
 
+    // 🔄 REPLACE existing method
+    // 🔄 REPLACE existing method
     private void FitMapToBounds(List<Location> points = null)
     {
-        var targetPoints = points ?? MapPins.Select(p => p.Location).ToList();
+        if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested) return;
 
+        // THE FIX: We must extract the locations safely on the Main Thread 
+        // to create an immutable snapshot before handing it to the background!
+        if (points == null)
+        {
+            if (MainThread.IsMainThread)
+            {
+                RunMapMath(MapPins.Select(p => p.Location).ToList());
+            }
+            else
+            {
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    RunMapMath(MapPins.Select(p => p.Location).ToList());
+                });
+            }
+        }
+        else
+        {
+            RunMapMath(points);
+        }
+    }
+
+    private void RunMapMath(List<Location> snapshotPoints)
+    {
         Task.Run(() =>
         {
-            var region = _mapCameraEngine.CalculateBoundingRegion(targetPoints);
-            if (region != null)
+            var region = _mapCameraEngine.CalculateBoundingRegion(snapshotPoints);
+
+            if (region != null && !_lifecycleCts.IsCancellationRequested)
+            {
                 MainThread.BeginInvokeOnMainThread(() => LiveMap.MoveToRegion(region));
-        });
+            }
+        }, _lifecycleCts.Token).SafeFireAndForget(ex => AppLogger.Error("UI", ex, "FitMapToBounds crashed."));
     }
     private async void OnConnectionStatusChanged(string status, Color color)
     {
@@ -2116,44 +2103,18 @@ public partial class LobbyPage : ContentPage
         if (groupDetails?.CurrentState == GroupState.DestinationSet)
         {
             _rideCache.HardResetAll();
-            _ = ChangeGroupState(GroupState.NotNavigating, _myName);
+            ChangeGroupState(GroupState.NotNavigating, _myName).SafeFireAndForget();
         }
     }
 
 
+    // 🔄 REPLACE existing method
     private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
     {
-        Task.Run(() =>
-        {
-            var status = _telemetryEngine.CalculateRiderStatus(riderId, new Location(lat, lng), _lastKnownLocation, _rideCache, groupDetails?.Settings);
+        if (_rideCache.RunningInBackground) return; // CPU Shield
 
-            if (_rideCache.RunningInBackground) return;
-
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                var riderModel = Riders.FirstOrDefault(r => r.Name != null && r.Name.StartsWith(riderId));
-                if (riderModel != null)
-                {
-                    riderModel.SpeedStr = status.SpeedStr;
-                    riderModel.StatusStr = status.StatusStr;
-                    riderModel.StatusColor = status.StatusColor;
-                }
-
-                if (_riderViewModels.TryGetValue(riderId, out var existingVm))
-                {
-                    existingVm.Location = status.InterpolatedLocation;
-                    existingVm.Heading = heading;
-                    existingVm.Speed = status.SpeedStr;
-                }
-                else
-                {
-                    var colorProfile = GetColorsForRider(riderId);
-                    var newVm = new RiderPin(MapPinClicked) { Username = riderId, Speed = status.SpeedStr, Location = status.InterpolatedLocation, Heading = heading, PinColor = colorProfile.PinColor, ZIndex = 50F };
-                    _riderViewModels.TryAdd(riderId, newVm);
-                    MapPins.Add(newVm);
-                }
-            });
-        });
+        // Instantly queue the network update. No blocking!
+        _networkLocationChannel.Writer.TryWrite((riderId, lat, lng, heading));
     }
     private async Task InitializeLocalTrackingAsync()
     {
@@ -2326,5 +2287,139 @@ public partial class LobbyPage : ContentPage
     {
         // Simple and standard MAUI navigation: Pop this page off the stack!
         await Navigation.PopAsync();
+    }
+    // =====================================================================
+    // SEQUENTIAL CONSUMER LOOPS
+    // =====================================================================
+    private async Task ProcessLocalLocationsAsync(CancellationToken token)
+    {
+        try
+        {
+            await foreach (var e in _localLocationChannel.Reader.ReadAllAsync(token))
+            {
+                await ProcessSingleLocalLocationAsync(e);
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task ProcessNetworkLocationsAsync(CancellationToken token)
+    {
+        try
+        {
+            await foreach (var update in _networkLocationChannel.Reader.ReadAllAsync(token))
+            {
+                // No more Task.Run! Evaluated sequentially.
+                var status = _telemetryEngine.CalculateRiderStatus(update.RiderId, new Location(update.Lat, update.Lng), _lastKnownLocation, _rideCache, groupDetails?.Settings);
+
+                if (_rideCache.RunningInBackground) continue;
+
+                await MainThread.InvokeOnMainThreadAsync(() =>
+                {
+                    var riderModel = Riders.FirstOrDefault(r => r.Name != null && r.Name.StartsWith(update.RiderId));
+                    if (riderModel != null)
+                    {
+                        riderModel.SpeedStr = status.SpeedStr;
+                        riderModel.StatusStr = status.StatusStr;
+                        riderModel.StatusColor = status.StatusColor;
+                    }
+
+                    if (_riderViewModels.TryGetValue(update.RiderId, out var existingVm))
+                    {
+                        existingVm.Location = status.InterpolatedLocation;
+                        existingVm.Heading = update.Heading;
+                        existingVm.Speed = status.SpeedStr;
+                    }
+                    else
+                    {
+                        var colorProfile = GetColorsForRider(update.RiderId);
+                        var newVm = new RiderPin(MapPinClicked) { Username = update.RiderId, Speed = status.SpeedStr, Location = status.InterpolatedLocation, Heading = update.Heading, PinColor = colorProfile.PinColor, ZIndex = 50F };
+                        _riderViewModels.TryAdd(update.RiderId, newVm);
+                        MapPins.Add(newVm);
+                    }
+                });
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+    private async Task ProcessSingleLocalLocationAsync(LocalLocationUpdate e)
+    {
+        double currentSpeedKmh = e.SpeedMph * 1.60934;
+
+        if (!_rideCache.RunningInBackground)
+        {
+            EvaluateDayNightCycle(e.Location);
+            await MainThread.InvokeOnMainThreadAsync(() =>
+            {
+                LocationDisabledOverlay.Hide();
+                if (_myPinVm != null)
+                {
+                    string newSpeedStr = $"{Math.Round(currentSpeedKmh)} km/h";
+                    if (currentSpeedKmh > _rideCache.MaxSpeedKmh)
+                    {
+                        _rideCache.MaxSpeedKmh = currentSpeedKmh;
+                        TelemetryHeaderControl.UpdateTopSpeed($"{Math.Round(_rideCache.MaxSpeedKmh)} km/h");
+                    }
+
+                    TelemetryHeaderControl.UpdateSpeed(newSpeedStr);
+                    AnimatePinMovement(_myPinVm, e.Location, e.Heading, 1000);
+                    _myPinVm.Speed = newSpeedStr;
+
+                    var myModel = Riders.FirstOrDefault(r => r.GoogleId == CurrentGoogleId);
+                    if (myModel != null)
+                    {
+                        myModel.SpeedStr = newSpeedStr;
+                        myModel.StatusStr = "Local";
+                        myModel.StatusColor = Colors.Transparent;
+                    }
+                }
+
+                if (MapFollowButton.IsVisible && (DateTime.Now - _lastAutoFrameTime).TotalSeconds > 15)
+                {
+                    _lastAutoFrameTime = DateTime.Now;
+                    FitMapToBounds();
+                }
+            });
+        }
+
+        _lastKnownLocation = e.Location;
+
+        if (ShouldBroadcastToNetwork(e.Location, currentSpeedKmh))
+        {
+            _lastNetworkBroadcastTime = DateTime.UtcNow;
+            _lastNetworkBroadcastLocation = e.Location;
+
+            // This relies on your safe Outbox (SignalRService) so we don't need a try/catch here
+            await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading);
+        }
+
+        if (groupDetails?.CurrentState == GroupState.Navigating)
+        {
+            var lastCrumb = _rideCache.DrivenBreadcrumbs.LastOrDefault();
+            if (lastCrumb == null || Location.CalculateDistance(lastCrumb, e.Location, DistanceUnits.Kilometers) > 0.05)
+            {
+                lock (_rideCache.DrivenBreadcrumbs)
+                {
+                    _rideCache.DrivenBreadcrumbs.Add(e.Location);
+                }
+            }
+
+            e.Location.Speed = currentSpeedKmh / 3.6;
+            e.Location.Course = e.Heading;
+
+            if (_currentNavMode == MapNavigationMode.Immersive)
+            {
+                await TrimRouteVisuals(e.Location);
+            }
+            else
+            {
+                if (_rideCache.LastOdometerLocation != null)
+                {
+                    double stepDist = Location.CalculateDistance(_rideCache.LastOdometerLocation, e.Location, DistanceUnits.Kilometers);
+                    if (stepDist > 0.01 && stepDist < 20) _rideCache.CumulativeDistanceKm += stepDist;
+                }
+                _rideCache.LastOdometerLocation = e.Location;
+            }
+        }
     }
 }
