@@ -42,6 +42,8 @@ public class SignalRService
     // --- NEW: DYNAMIC ROUTING, MEETUPS & SETTINGS EVENTS ---
     // ==========================================================
     public event Action<GroupSettingsDto> GroupSettingsUpdated;
+    // Add this state flag near the top of your SignalRService class
+    private bool _isBackgroundListenerMode = false;
 
     public SignalRService()
     {
@@ -218,6 +220,16 @@ public class SignalRService
         _hubConnection.On<string>("ReceiveRouteDeviation", (user) => RouteDeviationAlert?.Invoke(user));
         _hubConnection.On<double, double>("ReceiveMeetupPoint", (lat, lng) => MeetupPointSet?.Invoke(lat, lng));
         _hubConnection.On<GroupSettingsDto>("ReceiveGroupSettings", (settings) => GroupSettingsUpdated?.Invoke(settings));
+        _hubConnection.On<string, double, double, double>("UpdateRiderLocation", (riderId, lat, lng, heading) =>
+        {
+            // =====================================================================
+            // THE CPU SHIELD: If Perspective #2 (Gmaps mode) is active, silently drop 
+            // incoming heavy data to save RAM and Battery!
+            // =====================================================================
+            if (_isBackgroundListenerMode) return;
+
+            RiderLocationUpdated?.Invoke(riderId, lat, lng, heading);
+        });
     }
 
     // Explicit Hub Commands with Global Exception Handling
@@ -565,5 +577,25 @@ public class SignalRService
     {
         if (_hubConnection.State == HubConnectionState.Connected)
             await _hubConnection.InvokeAsync("RelayArrivalAlert", groupName);
+    }
+    public async Task ToggleBackgroundListenerMode(string groupName, bool isBackgroundMode)
+    {
+        _isBackgroundListenerMode = isBackgroundMode;
+
+        if (_hubConnection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                // OPTIONAL: If you add this method to your backend C# Hub, it will stop the 
+                // server from even sending the data to this specific user, saving network bandwidth.
+                // If the backend method doesn't exist yet, this just silently fails and 
+                // relies on the local CPU shield below.
+                await _hubConnection.InvokeAsync("ToggleBackgroundListener", groupName, isBackgroundMode);
+            }
+            catch
+            {
+                // Swallow exception if backend Hub doesn't have this method yet.
+            }
+        }
     }
 }

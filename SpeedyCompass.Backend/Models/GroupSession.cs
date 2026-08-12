@@ -37,4 +37,6 @@ public class GroupSettings
     public bool EnableDynamicRouting { get; set; } = true;
     public int MinUpdateDistanceMeters { get; internal set; }
     public int MaxUpdateDistanceMeters { get; internal set; }
+    public int DeviationSensitivityMeters { get; internal set; }
+    public ConvoySyncProtocol ConvoyUpdateProtocol { get; internal set; }
 }

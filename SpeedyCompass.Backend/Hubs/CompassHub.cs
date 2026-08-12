@@ -181,7 +181,17 @@ public class CompassHub : Hub
                 MaxLagDistanceMeters = initialSettings.MaxLagDistanceMeters,
                 SplinterWarningDistanceMeters = initialSettings.SplinterWarningDistanceMeters,
                 PitstopDistanceMeters = initialSettings.PitstopDistanceMeters,
-                EnableDynamicRouting = initialSettings.EnableDynamicRouting
+                EnableDynamicRouting = initialSettings.EnableDynamicRouting,
+
+                // =====================================================================
+                // THE FIX: Add the new Architectural properties during creation!
+                // =====================================================================
+                MinUpdateDistanceMeters = initialSettings.MinUpdateDistanceMeters,
+                MaxUpdateDistanceMeters = initialSettings.MaxUpdateDistanceMeters,
+                DeviationSensitivityMeters = initialSettings.DeviationSensitivityMeters,
+
+                // Optional: If you added ConvoyUpdateProtocol to your Backend Model, add it here too:
+                ConvoyUpdateProtocol = initialSettings.ConvoyUpdateProtocol
             },
             CurrentState = GroupState.NotNavigating
         };
@@ -201,6 +211,7 @@ public class CompassHub : Hub
         await _state.GroupMembers.InsertOneAsync(member);
 
         await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"{groupName}_ActiveNav");
 
         await Clients.Caller.SendAsync("RosterUpdated", await GetGroupRoster(groupName));
     }
@@ -248,6 +259,7 @@ public class CompassHub : Hub
         }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, groupName);
+        await Groups.AddToGroupAsync(Context.ConnectionId, $"{groupName}_ActiveNav");
 
         var roster = await GetGroupRoster(groupName);
         await Clients.Group(groupName).SendAsync("RosterUpdated", roster);
@@ -300,6 +312,7 @@ public class CompassHub : Hub
         if (rider != null)
         {
             await Groups.RemoveFromGroupAsync(Context.ConnectionId, rider.GroupName);
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"{rider.GroupName}_ActiveNav");
             await _state.GroupMembers.DeleteOneAsync(m => m.Id == rider.Id);
 
             var session = await _state.GetGroupCachedAsync(rider.GroupName);
@@ -397,8 +410,9 @@ public class CompassHub : Hub
     // --- STRIPPED DOWN: LIGHTNING FAST LOCATION UPDATE ---
     public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading)
     {
+        string activeNavGroup = $"{groupName}_ActiveNav";
         // 1. Instantly broadcast to others (Zero math delay)
-        await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
+        await Clients.GroupExcept(activeNavGroup, Context.ConnectionId).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
 
         // 2. Fire-and-forget DB Update
         var currentRider = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
@@ -544,6 +558,7 @@ public class CompassHub : Hub
                 // --- NEW ---
                 MinUpdateDistanceMeters = session.Settings.MinUpdateDistanceMeters,
                 MaxUpdateDistanceMeters = session.Settings.MaxUpdateDistanceMeters,
+                DeviationSensitivityMeters = session.Settings.DeviationSensitivityMeters,
                 GroupName = session.GroupName
             };
         }
@@ -568,7 +583,8 @@ public class CompassHub : Hub
                 .Set(g => g.Settings.PitstopDistanceMeters, newSettings.PitstopDistanceMeters)
                 .Set(g => g.Settings.EnableDynamicRouting, newSettings.EnableDynamicRouting)
                 .Set(g => g.Settings.MinUpdateDistanceMeters, newSettings.MinUpdateDistanceMeters)
-                .Set(g => g.Settings.MaxUpdateDistanceMeters, newSettings.MaxUpdateDistanceMeters);
+                .Set(g => g.Settings.MaxUpdateDistanceMeters, newSettings.MaxUpdateDistanceMeters)
+                .Set(g => g.Settings.DeviationSensitivityMeters, newSettings.DeviationSensitivityMeters);
 
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
 
@@ -644,6 +660,7 @@ public class CompassHub : Hub
         }
 
         await Groups.AddToGroupAsync(newConnectionId, groupName);
+        await Groups.AddToGroupAsync(newConnectionId, $"{groupName}_ActiveNav");
         await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
 
         //if (session != null)
@@ -793,6 +810,26 @@ public class CompassHub : Hub
             {
                 await Clients.GroupExcept(groupName, Context.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", "A new meetup point has been established.");
             }
+        }
+    }
+    // CompassHub.cs
+
+    public async Task ToggleBackgroundListener(string groupName, bool isBackgroundMode)
+    {
+        // We define a dedicated sub-group for high-frequency GPS traffic
+        string activeNavGroup = $"{groupName}_ActiveNav";
+
+        if (isBackgroundMode)
+        {
+            // 1. Remove the user from the high-frequency stream.
+            // They are still in the main 'groupName', so they will still receive 
+            // Emergency Alerts, Voice Prompts, and Navigation Pauses!
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, activeNavGroup);
+        }
+        else
+        {
+            // 2. Put them back in the high-frequency stream (Immersive Mode)
+            await Groups.AddToGroupAsync(Context.ConnectionId, activeNavGroup);
         }
     }
 }

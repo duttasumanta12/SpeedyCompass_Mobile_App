@@ -51,10 +51,21 @@
                 </StackLayout>
             </VerticalStackLayout>
 
-            <!-- Right: Arrival Time -->
-            <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="End" Spacing="2">
-                <Label Text="Arrival time" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
-                <Label x:Name="MyEtaLabel" Text="--:--" FontSize="15" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="End"/>
+            <!-- Right: Arrival Time & Top Speed -->
+            <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="End" Spacing="8">
+
+                <!-- Arrival Time -->
+                <VerticalStackLayout Spacing="0">
+                    <Label Text="Arrival time" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
+                    <Label x:Name="MyEtaLabel" Text="--:--" FontSize="15" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="End"/>
+                </VerticalStackLayout>
+
+                <!-- NEW: Top Speed -->
+                <VerticalStackLayout Spacing="0">
+                    <Label Text="Top Speed" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
+                    <Label x:Name="MyTopSpeedLabel" Text="0 km/h" FontSize="13" FontAttributes="Bold" TextColor="#D32F2F" HorizontalOptions="End"/>
+                </VerticalStackLayout>
+
             </VerticalStackLayout>
         </Grid>
     </Grid>

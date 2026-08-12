@@ -4,6 +4,7 @@ public class DeviceCapabilityService
 {
     public async Task<bool> RequestRequiredPermissionsAsync()
     {
+        // ... (Your existing location/mic/notification code stays exactly the same) ...
         var locStatus = await Permissions.CheckStatusAsync<Permissions.LocationWhenInUse>();
         if (locStatus != PermissionStatus.Granted)
         {
@@ -28,17 +29,44 @@ public class DeviceCapabilityService
     public async Task RequestBackgroundExecutionOverridesAsync(Page parentPage)
     {
 #if ANDROID
-        var pm = (global::Android.OS.PowerManager)global::Android.App.Application.Context.GetSystemService(global::Android.Content.Context.PowerService);
-        if (!pm.IsIgnoringBatteryOptimizations(global::Android.App.Application.Context.PackageName))
+        var context = global::Android.App.Application.Context;
+        var pm = (global::Android.OS.PowerManager)context.GetSystemService(global::Android.Content.Context.PowerService);
+        var packageName = context.PackageName;
+
+        if (!pm.IsIgnoringBatteryOptimizations(packageName))
         {
-            bool accept = await parentPage.DisplayAlert("Background Tracking", "To keep navigation active while your screen is locked, please allow unrestricted background activity on the next screen.", "OK", "Cancel");
+            bool accept = await parentPage.DisplayAlert(
+                "Background Tracking",
+                "To keep navigation active while your screen is locked, please allow unrestricted background activity on the next screen.",
+                "OK", "Cancel");
+
             if (accept)
             {
-                var intent = new global::Android.Content.Intent();
-                intent.SetAction(global::Android.Provider.Settings.ActionRequestIgnoreBatteryOptimizations);
-                intent.SetData(global::Android.Net.Uri.Parse("package:" + global::Android.App.Application.Context.PackageName));
-                intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
-                global::Android.App.Application.Context.StartActivity(intent);
+                try
+                {
+                    // Attempt 1: Direct dialog (Standard Android)
+                    var intent = new global::Android.Content.Intent();
+                    intent.SetAction(global::Android.Provider.Settings.ActionRequestIgnoreBatteryOptimizations);
+                    intent.SetData(global::Android.Net.Uri.Parse("package:" + packageName));
+                    intent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
+                    context.StartActivity(intent);
+                }
+                catch (Exception)
+                {
+                    // Attempt 2: Fallback for Xiaomi/Huawei/Samsung restrictive skins
+                    try
+                    {
+                        var fallbackIntent = new global::Android.Content.Intent();
+                        fallbackIntent.SetAction(global::Android.Provider.Settings.ActionIgnoreBatteryOptimizationSettings);
+                        fallbackIntent.AddFlags(global::Android.Content.ActivityFlags.NewTask);
+                        context.StartActivity(fallbackIntent);
+                    }
+                    catch
+                    {
+                        // If everything fails, silently swallow so the app doesn't crash.
+                        // They will just drop offline when their screen turns off.
+                    }
+                }
             }
         }
 #endif

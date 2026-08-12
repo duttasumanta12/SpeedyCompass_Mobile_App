@@ -2,8 +2,27 @@
 <ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="SpeedyCompass.Controls.MapSettingsTabView">
-    <VerticalStackLayout Spacing="15">
+
+    <VerticalStackLayout Spacing="15" Padding="0,0,10,0">
         <Label Text="Map &amp; Navigation" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+
+        <!-- Architectural standard standard Master Switch: Navigation Perspective -->
+        <!-- Choosing Perspective #2 architectural standard automatically architectural standard architectural architectural shuts down standard loops for battery standard savings standard standard. -->
+        <Border BackgroundColor="{AppThemeBinding Light=#FFEBEB, Dark=#331111}" Stroke="Red" StrokeThickness="1" Padding="15">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="12"/>
+            </Border.StrokeShape>
+            <Grid ColumnDefinitions="*, Auto">
+                <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
+                    <Label Text="Immersive Nav Mode" FontAttributes="Bold" FontSize="14" TextColor="Red"/>
+                    <Label Text="Runs active route and voice copilot. Turn off for passive background sharing (Saves Battery)." FontSize="11" TextColor="Gray"/>
+                </VerticalStackLayout>
+                <Switch x:Name="NavModeMasterSwitch" Grid.Column="1" OnColor="Red" Toggled="OnNavModeMasterToggled" VerticalOptions="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- Divider -->
+        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#E0E0E0, Dark=#333}" Margin="0,5"/>
 
         <!-- Map Style Selector -->
         <StackLayout Spacing="5">
@@ -33,8 +52,8 @@
             </Grid>
         </StackLayout>
 
-        <!-- Camera Physics -->
-        <StackLayout Spacing="10" Margin="0,10,0,0">
+        <!-- Camera Physics (Visually standard standard disabled architectural in standard standard Background Sharing mode standard standard) -->
+        <StackLayout x:Name="CameraPhysicsContainer" Spacing="10" Margin="0,10,0,0">
             <Label Text="Camera Physics" FontAttributes="Bold" FontSize="14"/>
             <Grid ColumnDefinitions="*, Auto">
                 <StackLayout Grid.Column="0" VerticalOptions="Center">
@@ -52,11 +71,70 @@
             </Grid>
             <Grid ColumnDefinitions="*, Auto">
                 <StackLayout Grid.Column="0" VerticalOptions="Center">
-                    <Label Text="Voice Navigation" />
-                    <Label Text="Enables/Disables map navigation instructions" FontSize="11" TextColor="Gray"/>
+                    <Label Text="Voice Navigation Copilot" />
+                    <Label Text="Enables map navigation vocal instructions." FontSize="11" TextColor="Gray"/>
                 </StackLayout>
                 <Switch x:Name="VoiceNavSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnPreferenceToggled" />
             </Grid>
         </StackLayout>
+
+        <!-- NEW: Battery & Background Optimizations -->
+        <StackLayout x:Name="BackgroundOptContainer" Spacing="10" Margin="0,10,0,0">
+            <Label Text="Background Optimizations" FontAttributes="Bold" FontSize="14"/>
+
+            <StackLayout Spacing="5">
+                <Label Text="GPS Aggressiveness" FontAttributes="Bold" FontSize="12"/>
+                <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1E1E1E}" HeightRequest="40">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="8"/>
+                    </Border.StrokeShape>
+                    <Picker x:Name="GpsAggroPicker" SelectedIndexChanged="OnGpsAggroChanged" FontSize="13" SelectedIndex="0">
+                        <Picker.Items>
+                            <x:String>Real-Time (Follows Group Protocol)</x:String>
+                            <x:String>Eco-Tracker (15s Heartbeat)</x:String>
+                            <x:String>Custom Configuration</x:String>
+                        </Picker.Items>
+                    </Picker>
+                </Border>
+            </StackLayout>
+
+            <StackLayout x:Name="CustomGpsContainer" IsVisible="False" Spacing="5" Margin="0,5,0,5">
+                <Border Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" StrokeThickness="1" BackgroundColor="{AppThemeBinding Light=#F0F8FF, Dark=#1A2633}" Padding="15">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="12"/>
+                    </Border.StrokeShape>
+                    <VerticalStackLayout Spacing="10">
+                        <StackLayout Spacing="5">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <Label Text="Custom Min Distance" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
+                                <Label x:Name="LocalMinUpdateLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                            </Grid>
+                            <Slider x:Name="LocalMinUpdateSlider" Minimum="5" Maximum="50" Value="10" ValueChanged="OnLocalMinUpdateChanged" MinimumTrackColor="DodgerBlue"/>
+                        </StackLayout>
+
+                        <StackLayout Spacing="5">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <Label Text="Custom Max Distance" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
+                                <Label x:Name="LocalMaxUpdateLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                            </Grid>
+                            <Slider x:Name="LocalMaxUpdateSlider" Minimum="50" Maximum="500" Value="100" ValueChanged="OnLocalMaxUpdateChanged" MinimumTrackColor="DodgerBlue"/>
+                        </StackLayout>
+                    </VerticalStackLayout>
+                </Border>
+            </StackLayout>
+
+            <StackLayout Spacing="5">
+                <Grid ColumnDefinitions="*,Auto">
+                    <Label Text="Auto-Throttle Battery Threshold" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
+                    <Label x:Name="BatteryThrottleLabel" Grid.Column="1" Text="20%" TextColor="Red" FontAttributes="Bold"/>
+                </Grid>
+                <Label Text="Forces Eco-Tracker if battery drops below this % while in Background Sharing mode." FontSize="11" TextColor="Gray"/>
+                <Slider x:Name="BatteryThrottleSlider" Minimum="5" Maximum="50" Value="20" ValueChanged="OnBatteryThrottleChanged" MinimumTrackColor="Red"/>
+            </StackLayout>
+        </StackLayout>
+
+        <!-- Bottom padding for scrollability architectural -->
+        <BoxView HeightRequest="20" Color="Transparent"/>
+
     </VerticalStackLayout>
 </ContentView>

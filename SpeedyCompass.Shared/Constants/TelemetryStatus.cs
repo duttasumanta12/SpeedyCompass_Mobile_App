@@ -20,4 +20,17 @@
         PausedMechanical, // Forced stop due to bike issues
         Completed         // Successfully arrived at the destination
     }
+    public static class PreferencesConstants
+    {
+        // local map visual standard toggles (Phase 1/2 reuse)
+        public const string Map_Traffic = "Map_Traffic";
+        public const string Map_Style = "Map_Style";
+        public const string Map_HeadingUp = "Map_HeadingUp";
+        public const string Map_VoiceNav = "Map_VoiceNav";
+
+        // standard Local optimizations (The new battery standard stuff) standard
+        public const string Map_NavigationMode = "Map_NavigationMode"; // Perspective Choice standard
+        public const string Map_GPSUpdateAggressiveness = "Map_GPSUpdateAggressiveness";
+        public const string Map_BackgroundBatteryThrottlePercentage = "Map_BackgroundBatteryThrottlePercentage";
+    }
 }

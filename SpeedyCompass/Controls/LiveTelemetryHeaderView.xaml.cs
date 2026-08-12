@@ -48,4 +48,12 @@ public partial class LiveTelemetryHeaderView : ContentView
             if (MySpeedLabel != null) MySpeedLabel.Text = speedStr;
         });
     }
+    public void UpdateTopSpeed(string topSpeedText)
+    {
+        // Ensure we are updating UI on the Main Thread
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            MyTopSpeedLabel.Text = topSpeedText;
+        });
+    }
 }

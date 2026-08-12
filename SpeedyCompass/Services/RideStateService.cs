@@ -43,6 +43,7 @@ namespace SpeedyCompass.Services
         public int OffRouteStrikeCount { get; set; } = 0;
         // Stores the trail of where we have physically driven
         public List<Location> DrivenBreadcrumbs { get; set; } = new List<Location>();
+        public double TopSpeedKmh { get; set; } = 0;
 
         // ==========================================
         // EDGE CASE RESET HANDLERS
@@ -82,6 +83,7 @@ namespace SpeedyCompass.Services
             LastLagAlert = DateTime.MinValue;
             LastGroupPitstopKm = 0;
             OffRouteStrikeCount = 0;
+            TopSpeedKmh = 0;
         }
         public bool ShouldBroadcastLocation(Location currentLocation, double speedKmh)
         {

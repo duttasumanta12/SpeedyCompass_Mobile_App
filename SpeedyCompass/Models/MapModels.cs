@@ -14,7 +14,11 @@ public class RoutesRequest
     [JsonPropertyName("languageCode")] public string LanguageCode { get; set; } = "en-US";
 }
 public class RouteWaypoint { [JsonPropertyName("location")] public RouteLocation Location { get; set; } }
-public class RouteLocation { [JsonPropertyName("latLng")] public RouteLatLng LatLng { get; set; } }
+public class RouteLocation { [JsonPropertyName("latLng")] public RouteLatLng LatLng { get; set; }
+    [JsonPropertyName("heading")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Heading { get; set; }
+}
 public class RouteLatLng { [JsonPropertyName("latitude")] public double Latitude { get; set; } [JsonPropertyName("longitude")] public double Longitude { get; set; } }
 public class RoutesResponse { [JsonPropertyName("routes")] public List<RouteData> Routes { get; set; } }
 public class RouteData

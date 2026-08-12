@@ -20,6 +20,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 #if ANDROID
 using static Android.Provider.Contacts.Intents;
+using BatteryState = Microsoft.Maui.Devices.BatteryState;
 using Easing = Microsoft.Maui.Easing;
 #endif
 
@@ -64,6 +65,8 @@ public partial class LobbyPage : ContentPage
     private string _currentSpeaker = string.Empty;
     private CancellationTokenSource _pttCts;
     private int _pttTimeRemaining;
+    private MapNavigationMode _currentNavMode = MapNavigationMode.Immersive;
+    private DateTime _lastAutoFrameTime = DateTime.MinValue;
 
     // --- DRAWER STATE ---
     private double _drawerFullHeight;
@@ -126,17 +129,47 @@ public partial class LobbyPage : ContentPage
 
         double timeSinceLastSeconds = (DateTime.UtcNow - _lastNetworkBroadcastTime).TotalSeconds;
 
-        // RULE 1: Time Fallback (Always keep the connection alive every 10 seconds)
-        if (timeSinceLastSeconds >= 10) return true;
+        // =====================================================================
+        // 1. BATTERY & AGGRESSIVENESS OVERRIDE (Perspective #2 Logic)
+        // =====================================================================
+        int aggroMode = Preferences.Default.Get("Map_GPSUpdateAggressiveness", 0); // 0=RealTime, 1=Eco
+        double batteryLevel = Battery.Default.ChargeLevel * 100;
+        int batteryThrottle = Preferences.Default.Get("Map_BackgroundBatteryThrottlePercentage", 20);
 
-        // RULE 2: Dynamic Distance Formula
+        // Safety check: Are we dying and unplugged?
+        bool isLowBattery = batteryLevel > 0 && batteryLevel <= batteryThrottle && Battery.Default.State != BatteryState.Charging;
+
+        if ((aggroMode == 1 || isLowBattery))
+        {
+            // ECO-TRACKER MODE: Discard complex distance math. 
+            // Ping strictly every 15 seconds to keep the radio asleep longer.
+            return timeSinceLastSeconds >= 15;
+        }
+
+        // =====================================================================
+        // 2. STANDARD DYNAMIC DISTANCE FORMULA
+        // =====================================================================
+        if (timeSinceLastSeconds >= 10) return true; // Keepalive fallback
+
+        // 2. DYNAMIC DISTANCE FORMULA
+        double minUpdateDist = 10;
+        double maxUpdateDist = 100;
+
+        if (aggroMode == 2)
+        {
+            // USER OVERRIDE: Prioritize their custom Local Sliders
+            minUpdateDist = Preferences.Default.Get("Map_LocalMinUpdate", 10);
+            maxUpdateDist = Preferences.Default.Get("Map_LocalMaxUpdate", 100);
+        }
+        else
+        {
+            // REAL-TIME: Adhere to the Admin's group-wide protocol
+            int protocol = (int)(groupDetails?.Settings?.ConvoyUpdateProtocol ?? 0);
+            minUpdateDist = protocol == 0 ? (groupDetails?.Settings?.MinUpdateDistanceMeters ?? 10) : 50;
+            maxUpdateDist = protocol == 0 ? (groupDetails?.Settings?.MaxUpdateDistanceMeters ?? 100) : 300;
+        }
+
         double distSinceLastMeters = Location.CalculateDistance(_lastNetworkBroadcastLocation, currentLoc, DistanceUnits.Kilometers) * 1000;
-
-        int minUpdateDist = groupDetails?.Settings?.MinUpdateDistanceMeters ?? 10;
-        int maxUpdateDist = groupDetails?.Settings?.MaxUpdateDistanceMeters ?? 100;
-
-        // The Math: At 0 km/h, threshold is Min (e.g. 10m). At 100+ km/h, threshold scales to Max (e.g. 100m).
-        // This prevents high-speed highway driving from spamming the server, while keeping tight turns in cities accurate.
         double speedRatio = Math.Min(speedKmh, 100.0) / 100.0;
         double dynamicThresholdMeters = minUpdateDist + (speedRatio * (maxUpdateDist - minUpdateDist));
 
@@ -196,6 +229,9 @@ public partial class LobbyPage : ContentPage
         DestinationSearchControl.SetState(_amIAdmin, false, _amIAdmin, false);
 
         RosterControl.SetRidersSource(Riders);
+
+        DrawerMapSettingsTab.NavigationModeChanged += OnNavigationModeChanged;
+        _currentNavMode = (MapNavigationMode)Preferences.Default.Get("Map_NavigationMode", (int)MapNavigationMode.Immersive);
 
         // Hook up SignalR events
         _signalRService.ConnectionStatusChanged += OnConnectionStatusChanged;
@@ -265,28 +301,31 @@ public partial class LobbyPage : ContentPage
                 RosterControl.SetConvoyPin(ConvoyPin);
                 RosterControl.SetAdminPinCardVisible(_amIAdmin);
 
-                // THE FIX: Push EVERYTHING through the Gatekeeper the moment you enter the room!
+                // =====================================================================
+                // THE FIX: Cache the server state BEFORE OnNavigationStarted mutates it!
+                // =====================================================================
+                GroupState serverState = groupDetails.CurrentState;
 
-                if (groupDetails.CurrentState == GroupState.Navigating ||
-                    groupDetails.CurrentState == GroupState.PausedBreak ||
-                    groupDetails.CurrentState == GroupState.PausedHazard ||
-                    groupDetails.CurrentState == GroupState.PausedMechanical)
+                if (serverState >= GroupState.Navigating)
                 {
-                    // 1. If the group is currently in a ride (even if paused), we MUST run the heavy 
-                    // route builder so your local phone downloads and draws the active path!
+                    // 1. Force the map to draw the route
                     OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName, true);
 
-                    // 2. If it happens to be Paused right now, safely snap the buttons into the Paused state.
-                    if (groupDetails.CurrentState != GroupState.Navigating)
+                    // 2. Safely check the cached state, not the object property
+                    if (serverState != GroupState.Navigating)
                     {
-                        await ChangeGroupState(groupDetails.CurrentState, forceSync: true);
+                        // Delay slightly so the 3D map camera finishes its initial swoop 
+                        // before we freeze the UI into the Paused state.
+                        MainThread.BeginInvokeOnMainThread(async () =>
+                        {
+                            await Task.Delay(500);
+                            await ChangeGroupState(serverState, forceSync: true);
+                        });
                     }
                 }
                 else
                 {
-                    // 3. For NotNavigating or DestinationSet, just force the Gatekeeper!
-                    // If it's a brand new group, this forcefully wipes the map and resets the drawer.
-                    await ChangeGroupState(groupDetails.CurrentState, forceSync: true);
+                    await ChangeGroupState(serverState, forceSync: true);
                 }
             }
         }
@@ -294,6 +333,43 @@ public partial class LobbyPage : ContentPage
         {
             await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
             await Navigation.PopAsync();
+        }
+    }
+    private void OnNavigationModeChanged(object sender, MapNavigationMode mode)
+    {
+        _currentNavMode = mode;
+        AppLogger.Info("Navigation", $"Switched to {mode} mode.");
+
+        if (mode == MapNavigationMode.BackgroundSharing)
+        {
+            // 1. Force Overview Mode (Disable Camera Physics)
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                OnOverviewClicked(null, EventArgs.Empty);
+
+                // 2. Disable Heavy Visuals Permanently
+                //if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
+                NextTurnOverlay.IsVisible = false;
+            });
+
+            // 3. SignalR Optimization (Tell server to only send heartbeats, not full coordinates)
+            _ = _signalRService.ToggleBackgroundListenerMode(GroupNameLabel.Text, true);
+        }
+        else
+        {
+            // Restore Immersive Mode
+            _ = _signalRService.ToggleBackgroundListenerMode(GroupNameLabel.Text, false);
+
+            // If we are actively riding, redraw the line and re-engage the camera
+            if (groupDetails?.CurrentState >= GroupState.Navigating && _rideCache.ActiveDestination != null)
+            {
+                var loc = _lastKnownLocation;
+                if (loc != null)
+                {
+                    //_ = CalculateAndDrawRoute(loc, _rideCache.ActiveDestination);
+                    MainThread.BeginInvokeOnMainThread(() => OnMapFollowClicked(null, EventArgs.Empty));
+                }
+            }
         }
     }
     private async void OnSignalRDestinationSetReceived(double destLat, double destLng, string destName)
@@ -440,7 +516,7 @@ public partial class LobbyPage : ContentPage
     }
 
     // --- LOCATION PROCESSING & TELEMETRY ---
-    private async void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
+    private async void  OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
         if (!_rideCache.RunningInBackground)
         {
@@ -450,8 +526,16 @@ public partial class LobbyPage : ContentPage
                 LocationDisabledOverlay.Hide();
                 if (_myPinVm != null)
                 {
-                    string newSpeedStr = $"{Math.Round(e.SpeedMph * 1.60934)} km/h";
-
+                    double currentSpeedKmh = e.SpeedMph * 1.60934;
+                    string newSpeedStr = $"{Math.Round(currentSpeedKmh)} km/h";
+                    // =====================================================================
+                    // THE FIX: Track and push the Top Speed!
+                    // =====================================================================
+                    if (currentSpeedKmh > _rideCache.MaxSpeedKmh)
+                    {
+                        _rideCache.MaxSpeedKmh = currentSpeedKmh;
+                        TelemetryHeaderControl.UpdateTopSpeed($"{Math.Round(_rideCache.MaxSpeedKmh)} km/h");
+                    }
                     // 1. Send the speed to the new Header Badge!
                     TelemetryHeaderControl.UpdateSpeed(newSpeedStr);
 
@@ -467,6 +551,19 @@ public partial class LobbyPage : ContentPage
                         myModel.SpeedStr = newSpeedStr;
                         myModel.StatusStr = "Local"; // Replaces "Standby/Nearby" with "Local"
                         myModel.StatusColor = Colors.Transparent;
+                    }
+                }
+                // =====================================================================
+                // THE FIX: LIVE RADAR AUTO-FRAMING!
+                // If Overview Mode is active, re-frame the map every 15 seconds to 
+                // guarantee all moving convoy riders remain perfectly on screen.
+                // =====================================================================
+                if (MapFollowButton.IsVisible) // If this button is visible, we are in Overview Mode!
+                {
+                    if ((DateTime.Now - _lastAutoFrameTime).TotalSeconds > 15)
+                    {
+                        _lastAutoFrameTime = DateTime.Now;
+                        FitMapToBounds();
                     }
                 }
             });
@@ -506,8 +603,22 @@ public partial class LobbyPage : ContentPage
             e.Location.Speed = speedKmh / 3.6;
             e.Location.Course = e.Heading;
 
-            // NOW fire the telemetry with the fully populated location!
-            _ = TrimRouteVisuals(e.Location);
+            if (_currentNavMode == MapNavigationMode.Immersive)
+            {
+                _ = TrimRouteVisuals(e.Location);
+            }
+            else
+            {
+                // PIPELINE A (BACKGROUND OPTIMIZED): 
+                // Zero deviation math. Zero polyline building. Zero GPU.
+                // We simply tick the odometer so shared stats stay accurate!
+                if (_rideCache.LastOdometerLocation != null)
+                {
+                    double stepDist = Location.CalculateDistance(_rideCache.LastOdometerLocation, e.Location, DistanceUnits.Kilometers);
+                    if (stepDist > 0.01 && stepDist < 20) _rideCache.CumulativeDistanceKm += stepDist;
+                }
+                _rideCache.LastOdometerLocation = e.Location;
+            }
         }
     }
 
@@ -535,7 +646,9 @@ public partial class LobbyPage : ContentPage
                 MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("You have arrived at your destination."));
 
             // Use Google-Maps-like staged turn announcements from VoiceCopilotEngine
-            if (voiceEnabled)
+            if (_currentNavMode == MapNavigationMode.Immersive &&
+                    groupDetails?.CurrentState == GroupState.Navigating &&
+                    voiceEnabled)
                 _voiceEngine.ProcessTurnByTurn(currentLocation, _activeRouteSteps);
 
             // 3. MEETUP LOGIC
@@ -1178,6 +1291,23 @@ public partial class LobbyPage : ContentPage
 
     private async void OnNavigationStarted(double destLat, double destLng, string destName, bool isSyncRequired = false)
     {
+        // =====================================================================
+        // THE TELEMETRY SHIELD
+        // If we receive a Start command but we are ALREADY navigating to this 
+        // exact destination, ignore it to prevent wiping the odometer!
+        // =====================================================================
+        bool alreadyNavigating = this.groupDetails?.CurrentState >= GroupState.Navigating && this.groupDetails?.CurrentState < GroupState.Completed;
+
+        // Check if the coordinates are practically identical (handling minor floating point shifts)
+        bool sameDestination = _rideCache.ActiveDestination != null &&
+                               Math.Abs(_rideCache.ActiveDestination.Latitude - destLat) < 0.0001 &&
+                               Math.Abs(_rideCache.ActiveDestination.Longitude - destLng) < 0.0001;
+
+        if (alreadyNavigating && sameDestination && !isSyncRequired)
+        {
+            AppLogger.Info("Navigation", "Ignored redundant Start command to protect active telemetry.");
+            return;
+        }
 
         AppLogger.ResetRideCorrelationId();
         _rideCts?.Cancel();
@@ -1213,13 +1343,36 @@ public partial class LobbyPage : ContentPage
 
             await CalculateAndDrawRoute(loc, _rideCache.ActiveDestination);
             // THE FIX: Start navigation zoomed in and pointing North instead of zooming out to FitMapToBounds!
+            // =====================================================================
+            // 2. NEW: MODE-AWARE START
+            // Apply the correct physics, visuals, and voice depending on their perspective
+            // =====================================================================
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
+                if (_currentNavMode == MapNavigationMode.Immersive)
+                {
+                    // Perspective #1: Full 3D Physics and Following
+                    if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
 
-                FitMapToBounds();
+                    FitMapToBounds();
+                    ToggleNavigationPerspective(true);
+                }
+                else
+                {
+                    // Perspective #2: Instantly strip heavy visuals and enforce Overview (Live Radar) Mode
+                    //if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
+                    NextTurnOverlay.IsVisible = false;
 
-                ToggleNavigationPerspective(true);
+                    if (_myPinVm != null) _myPinVm.IsAutoCentering = false;
+
+                    OverviewButton.IsVisible = false;
+                    MapFollowButton.IsVisible = true;
+
+                    ToggleNavigationPerspective(false);
+
+                    // Trigger the newly padded "Live Radar" bounds
+                    FitMapToBounds();
+                }
             });
 
 #if DEBUG
@@ -1359,57 +1512,78 @@ public partial class LobbyPage : ContentPage
 
         if (color == Colors.MediumSeaGreen)
         {
-            // 1. Fetch data safely off the main thread
             var groupName = await MainThread.InvokeOnMainThreadAsync(() => GroupNameLabel.Text);
             var fetchedDetails = await _signalRService.GetGroupDetails(groupName);
 
             if (fetchedDetails != null)
             {
-                // 2. Safely marshal all State Math back to the Main Thread
                 await MainThread.InvokeOnMainThreadAsync(async () =>
                 {
                     var previousState = this.groupDetails?.CurrentState ?? GroupState.NotNavigating;
 
                     // =====================================================================
-                    // 1. ADMIN SOURCE OF TRUTH (Self-Healing Server)
+                    // 1. RIDER INERTIA & SERVER HEALING 
                     // =====================================================================
-                    if (_amIAdmin && previousState >= GroupState.Navigating && fetchedDetails.CurrentState < GroupState.Navigating)
+                    if (previousState >= GroupState.Navigating && fetchedDetails.CurrentState < GroupState.Navigating)
                     {
-                        AppLogger.Info("Network", "Server lost active ride state. Admin is enforcing Navigating state.");
-                        await _signalRService.StartGroupNavigation(groupName, groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
-                        return; // Keep local state running seamlessly
+                        AppLogger.Info("Network", $"Server lost active ride state. Admin is enforcing {previousState} state.");
+
+                        if (_amIAdmin)
+                        {
+                            // THE FIX: Heal the server to the EXACT state, not just 'Navigating'
+                            if (previousState == GroupState.Navigating)
+                            {
+                                await _signalRService.StartGroupNavigation(groupName, groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
+                            }
+                            else if (previousState == GroupState.Completed)
+                            {
+                                await _signalRService.CompleteGroupNavigation(groupName, _myName);
+                            }
+                            else
+                            {
+                                // It's a Pause state. We must re-start it first to pass the destination, then immediately pause it.
+                                await _signalRService.StartGroupNavigation(groupName, groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
+                                await _signalRService.PauseGroupNavigation(groupName, "Restoring Pause State", _myName);
+                            }
+                        }
+                        return;
                     }
 
-                    // Update local memory with the server's truth
                     this.groupDetails = fetchedDetails;
 
                     if (previousState != fetchedDetails.CurrentState)
                     {
                         // =====================================================================
-                        // 2. STANDARD RIDER CATCH-UP LOGIC
+                        // THE FIX: Cache the server state BEFORE OnNavigationStarted mutates it!
                         // =====================================================================
+                        GroupState serverState = fetchedDetails.CurrentState;
 
-                        if (previousState < GroupState.Navigating && fetchedDetails.CurrentState >= GroupState.Navigating)
+                        if (previousState < GroupState.Navigating && serverState >= GroupState.Navigating)
                         {
-                            // A. Missed the Ride Start! 
-                            // We MUST call OnNavigationStarted so it actually fetches Google Maps and draws the line!
                             AppLogger.Info("Network", "Catching up: Ride started while offline.");
+
+                            // 1. Force the map to draw the route
                             OnNavigationStarted(fetchedDetails.DestLat, fetchedDetails.DestLng, fetchedDetails.DestName, isSyncRequired: true);
+
+                            // 2. Safely check the cached state
+                            if (serverState != GroupState.Navigating)
+                            {
+                                MainThread.BeginInvokeOnMainThread(async () =>
+                                {
+                                    await Task.Delay(500);
+                                    await ChangeGroupState(serverState, forceSync: true);
+                                });
+                            }
                         }
-                        else if (previousState < GroupState.DestinationSet && fetchedDetails.CurrentState == GroupState.DestinationSet)
+                        else if (previousState < GroupState.DestinationSet && serverState == GroupState.DestinationSet)
                         {
-                            // B. Missed the Destination Set!
-                            // Call OnDestinationSet so it draws the grey Pre-Nav route line.
                             AppLogger.Info("Network", "Catching up: Destination set while offline.");
                             OnDestinationSet(fetchedDetails.DestLat, fetchedDetails.DestLng, fetchedDetails.DestName);
                         }
                         else
                         {
-                            // C. Standard State Change (Pauses, Completions, or Ride Stops)
-                            // Note: By dropping the "Rider Inertia" block here, standard riders will correctly 
-                            // stop their ride if the Admin hit "Finish" while they were in a tunnel!
-                            AppLogger.Info("Network", $"Syncing state to {fetchedDetails.CurrentState}");
-                            await ChangeGroupState(fetchedDetails.CurrentState, forceSync: true);
+                            AppLogger.Info("Network", $"Syncing state to {serverState}");
+                            await ChangeGroupState(serverState, forceSync: true);
                         }
                     }
                 });
@@ -1459,8 +1633,12 @@ public partial class LobbyPage : ContentPage
         {
             // THE FIX: Return to default 0.5km zoom and gently rotate North
             LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromKilometers(0.5)));
-            //LiveMap.RotateTo(0, 500, Easing.SinInOut);
-            ToggleNavigationPerspective(true);
+
+            if (sender is null)
+            {
+                //LiveMap.RotateTo(0, 500, Easing.SinInOut);
+                ToggleNavigationPerspective(true);
+            }
 
             if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
 
@@ -1480,8 +1658,11 @@ public partial class LobbyPage : ContentPage
         await LiveMap.RotateTo(0, 500, Microsoft.Maui.Easing.SinInOut);
         LiveMap.Scale = 1.0;
 
-        // 2. THE FIX: Reset the pin to the absolute center of the map!
-        ToggleNavigationPerspective(false);
+        if (sender is null)
+        {
+            // 2. THE FIX: Reset the pin to the absolute center of the map!
+            ToggleNavigationPerspective(false);
+        }
 
         await Task.Delay(50);
         FitMapToBounds();
@@ -1728,7 +1909,10 @@ public partial class LobbyPage : ContentPage
         // swoop the camera back down into the 3D navigation view.
         _myPinVm.IsAutoCentering = true;
 
-        ToggleNavigationPerspective(true);
+        if (sender is null)
+        {
+            ToggleNavigationPerspective(true);
+        }
     }
     private void OnAdminSettingsClicked(object sender, EventArgs e)
     {
@@ -1745,6 +1929,7 @@ public partial class LobbyPage : ContentPage
                 pitstop: s.PitstopDistanceMeters / 1000,
                 dynamicRouting: s.EnableDynamicRouting,
                 minUpdate: s.MinUpdateDistanceMeters,
+                sensitivity: s.DeviationSensitivityMeters,
                 maxUpdate: s.MaxUpdateDistanceMeters);
         }
     }

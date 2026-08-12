@@ -59,12 +59,12 @@ public class RouteTelemetryResult
 
 public interface IRoutingEngine
 {
-    Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false);
     List<Location> DecodeGooglePolyline(string encodedPoints);
     string EncodeLocationList(List<Location> points);
     Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute);
     Task<Location> CalculateDynamicMeetupPointAsync();
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
+    Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false);
 }
 
 public class RoutingEngine : IRoutingEngine
@@ -80,22 +80,47 @@ public class RoutingEngine : IRoutingEngine
         _rideCache = rideCache;
     }
 
-    public async Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false)
+    // 🔄 REPLACE entire method
+    // Note the added 'bool isReroute = false' parameter at the end!
+    public async Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false)
     {
         var result = new RouteCalculationResult();
         try
         {
+            // =====================================================================
+            // THE FIX: Safely extract the MAUI compass course for Google
+            // =====================================================================
+            int? validHeading = null;
+            if (isReroute && origin.Course.HasValue && !double.IsNaN(origin.Course.Value))
+            {
+                validHeading = (int)Math.Round(origin.Course.Value) % 360;
+                if (validHeading < 0) validHeading += 360;
+            }
+
             var requestBody = new RoutesRequest
             {
-                Origin = new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = origin.Latitude, Longitude = origin.Longitude } } },
-                Destination = new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = dest.Latitude, Longitude = dest.Longitude } } }
+                Origin = new RouteWaypoint
+                {
+                    Location = new RouteLocation
+                    {
+                        LatLng = new RouteLatLng { Latitude = origin.Latitude, Longitude = origin.Longitude },
+                        Heading = validHeading // Injects the heading (or stays null and is ignored by JSON)
+                    }
+                },
+                Destination = new RouteWaypoint
+                {
+                    Location = new RouteLocation
+                    {
+                        LatLng = new RouteLatLng { Latitude = dest.Latitude, Longitude = dest.Longitude }
+                    }
+                }
             };
 
             if (meetup != null)
             {
                 requestBody.Intermediates = new List<RouteWaypoint> {
-                    new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = meetup.Latitude, Longitude = meetup.Longitude } } }
-                };
+                new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = meetup.Latitude, Longitude = meetup.Longitude } } }
+            };
             }
 
             var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
@@ -199,7 +224,7 @@ public class RoutingEngine : IRoutingEngine
     // =====================================================================
     public async Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute = false)
     {
-        var routeData = await GetRouteDataAsync(origin, dest, meetup, includeVoiceSteps);
+        var routeData = await GetRouteDataAsync(origin, dest, meetup, includeVoiceSteps, isReroute);
         if (string.IsNullOrEmpty(routeData?.EncodedPolyline) || routeData.DecodedPoints.Count == 0) return null;
 
         var combinedPoints = new List<Location>();
