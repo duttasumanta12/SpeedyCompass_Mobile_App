@@ -198,5 +198,19 @@
             <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" Grid.RowSpan="100" Grid.ColumnSpan="100" ZIndex="9999" />
             <controls:RideSummaryOverlay x:Name="RideSummaryOverlay" Grid.RowSpan="100" ZIndex="3000" CloseRequested="OnCloseRideSummaryClicked" />
         </Grid>
+        <!-- BIGGER, CENTERED AUTO-PAUSE BANNER -->
+        <Frame x:Name="AutoPauseBanner" IsVisible="False" 
+               VerticalOptions="Center" HorizontalOptions="Center" 
+               WidthRequest="300" Padding="25,25" 
+               BackgroundColor="#E6000000" CornerRadius="16" HasShadow="True" ZIndex="200">
+            <Frame.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnAutoPauseTapped" />
+            </Frame.GestureRecognizers>
+            <VerticalStackLayout Spacing="15" HorizontalOptions="Center">
+                <Label Text="🛑" FontSize="50" HorizontalOptions="Center"/>
+                <Label Text="You've been stopped for a while." FontSize="18" TextColor="White" FontAttributes="Bold" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
+                <Label Text="Tap here to Pause the ride for the group." FontSize="14" TextColor="#AAAAAA" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
+            </VerticalStackLayout>
+        </Frame>
     </Grid>
 </ContentPage>

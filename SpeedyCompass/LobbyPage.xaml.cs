@@ -102,6 +102,9 @@ public partial class LobbyPage : ContentPage
     private readonly object _routeStateLock = new();
     private readonly LobbyStateMachine _stateMachine = new();
     private GroupState? _pendingCatchUpState = null;
+    private DateTime _lastCrashEvent = DateTime.MinValue;
+    private CancellationTokenSource _crashCts;
+
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
     (Color.FromArgb("#00E676"), Color.FromArgb("#00B259")), // 01: Neon Green -> Emerald
@@ -229,6 +232,13 @@ public partial class LobbyPage : ContentPage
                 var fakeUpdate = new LocalLocationUpdate { Location = loc, SpeedMph = speed / 1.60934, Heading = heading };
                 OnLocalLocationPushedFromBackground(this, fakeUpdate);
             };
+            // =====================================================================
+            // THE FIX: Wire up the mock crash event!
+            // =====================================================================
+            _simulatorService.OnSimulatedCrash = () =>
+            {
+                TriggerCrashProtocol(); // Fires the 10-second UI emergency countdown
+            };
         }
 
         this.groupDetails = groupDetails;
@@ -253,6 +263,9 @@ public partial class LobbyPage : ContentPage
 
         DrawerMapSettingsTab.NavigationModeChanged += OnNavigationModeChanged;
         _currentNavMode = (MapNavigationMode)Preferences.Default.Get("Map_NavigationMode", (int)MapNavigationMode.Immersive);
+
+        SensoryAlertOverlay.CrashCancelled += OnCrashCancelledClicked;
+        SensoryAlertOverlay.CrashEmergencyConfirmed += OnCrashEmergencyClicked;
 
         // Hook up SignalR events
         _signalRService.ConnectionStatusChanged += OnConnectionStatusChanged;
@@ -429,8 +442,11 @@ public partial class LobbyPage : ContentPage
     {
         base.OnDisappearing();
 
-        // Kill the consumer loops
+        ToggleCrashDetection(false);
+
         _lifecycleCts?.Cancel();
+        _rideCts?.Cancel();
+        _pttCts?.Cancel();
 
         _rideCache.SaveSnapshotAsync().SafeFireAndForget();
 
@@ -467,10 +483,15 @@ public partial class LobbyPage : ContentPage
         }
         if (_simulatorService != null)
         {
-            _simulatorService.OnLocationGenerated = null; // Unhook the action
+            _simulatorService.OnLocationGenerated = null;
+
+            // =====================================================================
+            // THE FIX 2: Release the Singleton's grip on this page!
+            // =====================================================================
+            _simulatorService.OnSimulatedCrash = null;
         }
 
-        _simulatorService.StopSimulation();
+        _simulatorService?.StopSimulation();
         _locationTracker?.StopTracking();
 
 #if ANDROID
@@ -1182,6 +1203,7 @@ public partial class LobbyPage : ContentPage
 
     private void RenderIdleState(StateTransitionEventArgs e)
     {
+        ToggleCrashDetection(false);
         IdleHeader.IsVisible = true;
         PreNavigationHeader.IsVisible = false;
         TelemetryHeaderControl.IsVisible = false;
@@ -1223,6 +1245,7 @@ public partial class LobbyPage : ContentPage
 
     private void RenderNavigatingState(StateTransitionEventArgs e)
     {
+        ToggleCrashDetection(true);
         IdleHeader.IsVisible = false;
         PreNavigationHeader.IsVisible = false;
         TelemetryHeaderControl.IsVisible = true;
@@ -1252,6 +1275,7 @@ public partial class LobbyPage : ContentPage
 
     private void RenderPausedState(StateTransitionEventArgs e)
     {
+        ToggleCrashDetection(false);
         _simulatorService.StopSimulation();
         _locationTracker?.StopTracking();
         SetActionButtonsEnabled(false);
@@ -1402,7 +1426,7 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
             {
-                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Baseline_Navigate_Clean);
+                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Long_Stop_AutoPause);
             }
 #endif
         }
@@ -2485,6 +2509,47 @@ public partial class LobbyPage : ContentPage
 
         if (groupDetails?.CurrentState == GroupState.Navigating)
         {
+            // FEATURE 1: ELEVATION ANNOUNCER & UI
+            if (e.Location.Altitude.HasValue)
+            {
+                double currentAlt = e.Location.Altitude.Value;
+
+                // THE FIX: Push raw value directly to the new UI Header
+                MainThread.BeginInvokeOnMainThread(() => TelemetryHeaderControl.UpdateElevation($"{Math.Round(currentAlt)} m"));
+
+                if (_rideCache.LastAnnouncedElevation == null)
+                {
+                    _rideCache.LastAnnouncedElevation = currentAlt;
+                }
+                else if (Math.Abs(currentAlt - _rideCache.LastAnnouncedElevation.Value) >= 100)
+                {
+                    _voiceEngine.Speak($"Elevation is now {Math.Round(currentAlt)} meters.");
+                    _rideCache.LastAnnouncedElevation = currentAlt;
+                }
+            }
+            // =====================================================================
+            // FEATURE 3: NON-IRRITATING AUTO-STOP DETECTION
+            // =====================================================================
+            if (currentSpeedKmh < 3) // Below 3 km/h is considered stopped
+            {
+                if (_rideCache.StopStartTime == null) _rideCache.StopStartTime = DateTime.Now;
+
+                // If stopped for > 45 seconds...
+                else if ((DateTime.Now - _rideCache.StopStartTime.Value).TotalSeconds > 45)
+                {
+                    // ...and we haven't bugged them in the last 10 minutes
+                    if ((DateTime.Now - _rideCache.LastAutoPausePromptTime).TotalMinutes > 10)
+                    {
+                        _rideCache.LastAutoPausePromptTime = DateTime.Now;
+                        TriggerAutoPausePrompt().SafeFireAndForget();
+                    }
+                }
+            }
+            else
+            {
+                _rideCache.StopStartTime = null; // Reset stop timer the moment they move
+            }
+
             var lastCrumb = _rideCache.DrivenBreadcrumbs.LastOrDefault();
             if (lastCrumb == null || Location.CalculateDistance(lastCrumb, e.Location, DistanceUnits.Kilometers) > 0.05)
             {
@@ -2511,5 +2576,100 @@ public partial class LobbyPage : ContentPage
                 _rideCache.LastOdometerLocation = e.Location;
             }
         }
+    }
+    private async Task TriggerAutoPausePrompt()
+    {
+        MainThread.BeginInvokeOnMainThread(() => AutoPauseBanner.IsVisible = true);
+        _voiceEngine.Speak("It looks like you've stopped. Tap your screen if you need to pause the ride.");
+
+        try
+        {
+            // Leave the button on screen for exactly 5 seconds
+            await Task.Delay(5000, _lifecycleCts.Token);
+        }
+        catch { }
+
+        // Auto-hide if they ignored it
+        MainThread.BeginInvokeOnMainThread(() => AutoPauseBanner.IsVisible = false);
+    }
+
+    private void OnAutoPauseTapped(object sender, TappedEventArgs e)
+    {
+        AutoPauseBanner.IsVisible = false;
+        OnPauseNavClicked(this, EventArgs.Empty); // Route them directly to your existing Pause Menu!
+    }
+    private void TriggerCrashProtocol()
+    {
+        SensoryAlertOverlay.ShowCrashAlert();
+        _voiceEngine.Speak("Collision detected. Are you okay? An emergency alert will be sent to the group in 10 seconds.");
+
+        _crashCts?.Cancel();
+        _crashCts = new CancellationTokenSource();
+
+        Task.Run(async () =>
+        {
+            try
+            {
+                // The 10-Second Fuse
+                for (int i = 10; i > 0; i--)
+                {
+                    SensoryAlertOverlay.UpdateCrashCountdown(i);
+                    await Task.Delay(1000, _crashCts.Token);
+                }
+
+                // If the loop finishes without being cancelled...
+                SensoryAlertOverlay.HideAlert();
+                _voiceEngine.Speak("No response. Sending automatic emergency alert to the group.");
+                _signalRService.SendGroupAlert(groupDetails.GroupName, "Emergency", _myName).SafeFireAndForget();
+            }
+            catch (OperationCanceledException) { /* User pressed 'I am OK' */ }
+
+        }, _crashCts.Token).SafeFireAndForget();
+    }
+
+    private void OnCrashCancelledClicked(object sender, EventArgs e)
+    {
+        _crashCts?.Cancel(); // Snips the fuse
+        SensoryAlertOverlay.HideAlert();
+        _voiceEngine.Speak("Emergency cancelled. Glad you are okay.");
+    }
+
+    private void OnCrashEmergencyClicked(object sender, EventArgs e)
+    {
+        _crashCts?.Cancel(); // Snips the fuse
+        SensoryAlertOverlay.HideAlert();
+        _voiceEngine.Speak("Manual emergency triggered.");
+        _signalRService.SendGroupAlert(groupDetails.GroupName, "Emergency", _myName).SafeFireAndForget();
+    }
+
+    private void OnAccelerometerReadingChanged(object sender, AccelerometerChangedEventArgs e)
+    {
+        // 1G = Standard gravity. > 4.5G = Severe, hard physical impact (crash)
+        double gForce = Math.Sqrt(Math.Pow(e.Reading.Acceleration.X, 2) +
+                                  Math.Pow(e.Reading.Acceleration.Y, 2) +
+                                  Math.Pow(e.Reading.Acceleration.Z, 2));
+
+        if (gForce > 4.5 && (DateTime.Now - _lastCrashEvent).TotalMinutes > 5)
+        {
+            _lastCrashEvent = DateTime.Now;
+            TriggerCrashProtocol();
+        }
+    }
+    private void ToggleCrashDetection(bool enable)
+    {
+        try
+        {
+            if (enable && Accelerometer.Default.IsSupported && !Accelerometer.Default.IsMonitoring)
+            {
+                Accelerometer.Default.ReadingChanged += OnAccelerometerReadingChanged;
+                Accelerometer.Default.Start(SensorSpeed.UI);
+            }
+            else if (!enable && Accelerometer.Default.IsMonitoring)
+            {
+                Accelerometer.Default.ReadingChanged -= OnAccelerometerReadingChanged;
+                Accelerometer.Default.Stop();
+            }
+        }
+        catch { /* Sensor not supported on this device */ }
     }
 }

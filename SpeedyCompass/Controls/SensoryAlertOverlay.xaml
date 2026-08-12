@@ -6,13 +6,20 @@
              InputTransparent="True"
              Opacity="0">
 
-    <!-- Added x:Name to background grid so we can swap colors -->
-    <Grid x:Name="AlertBackgroundGrid" BackgroundColor="Red">
-        <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
-            <!-- Added x:Name to Icon and Title -->
-            <Label x:Name="AlertIconLabel" Text="🛑" FontSize="100" HorizontalTextAlignment="Center" />
+    <Grid x:Name="AlertBackgroundGrid" BackgroundColor="Red" Padding="20">
+        <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
+            <Label x:Name="AlertIconLabel" Text="🛑" FontSize="80" HorizontalTextAlignment="Center" />
             <Label x:Name="AlertTitleLabel" Text="EMERGENCY STOP!" TextColor="White" FontSize="36" FontAttributes="Bold" HorizontalTextAlignment="Center" />
             <Label x:Name="AlertSenderLabel" Text="Triggered by: Unknown" TextColor="White" FontSize="20" HorizontalTextAlignment="Center" />
-        </StackLayout>
+
+            <!-- NEW: Hidden Crash Controls -->
+            <VerticalStackLayout x:Name="CrashControlsContainer" IsVisible="False" Spacing="15" Margin="0,30,0,0">
+                <Label x:Name="CrashCountdownLabel" Text="10" FontSize="60" FontAttributes="Bold" TextColor="White" HorizontalOptions="Center" />
+                <Label Text="Sending emergency alert to group automatically..." FontSize="16" TextColor="White" HorizontalOptions="Center" HorizontalTextAlignment="Center" />
+
+                <Button Text="I AM OKAY (Cancel)" BackgroundColor="White" TextColor="#D32F2F" FontAttributes="Bold" FontSize="18" HeightRequest="60" CornerRadius="30" Margin="0,15,0,5" Clicked="OnCrashCancelledClicked"/>
+                <Button Text="SEND EMERGENCY NOW" BackgroundColor="Black" TextColor="White" FontAttributes="Bold" FontSize="18" HeightRequest="60" CornerRadius="30" Clicked="OnCrashEmergencyClicked"/>
+            </VerticalStackLayout>
+        </VerticalStackLayout>
     </Grid>
 </ContentView>

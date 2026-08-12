@@ -51,19 +51,25 @@
                 </StackLayout>
             </VerticalStackLayout>
 
-            <!-- Right: Arrival Time & Top Speed -->
-            <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="End" Spacing="8">
+            <!-- Right: Arrival Time, Top Speed, & Elevation -->
+            <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="End" Spacing="6">
 
                 <!-- Arrival Time -->
                 <VerticalStackLayout Spacing="0">
-                    <Label Text="Arrival time" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
-                    <Label x:Name="MyEtaLabel" Text="--:--" FontSize="15" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="End"/>
+                    <Label Text="Arrival time" FontSize="10" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
+                    <Label x:Name="MyEtaLabel" Text="--:--" FontSize="14" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="End"/>
                 </VerticalStackLayout>
 
-                <!-- NEW: Top Speed -->
+                <!-- Top Speed -->
                 <VerticalStackLayout Spacing="0">
-                    <Label Text="Top Speed" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
-                    <Label x:Name="MyTopSpeedLabel" Text="0 km/h" FontSize="13" FontAttributes="Bold" TextColor="#D32F2F" HorizontalOptions="End"/>
+                    <Label Text="Top Speed" FontSize="10" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
+                    <Label x:Name="MyTopSpeedLabel" Text="0 km/h" FontSize="12" FontAttributes="Bold" TextColor="#D32F2F" HorizontalOptions="End"/>
+                </VerticalStackLayout>
+
+                <!-- NEW: Elevation -->
+                <VerticalStackLayout Spacing="0">
+                    <Label Text="Elevation" FontSize="10" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
+                    <Label x:Name="MyElevationLabel" Text="-- m" FontSize="12" FontAttributes="Bold" TextColor="MediumPurple" HorizontalOptions="End"/>
                 </VerticalStackLayout>
 
             </VerticalStackLayout>

@@ -12,7 +12,12 @@ public enum RideScenario
     WrongTurn_Reroute_Recovery,
     StopGo_CityTraffic,
     Tunnel_GpsLoss_Recover,
-    Chaos_Telemetry_Spikes
+    Chaos_Telemetry_Spikes,
+
+    // --- NEW COPILOT SCENARIOS ---
+    Mountain_Pass_Elevation,    // Tests 100m Altitude Climb Announcements
+    Crash_Emergency_Protocol,   // Tests 10-Second Crash Fuse
+    Long_Stop_AutoPause         // Tests 45-Second Idle Banner
 }
 
 public class RideSimulatorService
@@ -21,11 +26,14 @@ public class RideSimulatorService
     private readonly IRoutingEngine _routingEngine;
     private readonly ILocationTracker _locationTracker;
 
-    // THE FIX: Thread-safe locking to prevent double-starts
     private readonly SemaphoreSlim _simGate = new(1, 1);
     private bool _isSimulating = false;
 
     public Action<Location, double, double>? OnLocationGenerated;
+
+    // THE FIX: A mock trigger since the simulator can't physically shake the phone
+    public Action? OnSimulatedCrash;
+
     public Action? OnSimulationEnded;
 
     public RideSimulatorService(RideStateService rideCache, IRoutingEngine routingEngine, ILocationTracker locationTracker)
@@ -41,12 +49,10 @@ public class RideSimulatorService
         if (_locationTracker != null) _locationTracker.IsSimulating = false;
     }
 
-    // THE FIX: Pass `Func<GroupState>` so the simulator always evaluates the LIVE state, not a stale value!
     public async Task StartSimulationAsync(Func<GroupState> getLiveState, CancellationToken cancellationToken, RideScenario scenario = RideScenario.Baseline_Navigate_Clean, int seed = 42)
     {
         if (_rideCache.CurrentRoutePoints == null || _rideCache.CurrentRoutePoints.Count == 0) return;
 
-        // Prevent race conditions if Admin spams the "Start" button
         if (!await _simGate.WaitAsync(0)) return;
 
         try
@@ -57,82 +63,103 @@ public class RideSimulatorService
 
             var simulationPath = _rideCache.CurrentRoutePoints.ToList();
             int currentIndex = Math.Max(0, _rideCache.CurrentRouteIndex);
-            // Safety bound check
             if (currentIndex >= simulationPath.Count) currentIndex = simulationPath.Count - 1;
-            var rnd = new Random(seed); // Deterministic randomness
+
+            var rnd = new Random(seed);
 
             int deviationIndex = (scenario == RideScenario.WrongTurn_Reroute_Recovery) ? Math.Max(5, simulationPath.Count / 5) : -1;
-
-            // If we resumed the simulation AFTER the planned deviation point, cancel the deviation.
             if (deviationIndex <= currentIndex) deviationIndex = -1;
 
             bool isCurrentlyDeviating = false;
             bool hasTriggeredStrikes = false;
 
+            // --- COPILOT TRACKERS ---
+            double simulatedAltitude = 100.0; // Baseline starting altitude
+            int stoppedTicks = 0;             // Counts how long we are sitting still
+
             double currentSimHeading = 0;
-            // Start the physical location at the resumed index!
             Location currentSimLoc = simulationPath[currentIndex];
 
             AppLogger.Info("Simulator", $"Starting {scenario} from index {currentIndex}/{simulationPath.Count} (Seed: {seed})");
 
             while (currentIndex < simulationPath.Count && _isSimulating && !cancellationToken.IsCancellationRequested)
             {
-                // 1. THE FIX: Always check the absolute latest state from the memory reference
                 var currentState = getLiveState();
 
-                if (currentState < GroupState.Navigating)
-                {
-                    break; // The ride was reset/canceled
-                }
-
+                if (currentState < GroupState.Navigating) break;
                 if (currentState > GroupState.Navigating && currentState < GroupState.Completed)
                 {
-                    // The ride is Paused! Wait patiently without advancing the GPS point.
                     await Task.Delay(2000, cancellationToken);
                     continue;
                 }
 
-                // 2. SCENARIO PROFILES (Knobs & Modifiers)
                 double speedKmh = 60;
                 double accuracy = 5;
                 int delayMs = 2000;
 
+                // THE FIX: Controls if we physically move forward on the map line. 
+                // If false, we stay parked, but still fire GPS events!
+                bool advanceIndex = true;
+
                 switch (scenario)
                 {
                     case RideScenario.StopGo_CityTraffic:
-                        // 30% chance to be stopped at a light, otherwise 15-45 km/h
                         speedKmh = rnd.Next(0, 100) < 30 ? 0 : rnd.Next(15, 45);
+                        if (speedKmh == 0) advanceIndex = false;
                         break;
 
                     case RideScenario.Tunnel_GpsLoss_Recover:
-                        // Simulate entering a tunnel 20% of the way into the ride
                         int tunnelStart = simulationPath.Count / 5;
                         if (currentIndex > tunnelStart && currentIndex < tunnelStart + 10)
                         {
-                            AppLogger.Info("Simulator", "🚇 Entering tunnel. Freezing GPS and degrading accuracy.");
-                            accuracy = 150; // Terrible accuracy
-                            // We don't advance currentIndex to simulate lost signal
-                            await Task.Delay(delayMs, cancellationToken);
-                            continue;
+                            AppLogger.Info("Simulator", "🚇 Entering tunnel. Freezing GPS.");
+                            accuracy = 150;
+                            advanceIndex = false; // Freeze position
                         }
                         break;
 
                     case RideScenario.Chaos_Telemetry_Spikes:
-                        speedKmh = rnd.Next(10, 140); // Erratic speeds
-                        if (rnd.Next(0, 10) == 0) accuracy = rnd.Next(50, 500); // Random accuracy spikes
+                        speedKmh = rnd.Next(10, 140);
+                        if (rnd.Next(0, 10) == 0) accuracy = rnd.Next(50, 500);
                         break;
-                }
 
-                if (speedKmh == 0)
-                {
-                    await Task.Delay(1000, cancellationToken);
-                    continue;
+                    case RideScenario.Mountain_Pass_Elevation:
+                        // Climb rapidly: 25 meters per tick (2 seconds). 
+                        // It will hit the 100m voice-alert threshold every 8 seconds!
+                        simulatedAltitude += 25.0;
+                        break;
+
+                    case RideScenario.Long_Stop_AutoPause:
+                        // Drive normally for 15 steps, then stop for 50 seconds (25 ticks)
+                        if (currentIndex == 15 && stoppedTicks < 25)
+                        {
+                            speedKmh = 0;
+                            advanceIndex = false; // Don't move on the map
+                            stoppedTicks++;
+                            AppLogger.Info("Simulator", $"Idle at stoplight... {(stoppedTicks * 2)}s");
+                        }
+                        break;
+
+                    case RideScenario.Crash_Emergency_Protocol:
+                        // Drive for 20 steps, then CRASH
+                        if (currentIndex == 20)
+                        {
+                            if (stoppedTicks == 0)
+                            {
+                                AppLogger.Info("Simulator", "💥 SIMULATING MASSIVE G-FORCE IMPACT!");
+                                OnSimulatedCrash?.Invoke();
+                            }
+                            speedKmh = 0;
+                            advanceIndex = false; // We are wrecked, we aren't moving.
+                            stoppedTicks++;
+                        }
+                        break;
                 }
 
                 // 3. WRONG TURN / DEVIATION ENGINE
                 if (currentIndex == deviationIndex && !isCurrentlyDeviating)
                 {
-                    AppLogger.Info("Simulator", "⚠️ INITIATING WRONG TURN. Forcing bike off-road...");
+                    AppLogger.Info("Simulator", "⚠️ INITIATING WRONG TURN...");
                     isCurrentlyDeviating = true;
                     hasTriggeredStrikes = false;
 
@@ -143,7 +170,6 @@ public class RideSimulatorService
                     var fakePath = new List<Location>();
                     var devLoc = currentSimLoc;
 
-                    // Generate a 100-tick detour trajectory
                     for (int i = 0; i < 100; i++)
                     {
                         double distMeters = 30.0;
@@ -153,15 +179,12 @@ public class RideSimulatorService
                         devLoc = new Location(devLoc.Latitude + latOffset, devLoc.Longitude + lngOffset);
                         fakePath.Add(devLoc);
                     }
-
                     simulationPath = fakePath;
                     currentIndex = 0;
                 }
 
-                // Get Current Location
                 currentSimLoc = simulationPath[currentIndex];
 
-                // Chaos Mode: Inject geographic jitter
                 if (scenario == RideScenario.Chaos_Telemetry_Spikes && rnd.Next(0, 5) == 0)
                 {
                     currentSimLoc.Latitude += (rnd.NextDouble() - 0.5) * 0.0005;
@@ -171,17 +194,21 @@ public class RideSimulatorService
                 if (currentIndex < simulationPath.Count - 1)
                     currentSimHeading = CalculateBearing(simulationPath[currentIndex], simulationPath[currentIndex + 1]);
 
-                currentIndex++;
+                // THE FIX: Only advance the index if we aren't stopped/crashed/in a tunnel!
+                if (advanceIndex)
+                {
+                    currentIndex++;
+                }
 
                 var point = new Location(currentSimLoc.Latitude, currentSimLoc.Longitude)
                 {
                     Course = currentSimHeading,
-                    Speed = speedKmh / 3.6, // MAUI expects meters/second
+                    Speed = speedKmh / 3.6, // MAUI expects m/s
                     Accuracy = accuracy,
+                    Altitude = simulatedAltitude, // THE FIX: Inject simulated elevation
                     Timestamp = DateTimeOffset.UtcNow
                 };
 
-                // 4. THE FIX: Catch downstream UI/Map errors so they don't break the simulator loop
                 try
                 {
                     OnLocationGenerated?.Invoke(point, speedKmh, currentSimHeading);
@@ -191,16 +218,14 @@ public class RideSimulatorService
                     AppLogger.Error("Simulator", ex, "Downstream GPS listener threw an exception.");
                 }
 
-                // 5. THE TRIPWIRE SNAPPER (Reroute Recovery)
                 if (isCurrentlyDeviating)
                 {
                     if (_rideCache.OffRouteStrikeCount > 0) hasTriggeredStrikes = true;
-
                     if (hasTriggeredStrikes && _rideCache.OffRouteStrikeCount == 0)
                     {
-                        AppLogger.Info("Simulator", "✅ REROUTE CAUGHT! Snapping simulator to the Splice Seam.");
+                        AppLogger.Info("Simulator", "✅ REROUTE CAUGHT!");
                         simulationPath = _rideCache.CurrentRoutePoints.ToList();
-                        currentIndex = _rideCache.CurrentRouteIndex; // Snap to seam
+                        currentIndex = _rideCache.CurrentRouteIndex;
                         isCurrentlyDeviating = false;
                         deviationIndex = -1;
                     }
@@ -209,24 +234,12 @@ public class RideSimulatorService
                 await Task.Delay(delayMs, cancellationToken);
             }
         }
-        catch (TaskCanceledException)
-        {
-            AppLogger.Info("Simulator", "Simulation manually cancelled.");
-        }
-        catch (Exception ex)
-        {
-            AppLogger.Error("Simulator", ex, "Simulation crashed.");
-        }
+        catch (TaskCanceledException) { AppLogger.Info("Simulator", "Simulation manually cancelled."); }
+        catch (Exception ex) { AppLogger.Error("Simulator", ex, "Simulation crashed."); }
         finally
         {
-            // 6. THE FIX: Bulletproof Cleanup. 
-            // This runs guaranteed, even if the task was cancelled, broke, or completed cleanly.
-            //_isSimulating = false;
-            //if (_locationTracker != null) _locationTracker.IsSimulating = false;
-
             _simGate.Release();
             OnSimulationEnded?.Invoke();
-
             AppLogger.Info("Simulator", "Simulation teardown complete.");
         }
     }

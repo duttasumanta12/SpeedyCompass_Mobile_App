@@ -56,4 +56,11 @@ public partial class LiveTelemetryHeaderView : ContentView
             MyTopSpeedLabel.Text = topSpeedText;
         });
     }
+    public void UpdateElevation(string elevationText)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (MyElevationLabel != null) MyElevationLabel.Text = elevationText;
+        });
+    }
 }

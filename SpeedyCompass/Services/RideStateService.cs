@@ -45,6 +45,9 @@ namespace SpeedyCompass.Services
         public int OffRouteStrikeCount { get; set; } = 0;
         public List<Location> DrivenBreadcrumbs { get; set; } = new List<Location>();
         public double TopSpeedKmh { get; set; } = 0;
+        public double? LastAnnouncedElevation { get; set; } = null;
+        public DateTime? StopStartTime { get; set; } = null;
+        public DateTime LastAutoPausePromptTime { get; set; } = DateTime.MinValue;
 
         // ==========================================
         // PHASE 1: DURABLE SNAPSHOT
