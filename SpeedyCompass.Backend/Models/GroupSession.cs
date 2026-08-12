@@ -21,6 +21,7 @@ public class GroupSession
     public double MeetupLat { get; set; }
     public double MeetupLng { get; set; }
     public bool IsMeetupActive { get; set; }
+    public int StateVersion { get; set; } = 1;
 }
 // --- NEW: THE SETTINGS SCHEMA ---
 public class GroupSettings

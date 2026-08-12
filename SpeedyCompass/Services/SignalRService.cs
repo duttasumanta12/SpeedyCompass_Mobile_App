@@ -3,17 +3,48 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using SpeedyCompass.Models;
 using SpeedyCompass.Shared.Models;
-using System.Net.Http;
+using System.Collections.Concurrent;
 using System.Net.Security;
+using SQLite;
+using System.Text.Json;
+
 #if ANDROID
 using static Android.Provider.Settings;
 #endif
 
 namespace SpeedyCompass.Services;
+// --- 1. THE OUTBOX COMMAND MODEL ---
+
+
+// --- 1. THE SQLITE OUTBOX MODEL ---
+public class OutboxCommandEntity
+{
+    [PrimaryKey]
+    public string DedupeKey { get; set; }
+    public string MethodName { get; set; }
+
+    // We store the arguments and their exact C# Types so SignalR 
+    // doesn't get confused by generic JSON Elements when we deserialize!
+    public string ArgsJsonArray { get; set; }
+    public string ArgTypesJsonArray { get; set; }
+
+    public DateTime CreatedUtc { get; set; }
+}
 
 public class SignalRService
 {
     private readonly HubConnection _hubConnection;
+    private SQLiteAsyncConnection _db;
+    private bool _isFlushing = false;
+
+    private async Task InitOutboxDbAsync()
+    {
+        if (_db != null) return;
+
+        string dbPath = Path.Combine(FileSystem.AppDataDirectory, "outbox.db3");
+        _db = new SQLiteAsyncConnection(dbPath);
+        await _db.CreateTableAsync<OutboxCommandEntity>();
+    }
 
     // Standard C# events that UI pages can subscribe to
     public event Action<List<Rider>> RosterUpdated;
@@ -124,6 +155,104 @@ public class SignalRService
         }
     }
     public event Action<string> UserOfflineAlert;
+    /// <summary>
+    /// Replaces direct _hubConnection.InvokeAsync. Safely saves to SQLite if offline.
+    /// </summary>
+    private async Task SendOrQueueAsync(string methodName, string dedupeKey, params object[] args)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                await _hubConnection.InvokeCoreAsync(methodName, args);
+
+                // If it successfully sent, make sure we clean up any old queued version
+                await InitOutboxDbAsync();
+                await _db.DeleteAsync<OutboxCommandEntity>(dedupeKey);
+                return;
+            }
+            catch (Exception ex)
+            {
+                LogException($"Direct Send Failed: {methodName}", ex);
+            }
+        }
+
+        // --- OFFLINE: Persist to SQLite ---
+        await InitOutboxDbAsync();
+
+        // Safely serialize the arguments and their types for perfect reconstruction later
+        string[] types = args.Select(a => a.GetType().AssemblyQualifiedName).ToArray();
+        string[] serializedArgs = args.Select(a => JsonSerializer.Serialize(a)).ToArray();
+
+        var entity = new OutboxCommandEntity
+        {
+            DedupeKey = dedupeKey,
+            MethodName = methodName,
+            ArgsJsonArray = JsonSerializer.Serialize(serializedArgs),
+            ArgTypesJsonArray = JsonSerializer.Serialize(types),
+            CreatedUtc = DateTime.UtcNow
+        };
+
+        // InsertOrReplace ensures our DedupeKey logic works! (e.g. overwriting stale GPS pings)
+        await _db.InsertOrReplaceAsync(entity);
+        System.Diagnostics.Debug.WriteLine($"[Outbox DB] Saved {methodName} under {dedupeKey}");
+    }
+
+    /// <summary>
+    /// Called automatically upon reconnection to flush the SQLite database.
+    /// </summary>
+    private async Task FlushOutboxAsync()
+    {
+        if (_isFlushing || _hubConnection.State != HubConnectionState.Connected) return;
+
+        await InitOutboxDbAsync();
+        _isFlushing = true;
+
+        try
+        {
+            // Pull all pending commands, oldest first
+            var pendingCommands = await _db.Table<OutboxCommandEntity>().OrderBy(x => x.CreatedUtc).ToListAsync();
+
+            if (!pendingCommands.Any()) return;
+            System.Diagnostics.Debug.WriteLine($"[Outbox DB] Flushing {pendingCommands.Count} pending commands...");
+
+            foreach (var cmd in pendingCommands)
+            {
+                if (_hubConnection.State != HubConnectionState.Connected) break; // Lost connection mid-flush
+
+                try
+                {
+                    // 1. Carefully reconstruct the strongly-typed arguments
+                    var typesList = JsonSerializer.Deserialize<string[]>(cmd.ArgTypesJsonArray);
+                    var argsList = JsonSerializer.Deserialize<string[]>(cmd.ArgsJsonArray);
+
+                    object[] reconstructedArgs = new object[argsList.Length];
+                    for (int i = 0; i < argsList.Length; i++)
+                    {
+                        Type t = Type.GetType(typesList[i]);
+                        reconstructedArgs[i] = JsonSerializer.Deserialize(argsList[i], t);
+                    }
+
+                    // 2. Fire it at the server
+                    await _hubConnection.InvokeCoreAsync(cmd.MethodName, reconstructedArgs);
+
+                    // 3. Delete from DB only after successful transmission
+                    await _db.DeleteAsync(cmd);
+                    System.Diagnostics.Debug.WriteLine($"[Outbox DB] Successfully flushed {cmd.MethodName}");
+                }
+                catch (Exception ex)
+                {
+                    LogException($"Outbox Flush Failed: {cmd.MethodName}", ex);
+                    // We break the loop so we don't send commands out of order
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            _isFlushing = false;
+        }
+    }
 
     private void RegisterHubListeners()
     {
@@ -199,11 +328,13 @@ public class SignalRService
             ConnectionStatusChanged?.Invoke("Connected", Colors.MediumSeaGreen);
             try
             {
-                // STANDARD RESTORE: If SignalR auto-reconnected quickly
                 if (!string.IsNullOrEmpty(_activeGoogleId) && !string.IsNullOrEmpty(_activeGroupName))
                 {
                     await _hubConnection.InvokeAsync("RestoreConnectionState", _activeGoogleId, _activeUserName, _activeGroupName);
                     ConnectionStatusChanged?.Invoke("Connected", Colors.Green);
+
+                    // THE FIX: Flush the queue!
+                    _ = FlushOutboxAsync();
                 }
             }
             catch (Exception ex) { LogException("Reconnected State Sync", ex); }
@@ -241,6 +372,7 @@ public class SignalRService
             try
             {
                 await _hubConnection.StartAsync();
+                await FlushOutboxAsync();
             }
             catch (Exception ex)
             {
@@ -338,19 +470,11 @@ public class SignalRService
         }
         return null;
     }
-
     public async Task StartGroupNavigation(string groupName, double lat, double lng, string destName)
     {
-        try
-        {
-            await _hubConnection.InvokeAsync("StartNavigation", groupName, lat, lng, destName);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(StartGroupNavigation), ex);
-        }
+        var operationId = Guid.NewGuid().ToString("N");
+        await SendOrQueueAsync("StartNavigation", operationId, groupName, lat, lng, destName, operationId);
     }
-
     public async Task<List<Rider>> GetGroupRoster(string groupName)
     {
         try
@@ -392,14 +516,9 @@ public class SignalRService
 
     public async Task UpdateLocation(string groupName, string userName, double lat, double lng, double heading)
     {
-        try
-        {
-            await _hubConnection.InvokeAsync("UpdateMyLocation", groupName, userName, lat, lng, heading);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(UpdateLocation), ex);
-        }
+        // DEDUPE KEY: "LocationUpdate". 
+        // If offline for 20 mins, we only queue the LATEST coordinate!
+        await SendOrQueueAsync("UpdateMyLocation", "LocationUpdate", groupName, userName, lat, lng, heading);
     }
     public async Task<List<Models.TelemetryDto>> GetGroupTelemetry(string groupName)
     {
@@ -428,14 +547,8 @@ public class SignalRService
     }
     public async Task SendGroupAlert(string groupName, string alertType, string senderName)
     {
-        try
-        {
-            await _hubConnection.InvokeAsync("SendGroupAlert", groupName, alertType, senderName);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(SendGroupAlert), ex);
-        }
+        // DEDUPE KEY: Guid. We want every single alert to go through sequentially, no overwriting!
+        await SendOrQueueAsync("SendGroupAlert", Guid.NewGuid().ToString(), groupName, alertType, senderName);
     }
     public async Task<string> RegisterOrUpdateUser(string googleId, string desiredUsername)
     {
@@ -445,14 +558,7 @@ public class SignalRService
     }
     public async Task SetGroupDestination(string groupName, double lat, double lng, string destName)
     {
-        try
-        {
-            await _hubConnection.InvokeAsync("SetDestination", groupName, lat, lng, destName);
-        }
-        catch (Exception ex)
-        {
-            LogException(nameof(SetGroupDestination), ex);
-        }
+        await SendOrQueueAsync("SetDestination", "DestChange", groupName, lat, lng, destName);
     }
     private string _activeGoogleId = string.Empty;
     private string _activeUserName = string.Empty;
@@ -519,20 +625,20 @@ public class SignalRService
     }
     public async Task PauseGroupNavigation(string groupName, string reason, string adminName)
     {
-        if (_hubConnection?.State == HubConnectionState.Connected)
-            await _hubConnection.InvokeAsync("PauseNavigation", groupName, reason, adminName);
+        var operationId = Guid.NewGuid().ToString("N");
+        await SendOrQueueAsync("PauseNavigation", operationId, groupName, reason, adminName, operationId);
     }
 
     public async Task ResumeGroupNavigation(string groupName, string adminName)
     {
-        if (_hubConnection?.State == HubConnectionState.Connected)
-            await _hubConnection.InvokeAsync("ResumeNavigation", groupName, adminName);
+        var operationId = Guid.NewGuid().ToString("N");
+        await SendOrQueueAsync("ResumeNavigation", operationId, groupName, adminName, operationId);
     }
 
     public async Task CompleteGroupNavigation(string groupName, string adminName)
     {
-        if (_hubConnection?.State == HubConnectionState.Connected)
-            await _hubConnection.InvokeAsync("CompleteNavigation", groupName, adminName);
+        var operationId = Guid.NewGuid().ToString("N");
+        await SendOrQueueAsync("CompleteNavigation", operationId, groupName, adminName, operationId);
     }
     // --- NEW: DYNAMIC ROUTING & MEETUPS ---
     public async Task BroadcastLeadRoute(string groupName, string encodedPolyline)

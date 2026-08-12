@@ -2,7 +2,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Text;
+using System.IO;
+using System.Text.Json;
+using System.Threading.Tasks;
 
 namespace SpeedyCompass.Services
 {
@@ -28,8 +30,8 @@ namespace SpeedyCompass.Services
         public DateTime RideStartTime { get; set; }
 
         // --- 4. LIVE CONVOY TRACKING ---
-        public ConcurrentDictionary<string, Location> OtherRiderLocations { get; } = new();
-        public ConcurrentDictionary<string, double> OtherRiderSpeeds { get; } = new();
+        public ConcurrentDictionary<string, Location> OtherRiderLocations { get; set; } = new();
+        public ConcurrentDictionary<string, double> OtherRiderSpeeds { get; set; } = new();
 
         // --- 5. TELEMETRY COOLDOWNS ---
         public DateTime LastSpeedAlert { get; set; } = DateTime.MinValue;
@@ -41,22 +43,121 @@ namespace SpeedyCompass.Services
         public int CurrentRouteIndex { get; set; } = 0;
         public bool RunningInBackground { get; internal set; }
         public int OffRouteStrikeCount { get; set; } = 0;
-        // Stores the trail of where we have physically driven
         public List<Location> DrivenBreadcrumbs { get; set; } = new List<Location>();
         public double TopSpeedKmh { get; set; } = 0;
 
         // ==========================================
+        // PHASE 1: DURABLE SNAPSHOT
+        // ==========================================
+        private string SnapshotFilePath => Path.Combine(FileSystem.AppDataDirectory, "ride_snapshot.json");
+
+        public async Task SaveSnapshotAsync()
+        {
+            try
+            {
+                // 1. Map to strict DTO
+                var dto = new RideSnapshotDto
+                {
+                    CurrentSettings = this.CurrentSettings,
+                    MyRole = this.MyRole,
+                    ActiveDestination = this.ActiveDestination,
+                    ActiveDestinationName = this.ActiveDestinationName,
+                    ActiveMeetupPoint = this.ActiveMeetupPoint,
+                    CurrentRoutePoints = this.CurrentRoutePoints,
+                    CurrentRouteIndex = this.CurrentRouteIndex,
+                    CumulativeDistanceKm = this.CumulativeDistanceKm,
+                    LastOdometerLocation = this.LastOdometerLocation,
+                    MaxSpeedKmh = this.MaxSpeedKmh,
+                    TopSpeedKmh = this.TopSpeedKmh,
+                    DrivenBreadcrumbs = this.DrivenBreadcrumbs,
+
+                    // Convert ConcurrentDictionary to standard Dictionary for safe serialization
+                    OtherRiderLocations = new Dictionary<string, Location>(this.OtherRiderLocations)
+                };
+
+                // 2. Safely write to disk
+                var tempFile = SnapshotFilePath + ".tmp";
+                using var stream = File.Create(tempFile);
+                await JsonSerializer.SerializeAsync(stream, dto);
+                stream.Close();
+
+                File.Move(tempFile, SnapshotFilePath, true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Snapshot Error] Failed to save state: {ex.Message}");
+            }
+        }
+
+        public async Task LoadSnapshotAsync()
+        {
+            try
+            {
+                if (!File.Exists(SnapshotFilePath)) return;
+
+                using var stream = File.OpenRead(SnapshotFilePath);
+                var snapshot = await JsonSerializer.DeserializeAsync<RideSnapshotDto>(stream);
+
+                if (snapshot != null)
+                {
+                    // 1. Rehydrate critical persistent properties
+                    this.CurrentSettings = snapshot.CurrentSettings;
+                    this.MyRole = snapshot.MyRole ?? "Rider";
+                    this.ActiveDestination = snapshot.ActiveDestination;
+                    this.ActiveDestinationName = snapshot.ActiveDestinationName;
+                    this.ActiveMeetupPoint = snapshot.ActiveMeetupPoint;
+                    this.CurrentRoutePoints = snapshot.CurrentRoutePoints ?? new();
+                    this.CurrentRouteIndex = snapshot.CurrentRouteIndex;
+                    this.CumulativeDistanceKm = snapshot.CumulativeDistanceKm;
+                    this.LastOdometerLocation = snapshot.LastOdometerLocation;
+                    this.MaxSpeedKmh = snapshot.MaxSpeedKmh;
+                    this.TopSpeedKmh = snapshot.TopSpeedKmh;
+                    this.DrivenBreadcrumbs = snapshot.DrivenBreadcrumbs ?? new();
+
+                    // Restore offline pins
+                    this.OtherRiderLocations.Clear();
+                    if (snapshot.OtherRiderLocations != null)
+                    {
+                        foreach (var kvp in snapshot.OtherRiderLocations)
+                            this.OtherRiderLocations[kvp.Key] = kvp.Value;
+                    }
+
+                    // 2. THE FIX: Explicitly zero out dependent/ephemeral state!
+                    // This prevents stale alerts or frozen speedometer values on resume.
+                    this.OtherRiderSpeeds.Clear();
+                    this.RunningInBackground = false;
+                    this.TotalStoppedTime = TimeSpan.Zero;
+                    this.LastStopTime = null;
+
+                    // Reset all network & notification cooldowns
+                    this.LastSpeedAlert = DateTime.MinValue;
+                    this.LastArrivalAlert = DateTime.MinValue;
+                    this.LastSplinterAlert = DateTime.MinValue;
+                    this.LastLagAlert = DateTime.MinValue;
+                    this.LastBroadcastLocation = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Snapshot Error] Failed to load state: {ex.Message}");
+            }
+        }
+
+        public void ClearSnapshot()
+        {
+            if (File.Exists(SnapshotFilePath)) File.Delete(SnapshotFilePath);
+        }
+
+        // ==========================================
         // EDGE CASE RESET HANDLERS
         // ==========================================
-
-        // Called when the Admin completely cancels or finishes the route
         public void HardResetAll()
         {
             ResetNavigationState();
             ResetTelemetryState();
+            ClearSnapshot(); // Wipe the disk on a hard reset
         }
 
-        // Called when a brand new destination is set (Clears old polyline, keeps odometer)
         public void ResetNavigationState()
         {
             ActiveDestination = null;
@@ -67,7 +168,6 @@ namespace SpeedyCompass.Services
             CurrentRouteIndex = 0;
         }
 
-        // Called when we specifically want to zero out the Odometer/Speed trackers
         public void ResetTelemetryState()
         {
             CumulativeDistanceKm = 0;
@@ -85,22 +185,44 @@ namespace SpeedyCompass.Services
             OffRouteStrikeCount = 0;
             TopSpeedKmh = 0;
         }
+
         public bool ShouldBroadcastLocation(Location currentLocation, double speedKmh)
         {
-            if (LastBroadcastLocation == null) return true; // Always broadcast the very first point!
+            if (LastBroadcastLocation == null) return true;
 
             int minDist = CurrentSettings?.MinUpdateDistanceMeters ?? 10;
             int maxDist = CurrentSettings?.MaxUpdateDistanceMeters ?? 100;
 
-            // Ratio mapping: 0 km/h = 0.0, 120+ km/h = 1.0
             double speedRatio = Math.Clamp(speedKmh / 120.0, 0.0, 1.0);
-
-            // Calculate the exact distance threshold based on current speed
             double dynamicThresholdMeters = minDist + ((maxDist - minDist) * speedRatio);
-
             double distTraveledMeters = Location.CalculateDistance(LastBroadcastLocation, currentLocation, DistanceUnits.Kilometers) * 1000;
 
             return distTraveledMeters >= dynamicThresholdMeters;
         }
+    }
+    // --- PHASE 1: DURABLE SNAPSHOT DTO ---
+    public class RideSnapshotDto
+    {
+        // The exact version of the snapshot structure (for future migrations)
+        public int SnapshotVersion { get; set; } = 1;
+
+        public GroupSettingsDto CurrentSettings { get; set; }
+        public string MyRole { get; set; }
+
+        public Location ActiveDestination { get; set; }
+        public string ActiveDestinationName { get; set; }
+        public Location ActiveMeetupPoint { get; set; }
+        public List<Location> CurrentRoutePoints { get; set; }
+        public int CurrentRouteIndex { get; set; }
+
+        public double CumulativeDistanceKm { get; set; }
+        public Location LastOdometerLocation { get; set; }
+        public double MaxSpeedKmh { get; set; }
+        public double TopSpeedKmh { get; set; }
+        public List<Location> DrivenBreadcrumbs { get; set; }
+
+        // We save the last known locations so the map isn't completely empty 
+        // while waiting for the network, but we drop their speeds.
+        public Dictionary<string, Location> OtherRiderLocations { get; set; }
     }
 }

@@ -24,6 +24,7 @@ public class CompassHub : Hub
     private readonly CompassStateManager _state;
     private static readonly ConcurrentDictionary<string, DateTime> _alertCooldowns = new();
     private static readonly ConcurrentDictionary<string, RiderTelemetry> _telemetryStats = new();
+    private static readonly ConcurrentDictionary<string, DateTime> _processedOperations = new();
 
     public CompassHub(CompassStateManager state)
     {
@@ -364,18 +365,26 @@ public class CompassHub : Hub
         }
     }
 
-    public async Task StartNavigation(string groupName, double destLat, double destLng, string destName)
+    public async Task StartNavigation(string groupName, double destLat, double destLng, string destName, string operationId)
     {
+        if (IsOperationDuplicate(operationId)) return;
+
         var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
         var session = await _state.GetGroupCachedAsync(groupName);
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
+
+            // 1. Conflict Shield: Don't allow an old offline "Start" command to resurrect a "Completed" ride
+            if (session.CurrentState == GroupState.Completed) return;
+
+            // 2. Atomic MongoDB Update with Version Increment!
             var update = Builders<GroupSession>.Update
                 .Set(g => g.CurrentState, GroupState.Navigating)
                 .Set(g => g.DestLat, destLat)
                 .Set(g => g.DestLng, destLng)
-                .Set(g => g.DestName, destName);
+                .Set(g => g.DestName, destName)
+                .Inc(g => g.StateVersion, 1); // Increments the timeline
 
             await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
             await Clients.Group(groupName).SendAsync("NavigationStarted", destLat, destLng, destName, false);
@@ -663,39 +672,80 @@ public class CompassHub : Hub
         await Groups.AddToGroupAsync(newConnectionId, $"{groupName}_ActiveNav");
         await Clients.Group(groupName).SendAsync("RosterUpdated", await GetGroupRoster(groupName));
 
-        //if (session != null)
-        //{
-        //    if (session.CurrentState == GroupState.Navigating)
-        //        await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
-        //    else if (!string.IsNullOrEmpty(session.DestName))
-        //        await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
-        //}
+        // =====================================================================
+        // THE FIX: REPLAY-SAFE STATE PUSH
+        // Because the client's OnNavigationStarted now has a "Telemetry Shield",
+        // we can safely push the current state directly to the caller so their 
+        // UI snaps to reality instantly upon connection!
+        // =====================================================================
+        if (session != null)
+        {
+            if (session.CurrentState == GroupState.Navigating)
+            {
+                // Passing 'true' for isSyncRequired tells the client to NOT wipe its odometer!
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
+            }
+            else if (session.CurrentState == GroupState.DestinationSet)
+            {
+                await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
+            }
+            else if (session.CurrentState >= GroupState.PausedBreak && session.CurrentState <= GroupState.PausedMechanical)
+            {
+                // If the convoy is currently paused, we must first send them the route line, 
+                // and the client's 'OnConnectionStatusChanged' Catch-Up block will 
+                // immediately lock their UI into the Paused state.
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
+            }
+        }
     }
 
-    public async Task PauseNavigation(string groupName, string reason, string adminName)
+    public async Task PauseNavigation(string groupName, string reason, string adminName, string operationId)
     {
+        if (IsOperationDuplicate(operationId)) return;
+
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
+        if (caller == null || session == null || session.AdminGoogleId != caller.GoogleId) return;
+        if (session.CurrentState == GroupState.Completed) return;
+
         var pauseState = GroupStateHelper.GetBreakState(reason);
-        var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, pauseState);
+        var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, pauseState).Inc(g => g.StateVersion, 1);
         await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
 
         await Clients.Group(groupName).SendAsync("ReceiveNavigationPaused", reason, adminName);
     }
 
-    public async Task ResumeNavigation(string groupName, string adminName)
+    public async Task ResumeNavigation(string groupName, string adminName, string operationId)
     {
-        var update = Builders<GroupSession>.Update.Set(g => g.CurrentState, GroupState.Navigating);
-        await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+        if (IsOperationDuplicate(operationId)) return;
 
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
+        if (caller == null || session == null || session.AdminGoogleId != caller.GoogleId) return;
+        if (session.CurrentState == GroupState.Completed) return;
+
+        var update = Builders<GroupSession>.Update
+            .Set(g => g.CurrentState, GroupState.Navigating)
+            .Inc(g => g.StateVersion, 1);
+
+        await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
         await Clients.Group(groupName).SendAsync("ReceiveNavigationResumed", adminName);
     }
 
-    public async Task CompleteNavigation(string groupName, string adminName)
+    public async Task CompleteNavigation(string groupName, string adminName, string operationId)
     {
+        if (IsOperationDuplicate(operationId)) return;
+
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        var session = await _state.GetGroupCachedAsync(groupName);
+        if (caller == null || session == null || session.AdminGoogleId != caller.GoogleId) return;
+
         var update = Builders<GroupSession>.Update
             .Set(g => g.CurrentState, GroupState.Completed)
             .Set(g => g.DestLat, 0)
             .Set(g => g.DestLng, 0)
-            .Set(g => g.DestName, string.Empty);
+            .Set(g => g.DestName, string.Empty)
+            .Inc(g => g.StateVersion, 1);
 
         await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
         await Clients.Group(groupName).SendAsync("ReceiveNavigationCompleted", adminName);
@@ -831,5 +881,22 @@ public class CompassHub : Hub
             // 2. Put them back in the high-frequency stream (Immersive Mode)
             await Groups.AddToGroupAsync(Context.ConnectionId, activeNavGroup);
         }
+    }
+    private bool IsOperationDuplicate(string operationId)
+    {
+        if (string.IsNullOrEmpty(operationId)) return false; // Legacy support
+
+        // If it's already in the dictionary, it's a duplicate! Reject it.
+        if (!_processedOperations.TryAdd(operationId, DateTime.UtcNow))
+            return true;
+
+        // Housekeeping: Fire-and-forget cleanup of operation IDs older than 2 hours
+        _ = Task.Run(() =>
+        {
+            var expiredKeys = _processedOperations.Where(kv => (DateTime.UtcNow - kv.Value).TotalHours > 2).Select(kv => kv.Key).ToList();
+            foreach (var key in expiredKeys) _processedOperations.TryRemove(key, out _);
+        });
+
+        return false;
     }
 }

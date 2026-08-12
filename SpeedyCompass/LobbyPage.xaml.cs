@@ -328,6 +328,7 @@ public partial class LobbyPage : ContentPage
                     await ChangeGroupState(serverState, forceSync: true);
                 }
             }
+            await _rideCache.LoadSnapshotAsync();
         }
         catch (Exception ex)
         {
@@ -399,6 +400,8 @@ public partial class LobbyPage : ContentPage
     {
         base.OnDisappearing();
 
+        _ = _rideCache.SaveSnapshotAsync();
+
         _signalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
         _signalRService.RosterUpdated -= OnRosterUpdated;
         _signalRService.NavigationStarted -= OnNavigationStarted;
@@ -424,6 +427,15 @@ public partial class LobbyPage : ContentPage
         {
             _hwButtonService.PttPressed -= OnHardwarePttPressed;
             _hwButtonService.PttReleased -= OnHardwarePttReleased;
+        }
+
+        if (_locationTracker != null)
+        {
+            _locationTracker.LocationUpdated -= OnLocalLocationPushedFromBackground;
+        }
+        if (_simulatorService != null)
+        {
+            _simulatorService.OnLocationGenerated = null; // Unhook the action
         }
 
         _simulatorService.StopSimulation();
@@ -518,6 +530,7 @@ public partial class LobbyPage : ContentPage
     // --- LOCATION PROCESSING & TELEMETRY ---
     private async void  OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
+        double currentSpeedKmh = e.SpeedMph * 1.60934;
         if (!_rideCache.RunningInBackground)
         {
             EvaluateDayNightCycle(e.Location);
@@ -526,7 +539,7 @@ public partial class LobbyPage : ContentPage
                 LocationDisabledOverlay.Hide();
                 if (_myPinVm != null)
                 {
-                    double currentSpeedKmh = e.SpeedMph * 1.60934;
+                    
                     string newSpeedStr = $"{Math.Round(currentSpeedKmh)} km/h";
                     // =====================================================================
                     // THE FIX: Track and push the Top Speed!
@@ -571,7 +584,7 @@ public partial class LobbyPage : ContentPage
 
         _lastKnownLocation = e.Location;
 
-        if (ShouldBroadcastToNetwork(e.Location, e.SpeedMph * 1.60934))
+        if (ShouldBroadcastToNetwork(e.Location, currentSpeedKmh))
         {
             _lastNetworkBroadcastTime = DateTime.UtcNow;
             _lastNetworkBroadcastLocation = e.Location;
@@ -581,7 +594,7 @@ public partial class LobbyPage : ContentPage
                 try
                 {
                     await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading);
-                    AppLogger.Info("Network", $"Broadcasted location at {Math.Round(e.SpeedMph * 1.60934)} km/h");
+                    AppLogger.Info("Network", $"Broadcasted location at {Math.Round(currentSpeedKmh)} km/h");
                 }
                 catch (Exception ex) { AppLogger.Error("Network", ex, "Failed to broadcast location."); }
             });
@@ -594,7 +607,7 @@ public partial class LobbyPage : ContentPage
             {
                 _rideCache.DrivenBreadcrumbs.Add(e.Location);
             }
-            double speedKmh = e.SpeedMph * 1.60934;
+            double speedKmh = currentSpeedKmh;
 
             // =====================================================================
             // THE FIX: INJECT HARDWARE SENSORS INTO THE LOCATION OBJECT
@@ -1058,44 +1071,40 @@ public partial class LobbyPage : ContentPage
     // 🔄 REPLACE entire method in LobbyPage.xaml.cs
     private void OnDrawerTabClicked(object sender, EventArgs e)
     {
-        TabActionsBtn.BackgroundColor = Colors.Transparent; TabActionsBtn.TextColor = Colors.Gray;
-        TabStatsBtn.BackgroundColor = Colors.Transparent; TabStatsBtn.TextColor = Colors.Gray;
-        TabMapSettingsBtn.BackgroundColor = Colors.Transparent; TabMapSettingsBtn.TextColor = Colors.Gray;
-        TabAdminBtn.BackgroundColor = Colors.Transparent; TabAdminBtn.TextColor = Colors.Gray;
+        // 1. Reset all tabs to default state
+        var buttons = new[] { TabActionsBtn, TabStatsBtn, TabMapSettingsBtn, TabAdminBtn };
+        var views = new View[] { DrawerActionsTab, ConvoyTabContainer, DrawerMapSettingsTab, DrawerAdminTab };
 
-        DrawerActionsTab.IsVisible = false;
-        // THE FIX: Target ConvoyTabContainer instead of DrawerStatsTab
-        ConvoyTabContainer.IsVisible = false;
-        DrawerMapSettingsTab.IsVisible = false;
-        DrawerAdminTab.IsVisible = false;
+        foreach (var btn in buttons)
+        {
+            btn.BackgroundColor = Colors.Transparent;
+            btn.TextColor = Colors.Gray;
+        }
+        foreach (var view in views) view.IsVisible = false;
 
-        // Safety/Actions only available once we actually start driving
+        // 2. Determine which tab was actually activated
+        Button activeBtn = TabStatsBtn; // Default
+        View activeView = ConvoyTabContainer;
+
         if (sender == TabActionsBtn && groupDetails.CurrentState >= GroupState.Navigating)
         {
-            TabActionsBtn.BackgroundColor = Colors.DodgerBlue;
-            TabActionsBtn.TextColor = Colors.White;
-            DrawerActionsTab.IsVisible = true;
+            activeBtn = TabActionsBtn; activeView = DrawerActionsTab;
         }
-        else if (sender == TabAdminBtn && _amIAdmin) // Visible strictly to Admins
+        else if (sender == TabAdminBtn && _amIAdmin)
         {
-            TabAdminBtn.BackgroundColor = Colors.DodgerBlue;
-            TabAdminBtn.TextColor = Colors.White;
-            DrawerAdminTab.IsVisible = true;
+            activeBtn = TabAdminBtn; activeView = DrawerAdminTab;
         }
-        else if (sender == TabMapSettingsBtn) // Available to everyone immediately
+        else if (sender == TabMapSettingsBtn)
         {
-            TabMapSettingsBtn.BackgroundColor = Colors.DodgerBlue;
-            TabMapSettingsBtn.TextColor = Colors.White;
-            DrawerMapSettingsTab.IsVisible = true;
-        }
-        else // Fallback & Default is the Unified Convoy/Stats Tab
-        {
-            TabStatsBtn.BackgroundColor = Colors.DodgerBlue;
-            TabStatsBtn.TextColor = Colors.White;
-            // THE FIX: Target ConvoyTabContainer instead of DrawerStatsTab
-            ConvoyTabContainer.IsVisible = true;
+            activeBtn = TabMapSettingsBtn; activeView = DrawerMapSettingsTab;
         }
 
+        // 3. Highlight the active tab
+        activeBtn.BackgroundColor = Colors.DodgerBlue;
+        activeBtn.TextColor = Colors.White;
+        activeView.IsVisible = true;
+
+        // 4. Snap drawer up if it's too low
         if (ActionDrawer.TranslationY >= (_drawerFullHeight - _drawerPeekHeight) - 10)
             ActionDrawer.TranslateTo(0, _drawerFullHeight * 0.4, 250, Easing.CubicOut);
     }
@@ -1243,6 +1252,7 @@ public partial class LobbyPage : ContentPage
             }
             UpdateAdminButtonsVisibility();
         });
+        _ = _rideCache.SaveSnapshotAsync();
     }
 
     // --- EVENT TRIGGERS ---
@@ -1285,6 +1295,7 @@ public partial class LobbyPage : ContentPage
                     else PreNavDistLabel.Text += " (Waiting for Admin)";
                 }
             });
+            _ = _rideCache.SaveSnapshotAsync();
         }
         finally { GlobalLoadingOverlay.Hide(); }
     }
@@ -1378,7 +1389,7 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
             {
-                _ = _simulatorService?.StartSimulationAsync(groupDetails.CurrentState, _rideCts.Token);
+                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Baseline_Navigate_Clean);
             }
 #endif
         }
@@ -1459,6 +1470,8 @@ public partial class LobbyPage : ContentPage
             foreach (var p in oldPins) LiveMap.Pins.Remove(p);
 
             _rideCache.HardResetAll();
+            _riderViewModels.Clear();
+            MapPins.Clear();
         }
 
         // 2. THE FIX: Snap the drawer back to the standard Convoy Roster view
@@ -1889,7 +1902,7 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
             {
-                _ = _simulatorService?.StartSimulationAsync(groupDetails.CurrentState, _rideCts.Token);
+                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Baseline_Navigate_Clean);
             }
 #endif
         }
