@@ -8,6 +8,9 @@
             <Border.StrokeShape>
                 <RoundRectangle CornerRadius="20" />
             </Border.StrokeShape>
+            <Border.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnPttClicked" />
+            </Border.GestureRecognizers>
             <Border.Shadow>
                 <Shadow Brush="Black" Offset="0,6" Opacity="0.2" Radius="10" />
             </Border.Shadow>

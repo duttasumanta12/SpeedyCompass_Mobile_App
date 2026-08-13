@@ -267,6 +267,8 @@ public partial class LobbyPage : ContentPage
         SensoryAlertOverlay.CrashCancelled += OnCrashCancelledClicked;
         SensoryAlertOverlay.CrashEmergencyConfirmed += OnCrashEmergencyClicked;
 
+        DrawerActionsTab.PttClicked += OnHardwarePttPressed; 
+
         // Hook up SignalR events
         _signalRService.ConnectionStatusChanged += OnConnectionStatusChanged;
         _signalRService.RosterUpdated += OnRosterUpdated;
@@ -1426,7 +1428,7 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
             {
-                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Long_Stop_AutoPause);
+                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Baseline_Navigate_Clean);
             }
 #endif
         }
