@@ -7,6 +7,13 @@ using System.Text.Json;
 
 namespace SpeedyCompass.Engines;
 
+public class MapBubble
+{
+    public Location Location { get; set; }
+    public List<string> IconNames { get; set; } = new();
+    public string Instruction { get; set; }
+}
+
 // A clean wrapper to pass data back to the UI
 public class RouteCalculationResult
 {
@@ -25,6 +32,8 @@ public class RouteUIData
     public List<Location> DecodedPoints { get; set; }
     public List<RouteStep> VoiceSteps { get; set; }
     public int SpliceIndex { get; internal set; }
+    public List<MapElement> TurnOverlays { get; set; } = new();
+    public List<MapBubble> MapBubbles { get; set; } = new();
 }
 
 // 2. DTO for the Telemetry UI updates
@@ -222,20 +231,90 @@ public class RoutingEngine : IRoutingEngine
     // =====================================================================
     // 1. ROUTE POLYLINE ORCHESTRATOR
     // =====================================================================
+    private (string IconName, bool IsFlatArrow) GetDirectionData(string instruction)
+    {
+        if (string.IsNullOrEmpty(instruction)) return ("straight", false);
+
+        string instrLower = instruction.ToLowerInvariant();
+
+        // =====================================================================
+        // 1. MAJOR MANEUVERS (Drawn as Standing White/Blue Material Bubbles)
+        // =====================================================================
+
+        // U-Turns
+        if (instrLower.Contains("u-turn"))
+        {
+            if (instrLower.Contains("right")) return ("u_turn_right", false);
+            return ("u_turn_left", false);
+        }
+
+        // Roundabouts / Rotaries
+        if (instrLower.Contains("roundabout") || instrLower.Contains("rotary"))
+        {
+            if (instrLower.Contains("right")) return ("roundabout_right", false);
+            return ("roundabout_left", false);
+        }
+
+        // Exits & Ramps
+        if (instrLower.Contains("exit") || instrLower.Contains("ramp"))
+        {
+            if (instrLower.Contains("left")) return ("ramp_left", false);
+            return ("ramp_right", false); // Exits default to the right
+        }
+
+        // Merges
+        if (instrLower.Contains("merge")) return ("merge", false);
+
+        // Forks
+        if (instrLower.Contains("fork"))
+        {
+            if (instrLower.Contains("left")) return ("fork_left", false);
+            return ("fork_right", false);
+        }
+
+        // Flyovers / Overpasses
+        if (instrLower.Contains("flyover") || instrLower.Contains("overpass") && instrLower.Contains("right"))
+            return ("slight_right", false);
+
+        if (instrLower.Contains("flyover") || instrLower.Contains("overpass") && instrLower.Contains("left"))
+            return ("slight_left", false);
+
+        // Destination Reached
+        if (instrLower.Contains("arrive") || instrLower.Contains("destination"))
+            return ("location_on", false);
+
+        // =====================================================================
+        // 2. NORMAL TURNS (Drawn as Flat Chevrons Embedded in the Blue Line)
+        // =====================================================================
+
+        // Sharp Turns
+        if (instrLower.Contains("sharp left")) return ("turn_sharp_left", true);
+        if (instrLower.Contains("sharp right")) return ("turn_sharp_right", true);
+
+        // Slight Turns & Lane Keeps
+        if (instrLower.Contains("slight left") || instrLower.Contains("keep left")) return ("turn_slight_left", true);
+        if (instrLower.Contains("slight right") || instrLower.Contains("keep right")) return ("turn_slight_right", true);
+
+        // Standard Turns
+        if (instrLower.Contains("turn left") || instrLower.Contains("left")) return ("turn_left", true);
+        if (instrLower.Contains("turn right") || instrLower.Contains("right")) return ("turn_right", true);
+
+        // Default Fallback
+        return ("straight", false);
+    }
+
     public async Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute = false)
     {
         var routeData = await GetRouteDataAsync(origin, dest, meetup, includeVoiceSteps, isReroute);
         if (string.IsNullOrEmpty(routeData?.EncodedPolyline) || routeData.DecodedPoints.Count == 0) return null;
 
         var combinedPoints = new List<Location>();
-        int seamIndex = 0; // <-- ADD THIS
+        int seamIndex = 0;
 
         if (isReroute && _rideCache.CurrentRoutePoints != null)
         {
             var historySlice = _rideCache.CurrentRoutePoints.Take(_rideCache.CurrentRouteIndex).ToList();
             combinedPoints.AddRange(historySlice);
-
-            // <-- ADD THIS: The exact coordinate where you are right now!
             seamIndex = historySlice.Count;
         }
 
@@ -243,6 +322,120 @@ public class RoutingEngine : IRoutingEngine
 
         var polyline = new Polyline { StrokeColor = routeColor, StrokeWidth = 22f };
         foreach (var coord in combinedPoints) polyline.Geopath.Add(coord);
+
+        var mapBubbles = new List<MapBubble>();
+        var turnOverlays = new List<MapElement>(); // <-- NEW
+
+        if (routeData.VoiceSteps != null)
+        {
+            foreach (var step in routeData.VoiceSteps)
+            {
+                var instruction = step.Instruction.Split(Environment.NewLine)[0] ?? string.Empty;
+                var dirData = GetDirectionData(instruction);
+
+                // =====================================================================
+                // THE FIX: If it's a Ramp or Exit, create a floating text bubble!
+                // =====================================================================
+                if (instruction.Contains("ramp") || instruction.Contains("fork") ||
+                    instruction.Contains("merge") || instruction.Contains("flyover") || instruction.Contains("overpass"))
+                {
+                    var bubbleIcons = new List<string>();
+
+                    // 1. Primary Infrastructure Icon
+                    if (instruction.Contains("flyover") || instruction.Contains("overpass"))
+                        bubbleIcons.Add("flyover"); // Use the Material symbol for a bridge!
+                    else if (instruction.Contains("merge"))
+                    {
+                        instruction = "Merge";
+                    }
+                    else if (instruction.Contains("fork"))
+                        bubbleIcons.Add(instruction.Contains("left") ? "fork_left" : "fork_right");
+                    else if (instruction.Contains("ramp") || instruction.Contains("exit"))
+                        bubbleIcons.Add(instruction.Contains("left") ? "ramp_left" : "ramp_right");
+
+                    // 2. Secondary Direction Icon (For complex maneuvers like Flyovers)
+                    if (instruction.Contains("flyover") || instruction.Contains("overpass"))
+                    {
+                        if (instruction.Contains("left")) bubbleIcons.Add("turn_slight_left");
+                        else if (instruction.Contains("right")) bubbleIcons.Add("turn_slight_right");
+                        else bubbleIcons.Add("straight");
+                        instruction = "Take flyover";
+                    }
+
+                    mapBubbles.Add(new MapBubble
+                    {
+                        Location = step.TurnLocation,
+                        IconNames = bubbleIcons, // Pass the list!
+                        Instruction = instruction
+                    });
+                }
+
+                if (dirData.IconName != "straight")
+                {
+                    double roadHeading = 0;
+                    Location pinPlacement = step.TurnLocation;
+
+
+                    // 1. Find the exact array index of the intersection
+                    int turnIdx = 0;
+                    double minDist = double.MaxValue;
+                    for (int i = 0; i < combinedPoints.Count; i++)
+                    {
+                        double d = Location.CalculateDistance(step.TurnLocation, combinedPoints[i], DistanceUnits.Kilometers);
+                        if (d < minDist) { minDist = d; turnIdx = i; }
+                    }
+
+                    // 2. Trace backwards ~25 meters
+                    double backDist = 0;
+                    int startIdx = turnIdx;
+                    while (startIdx > 0 && backDist < 0.010) // 0.025 km = 25m
+                    {
+                        backDist += Location.CalculateDistance(combinedPoints[startIdx], combinedPoints[startIdx - 1], DistanceUnits.Kilometers);
+                        startIdx--;
+                    }
+
+                    // 3. Trace forwards ~25 meters
+                    double fwdDist = 0;
+                    int endIdx = turnIdx;
+                    while (endIdx < combinedPoints.Count - 1 && fwdDist < 0.010)
+                    {
+                        fwdDist += Location.CalculateDistance(combinedPoints[endIdx], combinedPoints[endIdx + 1], DistanceUnits.Kilometers);
+                        endIdx++;
+                    }
+
+                    // 4. Extract the curved path segment
+                    var overlayCoords = new List<Location>();
+                    for (int i = startIdx; i <= endIdx; i++) overlayCoords.Add(combinedPoints[i]);
+
+                    if (overlayCoords.Count >= 2)
+                    {
+                        var whiteLine = new Polyline { StrokeColor = Colors.White, StrokeWidth = 10f };
+                        foreach (var c in overlayCoords) whiteLine.Geopath.Add(c);
+                        turnOverlays.Add(whiteLine);
+
+                        // =====================================================================
+                        // THE FIX: NATIVE SCALING POLYGON ARROWHEAD
+                        // =====================================================================
+                        var arrowTip = overlayCoords.Last();
+                        var arrowBase = overlayCoords[overlayCoords.Count - 2];
+                        double arrowBearing = CalculateBearing(arrowBase, arrowTip);
+
+                        // Create a physical shape mapped to the globe (10 meters long)
+                        double arrowSizeKm = 0.010;
+                        var arrowPolygon = CreateArrowhead(arrowTip, arrowBearing, arrowSizeKm);
+                        turnOverlays.Add(arrowPolygon);
+
+                        // Nullify pin placement so we DO NOT draw the Android marker!
+                        pinPlacement = null;
+                    }
+                    else if (turnIdx < combinedPoints.Count - 1)
+                    {
+                        // Fallback if the route ends immediately at the turn
+                        roadHeading = CalculateBearing(combinedPoints[turnIdx], combinedPoints[turnIdx + 1]);
+                    }
+                }
+            }
+        }
 
         return new RouteUIData
         {
@@ -252,7 +445,9 @@ public class RoutingEngine : IRoutingEngine
             EtaText = routeData.EtaText,
             DecodedPoints = combinedPoints,
             VoiceSteps = routeData.VoiceSteps ?? new List<RouteStep>(),
-            SpliceIndex = seamIndex // <-- PASS IT BACK TO THE UI!
+            SpliceIndex = seamIndex,
+            TurnOverlays = turnOverlays ,
+            MapBubbles = mapBubbles
         };
     }
 
@@ -260,14 +455,14 @@ public class RoutingEngine : IRoutingEngine
     // 2. TELEMETRY MATH ORCHESTRATOR
     // =====================================================================
     public async Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(
-        Location currentLocation,
-        RideStateService rideCache,
-        RouteDeviationEngine deviationEngine,
-        List<RouteStep> activeRouteSteps,
-        bool currentHasAnnouncedArrival,
-        Location currentLastAnnouncedTurn,
-        bool voiceNavEnabled,
-        CancellationToken cancellationToken)
+     Location currentLocation,
+     RideStateService rideCache,
+     RouteDeviationEngine deviationEngine,
+     List<RouteStep> activeRouteSteps,
+     bool currentHasAnnouncedArrival,
+     Location currentLastAnnouncedTurn,
+     bool voiceNavEnabled,
+     CancellationToken cancellationToken)
     {
         return await Task.Run(() =>
         {
@@ -381,7 +576,7 @@ public class RoutingEngine : IRoutingEngine
 
                 if (distToTurnMeters < 30)
                 {
-                    activeRouteSteps.RemoveAt(0); // Engine safely pops it off the list by reference!
+                    activeRouteSteps.RemoveAt(0);
                     if (activeRouteSteps.Count > 0)
                     {
                         nextStep = activeRouteSteps[0];
@@ -396,12 +591,12 @@ public class RoutingEngine : IRoutingEngine
                     result.NextTurnDistStr = distToTurnMeters > 1000 ? $"{Math.Round(distToTurnMeters / 1000.0, 1)} km" : $"{Math.Round(distToTurnMeters)}m";
                     result.NextTurnInstr = instruction;
 
-                    string instrLower = instruction.ToLower();
-                    if (instrLower.Contains("turn left")) result.NextTurnIcon = "⬅️";
-                    else if (instrLower.Contains("turn right")) result.NextTurnIcon = "➡️";
-                    else if (instrLower.Contains("u-turn")) result.NextTurnIcon = "↩️";
-                    else if (instrLower.Contains("exit")) result.NextTurnIcon = "↗️";
-                    else result.NextTurnIcon = "⬆️";
+                    // =====================================================================
+                    // THE FIX: Reuse our existing Material Symbols helper method!
+                    // This replaces ~30 lines of if/else logic with a single clean call.
+                    // =====================================================================
+                    var dirData = GetDirectionData(instruction);
+                    result.NextTurnIcon = dirData.IconName;
                 }
             }
 
@@ -494,5 +689,51 @@ public class RoutingEngine : IRoutingEngine
             shifted >>= 5;
         }
         str.Append((char)(shifted + 63));
+    }
+    private double CalculateBearing(Location pt1, Location pt2)
+    {
+        double lat1 = pt1.Latitude * Math.PI / 180.0;
+        double lon1 = pt1.Longitude * Math.PI / 180.0;
+        double lat2 = pt2.Latitude * Math.PI / 180.0;
+        double lon2 = pt2.Longitude * Math.PI / 180.0;
+
+        double dLon = lon2 - lon1;
+        double y = Math.Sin(dLon) * Math.Cos(lat2);
+        double x = Math.Cos(lat1) * Math.Sin(lat2) - Math.Sin(lat1) * Math.Cos(lat2) * Math.Cos(dLon);
+        double brng = Math.Atan2(y, x);
+        return (brng * 180.0 / Math.PI + 360) % 360;
+    }
+    private Polygon CreateArrowhead(Location tip, double bearingDegrees, double sizeKm)
+    {
+        double bearingRad = bearingDegrees * Math.PI / 180.0;
+        double latPerKm = 1.0 / 111.0;
+        double lonPerKm = 1.0 / (111.0 * Math.Cos(tip.Latitude * Math.PI / 180.0));
+
+        // Arrow dimensions
+        double length = sizeKm * 1.2; // Length from tip to base
+        double width = sizeKm * 0.8;  // Width at base
+
+        // Calculate base center point (behind the tip)
+        double baseLat = tip.Latitude - (Math.Cos(bearingRad) * length * latPerKm);
+        double baseLon = tip.Longitude - (Math.Sin(bearingRad) * length * lonPerKm);
+
+        // Perpendicular angle for wings
+        double perpRad = bearingRad + Math.PI / 2.0;
+        double wingLatDelta = Math.Cos(perpRad) * width * latPerKm;
+        double wingLonDelta = Math.Sin(perpRad) * width * lonPerKm;
+
+        var arrow = new Polygon
+        {
+            StrokeColor = Colors.White,
+            FillColor = Colors.White,
+            StrokeWidth = 1f
+        };
+
+        // Triangle points: tip, left wing, right wing
+        arrow.Geopath.Add(tip); // Tip
+        arrow.Geopath.Add(new Location(baseLat + wingLatDelta, baseLon + wingLonDelta)); // Left wing
+        arrow.Geopath.Add(new Location(baseLat - wingLatDelta, baseLon - wingLonDelta)); // Right wing
+
+        return arrow;
     }
 }

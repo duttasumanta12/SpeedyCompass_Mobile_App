@@ -104,6 +104,7 @@ public partial class LobbyPage : ContentPage
     private GroupState? _pendingCatchUpState = null;
     private DateTime _lastCrashEvent = DateTime.MinValue;
     private CancellationTokenSource _crashCts;
+    private List<MapElement> _turnOverlayLines = new();
 
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
@@ -766,34 +767,28 @@ public partial class LobbyPage : ContentPage
 
         Color finalRouteColor = routeColor ?? (isMainRoute ? Colors.DodgerBlue : GetColorsForRider(CurrentGoogleId).RouteColor);
 
-        // Ask the engine to do all the heavy lifting and map drawing!
         var routeUi = await _routingEngine.FetchAndBuildPolylineAsync(origin, dest, meetup, routeColor ?? finalRouteColor, includeVoiceSteps, isReroute: isReroute);
 
         if (routeUi != null)
         {
-            _rideCache.CurrentRoutePoints = routeUi.DecodedPoints;
-
             MainThread.BeginInvokeOnMainThread(() =>
             {
                 if (isMainRoute)
                 {
+                    // IMPORTANT: only main route updates navigation cache
+                    _rideCache.CurrentRoutePoints = routeUi.DecodedPoints;
                     _rideCache.CurrentRouteIndex = routeUi.SpliceIndex;
                     _rideCache.OffRouteStrikeCount = 0;
 
                     if (PreNavDistLabel != null)
                         PreNavDistLabel.Text = $"{routeUi.DistanceKm} km, ETA {routeUi.EtaText}";
 
-                    // =====================================================================
-                    // THE FIX: SEED TELEMETRY HEADER IMMEDIATELY
-                    // If we are actively navigating (or paused), take this static route 
-                    // data and inject it into the active header so we don't wait for GPS movement.
-                    // =====================================================================
                     if (groupDetails.CurrentState >= GroupState.Navigating && !isReroute)
                     {
                         TelemetryHeaderControl.UpdateTelemetryStats(
                             distText: $"{routeUi.DistanceKm} km",
-                            distColor: Colors.DodgerBlue, // Standard route color
-                            totalTravel: "0.0 km",        // We are at the starting line
+                            distColor: Colors.DodgerBlue,
+                            totalTravel: "0.0 km",
                             totalRoute: $"{routeUi.DistanceKm} km",
                             progressVal: 0.0,
                             progressPercent: "0%",
@@ -802,12 +797,27 @@ public partial class LobbyPage : ContentPage
                         );
                     }
 
+                    // 1. Erase old white turn lines
+                    foreach (var line in _turnOverlayLines) LiveMap.MapElements.Remove(line);
+                    _turnOverlayLines.Clear();
+
                     if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
 
                     _activeRouteLine = routeUi.MapLine;
                     LiveMap.MapElements.Add(_activeRouteLine);
 
-                    // THE FIX: Lock the write!
+                    // 3. THE FIX: Draw the white inner tracks ON TOP of the blue line
+                    if (routeUi.TurnOverlays != null)
+                    {
+                        foreach (var whiteOverlay in routeUi.TurnOverlays)
+                        {
+                            _turnOverlayLines.Add(whiteOverlay);
+                            LiveMap.MapElements.Add(whiteOverlay);
+                        }
+                    }
+
+                    DrawMapBubbles(routeUi.MapBubbles);
+
                     lock (_routeStateLock)
                     {
                         _activeRouteSteps.Clear();
@@ -816,13 +826,15 @@ public partial class LobbyPage : ContentPage
                 }
                 else
                 {
-                    // Spiderweb additions
+                    // Non-main overlays must never mutate active navigation cache
                     LiveMap.MapElements.Add(routeUi.MapLine);
                     _otherRiderRoutes.Add(routeUi.MapLine);
                 }
             });
+
             return routeUi.EncodedPolyline;
         }
+
         return null;
     }
     // --- NEW VOICE NAV VARIABLES ---
@@ -832,7 +844,6 @@ public partial class LobbyPage : ContentPage
     {
         MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("Lead rider has updated the route. Syncing map."));
 
-        // 1. Decode the Lead's new path (This is only the detour segment)
         var leadRoutePoints = _routingEngine.DecodeGooglePolyline(encodedPolyline);
         if (leadRoutePoints == null || leadRoutePoints.Count == 0) return;
 
@@ -842,14 +853,8 @@ public partial class LobbyPage : ContentPage
         int seamIndex = -1;
         double minDistance = double.MaxValue;
 
-        // =====================================================================
-        // 2. THE FIX: FIND THE EXACT SEAM ON THE SHARED ROUTE!
-        // Look ahead on our current map to find exactly where the Lead 
-        // rider was when they recalculated, so we can attach the detour there.
-        // =====================================================================
         if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Count > 0)
         {
-            // Start searching from where WE currently are so we don't match a road behind us
             int searchStart = Math.Max(0, _rideCache.CurrentRouteIndex);
 
             for (int i = searchStart; i < _rideCache.CurrentRoutePoints.Count; i++)
@@ -863,26 +868,23 @@ public partial class LobbyPage : ContentPage
             }
         }
 
-        // 3. Splicing Logic
-        if (seamIndex != -1 && minDistance < 1.0) // If the Lead was within 1km of the known route
+        if (seamIndex != -1 && minDistance < 1.0)
         {
             AppLogger.Info("Routing", $"Found route seam at index {seamIndex} ({Math.Round(minDistance * 1000)}m gap). Splicing detour...");
 
-            // Keep the exact road from our driveway, past our current location, all the way to where the Lead turned!
-            var historySlice = _rideCache.CurrentRoutePoints.Take(seamIndex).ToList();
+            // include seam point to avoid tiny visual gap at merge junction
+            var historySlice = _rideCache.CurrentRoutePoints.Take(seamIndex + 1).ToList();
             combinedPoints.AddRange(historySlice);
             combinedPoints.AddRange(leadRoutePoints);
         }
         else
         {
-            // FALLBACK: The Lead rider warped somewhere completely crazy. 
-            // We have to stitch a gap from our current location just to reconnect the lines.
             AppLogger.Info("Routing", "Seam too far or not found. Stitching catch-up gap.");
             var currentLoc = _rideCache.LastOdometerLocation ?? _lastKnownLocation;
 
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRouteIndex > 0)
             {
-                combinedPoints.AddRange(_rideCache.CurrentRoutePoints.Take(_rideCache.CurrentRouteIndex));
+                combinedPoints.AddRange(_rideCache.CurrentRoutePoints.Take(_rideCache.CurrentRouteIndex + 1));
             }
 
             if (currentLoc != null)
@@ -895,25 +897,30 @@ public partial class LobbyPage : ContentPage
                 }
                 catch { }
             }
+
             combinedPoints.AddRange(leadRoutePoints);
         }
 
-        // 4. Update the Cache
         _rideCache.CurrentRoutePoints = combinedPoints;
         _rideCache.OffRouteStrikeCount = 0;
+        _rideCache.LastRerouteTime = DateTime.Now;
 
-        // THE FIX: Do NOT reset _rideCache.CurrentRouteIndex to 0! 
-        // We are exactly where we were, and the simulator/GPS should continue normally!
+        lock (_routeStateLock)
+        {
+            // lead route update payload has no step metadata, so clear stale instructions
+            _activeRouteSteps.Clear();
+        }
 
-        // 5. Redraw the Map
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            var oldLines = LiveMap.MapElements.OfType<Polyline>().ToList();
-            foreach (var line in oldLines) LiveMap.MapElements.Remove(line);
+            // replace only main active route, keep other overlays intact
+            if (_activeRouteLine != null)
+                LiveMap.MapElements.Remove(_activeRouteLine);
 
-            // Always draw the main route in Dodger Blue
             _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 22f };
-            foreach (var coord in _rideCache.CurrentRoutePoints) _activeRouteLine.Geopath.Add(coord);
+            foreach (var coord in _rideCache.CurrentRoutePoints)
+                _activeRouteLine.Geopath.Add(coord);
+
             LiveMap.MapElements.Add(_activeRouteLine);
         });
     }
@@ -1228,6 +1235,7 @@ public partial class LobbyPage : ContentPage
         lock (_routeStateLock) { _activeRouteSteps.Clear(); }
         ClearOtherRiderRoutes();
         _poiManager.ClearTemporaryPois();
+        DrawMapBubbles(new List<MapBubble>());
 
         _locationTracker?.StopTracking();
         _simulatorService.StopSimulation();
@@ -1341,21 +1349,27 @@ public partial class LobbyPage : ContentPage
 
     private async void OnNavigationStarted(double destLat, double destLng, string destName, bool isSyncRequired = false)
     {
-        // =====================================================================
-        // THE TELEMETRY SHIELD
-        // If we receive a Start command but we are ALREADY navigating to this 
-        // exact destination, ignore it to prevent wiping the odometer!
-        // =====================================================================
         bool alreadyNavigating = this.groupDetails?.CurrentState >= GroupState.Navigating && this.groupDetails?.CurrentState < GroupState.Completed;
 
-        // Check if the coordinates are practically identical (handling minor floating point shifts)
         bool sameDestination = _rideCache.ActiveDestination != null &&
                                Math.Abs(_rideCache.ActiveDestination.Latitude - destLat) < 0.0001 &&
                                Math.Abs(_rideCache.ActiveDestination.Longitude - destLng) < 0.0001;
 
-        if (alreadyNavigating && sameDestination && !isSyncRequired)
+        // Always protect telemetry if route is already active to same destination
+        if (alreadyNavigating && sameDestination)
         {
             AppLogger.Info("Navigation", "Ignored redundant Start command to protect active telemetry.");
+
+            // sync-only visual recovery: rebuild line only if it is missing
+            if (isSyncRequired && _activeRouteLine == null)
+            {
+                var loc = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
+                if (loc != null)
+                {
+                    await CalculateAndDrawRoute(loc, _rideCache.ActiveDestination);
+                }
+            }
+
             return;
         }
 
@@ -1370,47 +1384,36 @@ public partial class LobbyPage : ContentPage
         DestinationSearchControl.SetDestinationText(destName);
 
         _rideCache.ResetTelemetryState();
-
-        // THE FIX: Reset the arrival tripwire for the new ride!
         _hasAnnouncedArrival = false;
 
         await ChangeGroupState(GroupState.Navigating, _myName, forceSync: isSyncRequired);
 
-        Location loc;
+        Location loc2;
 #if DEBUG
-        loc = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
+        loc2 = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
 #else
-        loc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+    loc2 = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
 #endif
 
-        if (loc != null)
+        if (loc2 != null)
         {
-            // THE FIX: Ensure UI properties on custom header components are touched strictly on the main thread!
             MainThread.BeginInvokeOnMainThread(() =>
             {
-                TelemetryHeaderControl.SetOriginCoordinates(loc.Latitude, loc.Longitude);
+                TelemetryHeaderControl.SetOriginCoordinates(loc2.Latitude, loc2.Longitude);
             });
 
-            await CalculateAndDrawRoute(loc, _rideCache.ActiveDestination);
-            // THE FIX: Start navigation zoomed in and pointing North instead of zooming out to FitMapToBounds!
-            // =====================================================================
-            // 2. NEW: MODE-AWARE START
-            // Apply the correct physics, visuals, and voice depending on their perspective
-            // =====================================================================
+            await CalculateAndDrawRoute(loc2, _rideCache.ActiveDestination);
+
             MainThread.BeginInvokeOnMainThread(() =>
             {
                 if (_currentNavMode == MapNavigationMode.Immersive)
                 {
-                    // Perspective #1: Full 3D Physics and Following
                     if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
-
                     FitMapToBounds();
                     ToggleNavigationPerspective(true);
                 }
                 else
                 {
-                    // Perspective #2: Instantly strip heavy visuals and enforce Overview (Live Radar) Mode
-                    //if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
                     NextTurnOverlay.IsVisible = false;
 
                     if (_myPinVm != null) _myPinVm.IsAutoCentering = false;
@@ -1419,8 +1422,6 @@ public partial class LobbyPage : ContentPage
                     MapFollowButton.IsVisible = true;
 
                     ToggleNavigationPerspective(false);
-
-                    // Trigger the newly padded "Live Radar" bounds
                     FitMapToBounds();
                 }
             });
@@ -1432,6 +1433,7 @@ public partial class LobbyPage : ContentPage
             }
 #endif
         }
+
         if (!isSyncRequired)
             _voiceEngine.Speak($"Navigation started to {destName}. Ride safe!");
     }
@@ -2179,6 +2181,8 @@ public partial class LobbyPage : ContentPage
         _activeRouteLine = null;
         _activeRouteSteps.Clear();
 
+        DrawMapBubbles(new List<MapBubble>());
+
         var oldPins = LiveMap.Pins.Where(p => p.Type == PinType.Place && p.Label != "You").ToList();
         foreach (var p in oldPins) LiveMap.Pins.Remove(p);
 
@@ -2673,5 +2677,17 @@ public partial class LobbyPage : ContentPage
             }
         }
         catch { /* Sensor not supported on this device */ }
+    }
+    private void DrawMapBubbles(List<MapBubble> bubbles)
+    {
+#if ANDROID
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (LiveMap.Handler is SpeedyCompass.Platforms.Android.CustomMapHandler handler)
+            {
+                handler.UpdateMapBubbles(bubbles);
+            }
+        });
+#endif
     }
 }

@@ -3,9 +3,12 @@ using Android.Gms.Maps;
 using Android.Gms.Maps.Model;
 using Android.Graphics;
 using Android.Views;
+using Microsoft.Maui.Maps;
 using Microsoft.Maui.Maps.Handlers;
 using Microsoft.Maui.Platform;
 using SpeedyCompass.Controls;
+using SpeedyCompass.Engines;
+using SpeedyCompass.Models;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using Color = Android.Graphics.Color;
@@ -23,6 +26,7 @@ namespace SpeedyCompass.Platforms.Android
         private INotifyCollectionChanged? _observablePins;
         private readonly Dictionary<string, BitmapDescriptor> _usernameIconCache = [];
         private MapCallbackHandler _mapCallbackHandler; // Track callback handler for cleanup
+        private readonly List<Marker> _nativeBubbleMarkers = new();
 
         // Store the template in memory after reading it once
         private static string _cachedSvgTemplate = null;
@@ -129,9 +133,12 @@ namespace SpeedyCompass.Platforms.Android
             MarkerMap.Clear();
             AddPins();
         }
-        private BitmapDescriptor GetOrCreateCanvasIcon(string username, Microsoft.Maui.Graphics.Color userColor)
+        private BitmapDescriptor GetOrCreateCanvasIcon(Microsoft.Maui.Graphics.Color userColor)
         {
-            if (_usernameIconCache.TryGetValue(username, out var cachedDescriptor)) 
+            // Cache by the exact Hex color so identical colors share 1 bitmap in memory!
+            string cacheKey = $"Dot_{userColor.ToArgbHex()}";
+
+            if (_usernameIconCache.TryGetValue(cacheKey, out var cachedDescriptor))
                 return cachedDescriptor;
 
             float density = this.Context.Resources.DisplayMetrics.Density;
@@ -153,14 +160,119 @@ namespace SpeedyCompass.Platforms.Android
                 canvas.DrawCircle(size / 2f, size / 2f, (size / 2f) - (2 * density), paint);
 
                 var descriptor = BitmapDescriptorFactory.FromBitmap(bitmap);
-                _usernameIconCache[username] = descriptor;
+                _usernameIconCache[cacheKey] = descriptor; // Store using the Hex Key!
                 return descriptor;
             }
             finally
             {
-                // CRITICAL: Dispose bitmap after descriptor is created
-                // BitmapDescriptorFactory.FromBitmap makes a copy, so we can safely recycle the original
                 bitmap?.Recycle();
+            }
+        }
+
+        private BitmapDescriptor GetHighwayBubbleIcon(List<string> iconNames, string text)
+        {
+            float density = Context.Resources.DisplayMetrics.Density;
+
+            Typeface materialTypeface = Typeface.CreateFromAsset(Context.Assets, "MaterialSymbols.ttf");
+            Typeface standardTypeface = Typeface.Create(Typeface.Default, TypefaceStyle.Bold);
+
+            using var iconPaint = new Paint { AntiAlias = true, TextAlign = Paint.Align.Left, Color = Color.White };
+            iconPaint.SetTypeface(materialTypeface);
+            iconPaint.TextSize = 22 * density;
+
+            using var textPaint = new Paint { AntiAlias = true, TextAlign = Paint.Align.Left, Color = Color.White };
+            textPaint.SetTypeface(standardTypeface);
+            textPaint.TextSize = 14 * density;
+
+            // =====================================================================
+            // THE FIX: Dynamic Multi-Icon Math Layout
+            // =====================================================================
+            float padding = 12 * density;
+            float spacingBetweenIcons = 4 * density;
+            float spacingBeforeWord = 8 * density;
+            float textWidth = textPaint.MeasureText(text);
+
+            float totalIconsWidth = 0;
+            foreach (var icon in iconNames) totalIconsWidth += iconPaint.MeasureText(icon) + spacingBetweenIcons;
+            if (iconNames.Count > 0) totalIconsWidth -= spacingBetweenIcons; // Remove trailing gap
+
+            float width = padding + totalIconsWidth + spacingBeforeWord + textWidth + padding;
+            float height = 40 * density;
+
+            var bitmap = Bitmap.CreateBitmap((int)width, (int)height, Bitmap.Config.Argb8888);
+            try
+            {
+                using var canvas = new Canvas(bitmap);
+
+                // 1. Draw the Pill
+                using var bgPaint = new Paint { AntiAlias = true, Color = Color.Argb(230, 30, 35, 40) };
+                canvas.DrawRoundRect(new RectF(0, 0, width, height), height / 2f, height / 2f, bgPaint);
+
+                float textY = (height / 2f) - ((textPaint.Descent() + textPaint.Ascent()) / 2f);
+                float currentX = padding;
+
+                // 2. Loop and Draw ALL Icons (e.g. Bridge + Arrow)
+                foreach (var icon in iconNames)
+                {
+                    canvas.DrawText(icon, currentX, textY + (2 * density), iconPaint);
+                    currentX += iconPaint.MeasureText(icon) + spacingBetweenIcons;
+                }
+
+                // 3. Draw the Text
+                currentX = currentX - spacingBetweenIcons + spacingBeforeWord;
+                canvas.DrawText(text, currentX, textY, textPaint);
+
+                return BitmapDescriptorFactory.FromBitmap(bitmap);
+            }
+            finally
+            {
+                bitmap?.Recycle();
+            }
+        }
+
+        // =====================================================================
+        // Renders the Bubbles onto the Map
+        // =====================================================================
+        public void UpdateMapBubbles(IEnumerable<MapBubble> bubbles)
+        {
+            if (Map == null) return;
+
+            foreach (var marker in _nativeBubbleMarkers) marker.Remove();
+            _nativeBubbleMarkers.Clear();
+
+            // Calculate current zoom to set initial visibility safely
+            float currentZoom = Map.CameraPosition?.Zoom ?? 15f;
+            bool isVisible = currentZoom >= 14.0f; // Only show bubbles at zoom 14+
+
+            foreach (var bubble in bubbles)
+            {
+                var markerOption = new MarkerOptions();
+                markerOption.SetPosition(new LatLng(bubble.Location.Latitude, bubble.Location.Longitude));
+
+                // Pass the LIST of icons!
+                markerOption.SetIcon(GetHighwayBubbleIcon(bubble.IconNames, bubble.Instruction));
+
+                markerOption.Flat(false);
+                markerOption.Anchor(0.5f, 1.2f);
+                markerOption.InvokeZIndex(60f);
+
+                // THE FIX: Apply initial visibility based on zoom!
+                markerOption.Visible(isVisible);
+
+                var marker = Map.AddMarker(markerOption);
+                _nativeBubbleMarkers.Add(marker);
+            }
+        }
+        public void UpdateBubbleVisibility(float currentZoom)
+        {
+            bool shouldBeVisible = currentZoom >= 14.0f; // 14 is typical City/Arterial level
+
+            foreach (var marker in _nativeBubbleMarkers)
+            {
+                if (marker.Visible != shouldBeVisible)
+                {
+                    marker.Visible = shouldBeVisible;
+                }
             }
         }
 
@@ -179,12 +291,12 @@ namespace SpeedyCompass.Platforms.Android
                     markerOption.SetTitle(pin.Username);
                     markerOption.SetSnippet($"Speed: {pin.Speed}");
 
-                    markerOption.SetIcon(GetOrCreateCanvasIcon(pin.Username, pin.PinColor));
+                    markerOption.SetIcon(GetOrCreateCanvasIcon(pin.PinColor));
                     markerOption.SetPosition(new LatLng(pin.Location.Latitude, pin.Location.Longitude));
                     markerOption.InvokeZIndex(pin.ZIndex);
                     markerOption.Anchor(0.5f, 0.5f); // Center icon on coordinate
                     markerOption.Flat(true);
-                    //markerOption.Rotation((float)pin.Heading);
+                    markerOption.SetRotation((float)pin.Heading);
 
                     var marker = Map.AddMarker(markerOption);
 
@@ -209,7 +321,6 @@ namespace SpeedyCompass.Platforms.Android
                 {
                     // Move the tiny Native Map Dot
                     entry.Marker.Position = new LatLng(pin.Location.Latitude, pin.Location.Longitude);
-
                     entry.Marker.Rotation = (float)pin.Heading;
 
                     // NEW: Instantly Sync the MAUI UI Overlay!
@@ -372,10 +483,20 @@ namespace SpeedyCompass.Platforms.Android
             var projection = Map.Projection;
             float density = Context.Resources.DisplayMetrics.Density;
 
+            float currentZoom = Map.CameraPosition.Zoom;
+            bool isImmersiveMode = currentZoom >= 16.5f;
+
             foreach (var entry in MarkerMap.Values)
             {
                 var marker = entry.Marker;
                 var pin = entry.Pin;
+
+                if (pin.Username == "You" && isImmersiveMode)
+                {
+                    pin.ScreenX = -10000;
+                    pin.ScreenY = -10000;
+                    continue;
+                }
 
                 // Magic: Google Maps converts LatLng to physical Screen Pixels
                 var screenPoint = projection.ToScreenLocation(marker.Position);
@@ -427,7 +548,14 @@ namespace SpeedyCompass.Platforms.Android
             _mapHandler.UpdateMapTheme(initialNightMode);
 
             // CRITICAL: Use named methods instead of lambdas for proper cleanup
-            _cameraMoveHandler = (s, e) => _mapHandler.ProjectPinsToScreen();
+            _cameraMoveHandler = (s, e) =>
+            {
+                _mapHandler.ProjectPinsToScreen();
+
+                // THE FIX: Dynamically hide/show bubbles every time the user pinches the screen!
+                float currentZoom = googleMap.CameraPosition.Zoom;
+                _mapHandler.UpdateBubbleVisibility(currentZoom);
+            };
             googleMap.CameraMove += _cameraMoveHandler;
             
             _poiClickHandler = (sender, e) =>

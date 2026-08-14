@@ -68,7 +68,7 @@
                     <Shadow Brush="Black" Offset="0,4" Opacity="0.15" Radius="10"/>
                 </Border.Shadow>
                 <Grid ColumnDefinitions="Auto, *" ColumnSpacing="10">
-                    <Label x:Name="NextTurnIcon" Grid.Column="0" Text="⬆️" FontSize="24" VerticalOptions="Center" TextColor="DodgerBlue"/>
+                    <Label x:Name="NextTurnIcon" FontFamily="MaterialSymbols" Grid.Column="0" Text="⬆️" FontSize="40" VerticalOptions="Center" TextColor="{AppThemeBinding Light=#111, Dark=White}"/>
                     <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="0">
                         <Label x:Name="NextTurnDistLabel" Text="500m" FontSize="14" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
                         <Label x:Name="NextTurnInstructionLabel" Text="Continue straight" FontSize="11" TextColor="Gray" MaxLines="2" LineBreakMode="TailTruncation" WidthRequest="120"/>
