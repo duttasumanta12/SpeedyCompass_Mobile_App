@@ -417,11 +417,30 @@ public class CompassHub : Hub
     }
 
     // --- STRIPPED DOWN: LIGHTNING FAST LOCATION UPDATE ---
-    public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading)
+    // =====================================================================
+    // THE FIX: STATELESS VISIBILITY ROUTER
+    // =====================================================================
+    public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading, List<string> excludedUserNames)
     {
         string activeNavGroup = $"{groupName}_ActiveNav";
-        // 1. Instantly broadcast to others (Zero math delay)
-        await Clients.GroupExcept(activeNavGroup, Context.ConnectionId).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
+
+        // Always exclude the sender from receiving their own packet
+        List<string> excludedIds = new List<string> { Context.ConnectionId };
+
+        // If this rider's client says "These people muted me", map their names to Connection IDs!
+        if (excludedUserNames != null && excludedUserNames.Count > 0)
+        {
+            var excludedMembers = await _state.GroupMembers
+                .Find(m => m.GroupName == groupName && excludedUserNames.Contains(m.Name))
+                .ToListAsync();
+
+            excludedIds.AddRange(excludedMembers
+                .Where(m => !string.IsNullOrEmpty(m.ConnectionId))
+                .Select(m => m.ConnectionId));
+        }
+
+        // 1. Instantly broadcast, explicitly cutting off network bandwidth to users who requested a mute
+        await Clients.GroupExcept(activeNavGroup, excludedIds).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
 
         // 2. Fire-and-forget DB Update
         var currentRider = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
@@ -434,6 +453,20 @@ public class CompassHub : Hub
                 .Set(m => m.LastUpdate, DateTime.UtcNow);
 
             await _state.GroupMembers.UpdateOneAsync(m => m.Id == currentRider.Id, updateCoords);
+        }
+    }
+
+    public async Task SendVisibilityToggleToRider(string groupName, string targetUserName, bool hide)
+    {
+        var caller = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        if (caller == null) return;
+
+        // Find the specific rider who is being muted
+        var target = await _state.GroupMembers.Find(m => m.GroupName == groupName && m.Name == targetUserName).FirstOrDefaultAsync();
+        if (target != null && !string.IsNullOrEmpty(target.ConnectionId))
+        {
+            // Peer-to-Peer Relay: Send the mute request STRICTLY to that one user
+            await Clients.Client(target.ConnectionId).SendAsync("ReceiveVisibilityToggle", caller.Name, hide);
         }
     }
     // =======================================================

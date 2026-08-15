@@ -75,6 +75,7 @@ public class SignalRService
     public event Action<GroupSettingsDto> GroupSettingsUpdated;
     // Add this state flag near the top of your SignalRService class
     private bool _isBackgroundListenerMode = false;
+    public event Action<string, bool> VisibilityToggleReceived;
 
     public SignalRService()
     {
@@ -361,6 +362,10 @@ public class SignalRService
 
             RiderLocationUpdated?.Invoke(riderId, lat, lng, heading);
         });
+        _hubConnection.On<string, bool>("ReceiveVisibilityToggle", (callerName, hide) =>
+        {
+            VisibilityToggleReceived?.Invoke(callerName, hide);
+        });
     }
 
     // Explicit Hub Commands with Global Exception Handling
@@ -514,11 +519,29 @@ public class SignalRService
         }
     }
 
-    public async Task UpdateLocation(string groupName, string userName, double lat, double lng, double heading)
+    public async Task UpdateLocation(string groupName, string userName, double lat, double lng, double heading, List<string> excludedUsers)
     {
         // DEDUPE KEY: "LocationUpdate". 
         // If offline for 20 mins, we only queue the LATEST coordinate!
-        await SendOrQueueAsync("UpdateMyLocation", "LocationUpdate", groupName, userName, lat, lng, heading);
+        await SendOrQueueAsync("UpdateMyLocation", "LocationUpdate", groupName, userName, lat, lng, heading, excludedUsers);
+    }
+    // ==========================================================
+    // --- NEW: PEER-TO-PEER VISIBILITY TOGGLE ---
+    // ==========================================================
+    public async Task SendVisibilityToggle(string groupName, string targetUserName, bool hide)
+    {
+        // We only send this if connected. If offline, there's no location to hide anyway!
+        if (_hubConnection?.State == HubConnectionState.Connected)
+        {
+            try
+            {
+                await _hubConnection.InvokeAsync("SendVisibilityToggleToRider", groupName, targetUserName, hide);
+            }
+            catch (Exception ex)
+            {
+                LogException(nameof(SendVisibilityToggle), ex);
+            }
+        }
     }
     public async Task<List<Models.TelemetryDto>> GetGroupTelemetry(string groupName)
     {

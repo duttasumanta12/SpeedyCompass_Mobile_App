@@ -33,4 +33,26 @@
         public const string Map_GPSUpdateAggressiveness = "Map_GPSUpdateAggressiveness";
         public const string Map_BackgroundBatteryThrottlePercentage = "Map_BackgroundBatteryThrottlePercentage";
     }
+    public enum TurnDirectionEnum
+    {
+        Straight,
+        TurnLeft,
+        TurnRight,
+        SharpLeft,
+        SharpRight,
+        SlightLeft,
+        SlightRight,
+        KeepLeft,
+        KeepRight,
+        UTurnLeft,
+        UTurnRight,
+        RoundaboutLeft,
+        RoundaboutRight,
+        RampLeft,
+        RampRight,
+        ForkLeft,
+        ForkRight,
+        Merge,
+        Destination
+    }
 }

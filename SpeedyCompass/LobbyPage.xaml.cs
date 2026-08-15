@@ -2,7 +2,6 @@
 using Android.Hardware;
 using AndroidX.ConstraintLayout.Core.Motion.Utils;
 using Kotlin.Contracts;
-
 #endif
 using Microsoft.Extensions.Configuration;
 using Microsoft.Maui.Controls.Maps;
@@ -106,6 +105,9 @@ public partial class LobbyPage : ContentPage
     private CancellationTokenSource _crashCts;
     private List<MapElement> _turnOverlayLines = new();
     private WeatherService weatherService;
+    private HashSet<string> _hiddenRiders = new(); // Who I am hiding
+    private readonly HashSet<string> _usersWhoMutedMe = new(); // Who has told me to stop sending to them
+    private HashSet<string> _visibilityInitialized = new();
 
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
@@ -293,6 +295,7 @@ public partial class LobbyPage : ContentPage
         _signalRService.RouteDeviationAlert += OnRouteDeviationAlert;
         _signalRService.MeetupPointSet += OnMeetupPointSet;
         _signalRService.GroupSettingsUpdated += OnSettingsPushedFromServer;
+        _signalRService.VisibilityToggleReceived += OnVisibilityToggleReceived;
 
         _hwButtonService = IPlatformApplication.Current?.Services.GetService<HardwareButtonService>();
         if (_hwButtonService != null)
@@ -380,7 +383,7 @@ public partial class LobbyPage : ContentPage
         catch (Exception ex)
         {
             await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
-            await Navigation.PopAsync();
+            await ClosePageAsync();
         }
     }
     private void OnNavigationModeChanged(object sender, MapNavigationMode mode)
@@ -475,6 +478,7 @@ public partial class LobbyPage : ContentPage
         _signalRService.RouteDeviationAlert -= OnRouteDeviationAlert;
         _signalRService.MeetupPointSet -= OnMeetupPointSet;
         _signalRService.GroupSettingsUpdated -= OnSettingsPushedFromServer;
+        _signalRService.VisibilityToggleReceived -= OnVisibilityToggleReceived;
 
         if (_hwButtonService != null)
         {
@@ -563,6 +567,32 @@ public partial class LobbyPage : ContentPage
                     _rideCache.MyRole = r.Role; // Set Role securely from Data, not UI!
                 }
                 if (!r.IsOnline) displayName += " (Offline)";
+
+                bool isEssential = r.Role == "Admin" || r.Role == "Lead" || r.Role == "Tail" || r.Role == "Marshal";
+
+                if (r.GoogleId != CurrentGoogleId)
+                {
+                    // Promoted to an essential role: Show them
+                    if (isEssential && _hiddenRiders.Contains(r.Name))
+                    {
+                        _hiddenRiders.Remove(r.Name);
+                        _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, false).SafeFireAndForget();
+                    }
+                    // First time seeing them: Apply default rules
+                    else if (!_visibilityInitialized.Contains(r.Name))
+                    {
+                        _visibilityInitialized.Add(r.Name);
+
+                        // Hide standard riders by default
+                        if (!isEssential)
+                        {
+                            _hiddenRiders.Add(r.Name);
+                            _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, true).SafeFireAndForget();
+                        }
+                    }
+                }
+
+                if (_hiddenRiders.Contains(r.Name)) displayName += " 👻 (Hidden)";
 
                 updatedRiders.Add(new Rider
                 {
@@ -1404,6 +1434,8 @@ public partial class LobbyPage : ContentPage
                 TelemetryHeaderControl.SetOriginCoordinates(loc2.Latitude, loc2.Longitude);
             });
 
+            await _signalRService.UpdateLocation(groupName: GroupNameLabel.Text, userName: _myName, lat: loc2.Latitude, lng: loc2.Longitude, 0, new List<string>());
+
             await CalculateAndDrawRoute(loc2, _rideCache.ActiveDestination);
 
             MainThread.BeginInvokeOnMainThread(() =>
@@ -1845,7 +1877,7 @@ public partial class LobbyPage : ContentPage
         MainThread.BeginInvokeOnMainThread(async () =>
         {
             await DisplayAlert("Group Closed", "The Admin has deleted the group.", "OK");
-            await Navigation.PopAsync();
+            await ClosePageAsync();
         });
     }
     private async void OnLeaveGroupClicked(object sender, EventArgs e)
@@ -1855,29 +1887,84 @@ public partial class LobbyPage : ContentPage
         {
             _isLeavingGroupPermanently = true;
             _rideCache.HardResetAll();
-            await _signalRService.LeaveGroup(CurrentGoogleId);
-            await Navigation.PopAsync();
+            _signalRService.LeaveGroup(CurrentGoogleId).SafeFireAndForget();
+            await ClosePageAsync();
         }
     }
     private void OnOpenSettingsClicked(object sender, EventArgs e) => AppInfo.Current.ShowSettingsUI();
     private void OnRetryLocationClicked(object sender, EventArgs e) => InitializeLocalTrackingAsync();
     private async void OnRiderTapped(object sender, Rider selectedRider)
     {
+        if (selectedRider == null) return;
+
+        // Strip the UI tags to get the pure database username
+        string rawName = selectedRider.Name.Replace(" (You)", "").Replace(" (Offline)", "").Replace(" 👻 (Hidden)", "");
+        var options = new List<string>();
+
+        bool isEssential = selectedRider.Role == "Admin" || selectedRider.Role == "Lead" || selectedRider.Role == "Tail" || selectedRider.Role == "Marshal";
+
+        // 1. Visibility Toggle (Available to EVERYONE)
+        if (selectedRider.GoogleId != CurrentGoogleId)
+        {
+            bool isHidden = _hiddenRiders.Contains(rawName);
+            options.Add(isHidden ? "👁️ Show on Map" : "👻 Hide from Map");
+        }
+
+        // 2. Admin Tools
+        if (_amIAdmin)
+        {
+            options.Add("View Emergency Info");
+            options.Add("Lead");
+            options.Add("Tail");
+            options.Add("Marshal");
+            options.Add("Standard Rider");
+        }
+
+        if (options.Count == 0) return;
+
+        string action = await DisplayActionSheet($"Manage {rawName}", "Cancel", null, options.ToArray());
+        if (action == "Cancel" || string.IsNullOrEmpty(action)) return;
+
+        // =====================================================================
+        // HANDLE VISIBILITY TOGGLE
+        // =====================================================================
+        if (action == "👁️ Show on Map" || action == "👻 Hide from Map")
+        {
+            bool hide = action == "👻 Hide from Map";
+
+            if (hide && isEssential)
+            {
+                bool confirm = await DisplayAlert("Hide Essential Rider?", $"{rawName} is the {selectedRider.Role}. It is highly recommended to keep them visible. Hide anyway?", "Hide", "Cancel");
+                if (!confirm) return;
+            }
+
+            if (hide) _hiddenRiders.Add(rawName);
+            else _hiddenRiders.Remove(rawName);
+
+            // Instantly remove them from the UI Map
+            if (hide && _riderViewModels.TryGetValue(rawName, out var vm))
+            {
+                MapPins.Remove(vm);
+                _riderViewModels.TryRemove(rawName, out _);
+            }
+
+            // THE FIX: Peer-to-Peer request! Tell that rider's phone to stop sending to you!
+            _signalRService.SendVisibilityToggle(GroupNameLabel.Text, rawName, hide).SafeFireAndForget();
+
+            var roster = await _signalRService.GetGroupRoster(GroupNameLabel.Text);
+            if (roster != null) OnRosterUpdated(roster);
+
+            return;
+        }
+
+        // =====================================================================
+        // HANDLE ADMIN TOOLS (Your existing logic)
+        // =====================================================================
         if (!_amIAdmin)
         {
             await DisplayAlert("Permission Denied", "Only the Admin can assign roles or view emergency info.", "OK");
             return;
         }
-
-        // We no longer have to cast e.Parameter, the component did the work for us!
-        if (selectedRider == null)
-        {
-            await DisplayAlert("Error", "Could not identify the selected rider from the UI.", "OK");
-            return;
-        }
-
-        string action = await DisplayActionSheet($"Manage {selectedRider.Name}", "Cancel", null,
-            "View Emergency Info", "Lead", "Tail", "Marshal", "Standard Rider");
 
         if (action == "View Emergency Info")
         {
@@ -1886,22 +1973,15 @@ public partial class LobbyPage : ContentPage
                 var emergencyData = await _signalRService.GetRiderEmergencyInfo(selectedRider.GoogleId);
                 if (emergencyData != null)
                 {
-                    string info = $"Blood Group: {emergencyData.BloodGroup}\n" +
-                                  $"Contact: {emergencyData.EmergencyContact}\n" +
-                                  $"Vehicle: {emergencyData.VehicleNumber}";
-
-                    await DisplayAlert($"{selectedRider.Name}'s Info", info, "Close");
+                    string info = $"Blood Group: {emergencyData.BloodGroup}\nContact: {emergencyData.EmergencyContact}\nVehicle: {emergencyData.VehicleNumber}";
+                    await DisplayAlert($"{rawName}'s Info", info, "Close");
                 }
             }
-            catch (Exception ex)
-            {
-                await DisplayAlert("Access Denied", ex.Message, "OK");
-            }
+            catch (Exception ex) { await DisplayAlert("Access Denied", ex.Message, "OK"); }
         }
-        else if (action != "Cancel" && !string.IsNullOrEmpty(action))
+        else
         {
             string backendRole = action == "Standard Rider" ? "Rider" : action;
-
             if (selectedRider.IsAdmin && backendRole != "Lead")
             {
                 bool hasOtherLead = Riders.Any(r => r.GoogleId != selectedRider.GoogleId && r.Role == "Lead");
@@ -1911,7 +1991,6 @@ public partial class LobbyPage : ContentPage
                     return;
                 }
             }
-
             await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
         }
     }
@@ -2390,7 +2469,7 @@ public partial class LobbyPage : ContentPage
     private async void OnBackButtonClicked(object sender, EventArgs e)
     {
         // Simple and standard MAUI navigation: Pop this page off the stack!
-        await Navigation.PopAsync();
+        await ClosePageAsync();
     }
     // =====================================================================
     // SEQUENTIAL CONSUMER LOOPS
@@ -2527,8 +2606,11 @@ public partial class LobbyPage : ContentPage
             _lastNetworkBroadcastTime = DateTime.UtcNow;
             _lastNetworkBroadcastLocation = e.Location;
 
-            // This relies on your safe Outbox (SignalRService) so we don't need a try/catch here
-            await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading);
+            List<string> excludedPeers;
+            lock (_usersWhoMutedMe) { excludedPeers = _usersWhoMutedMe.ToList(); }
+
+            // THE FIX: Explicitly tell the server NOT to route this payload to these users!
+            await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading, excludedPeers);
         }
 
         if (groupDetails?.CurrentState == GroupState.Navigating)
@@ -2707,5 +2789,24 @@ public partial class LobbyPage : ContentPage
             }
         });
 #endif
+    }
+    private void OnVisibilityToggleReceived(string mutedByUserName, bool hide)
+    {
+        lock (_usersWhoMutedMe)
+        {
+            if (hide) _usersWhoMutedMe.Add(mutedByUserName);
+            else _usersWhoMutedMe.Remove(mutedByUserName);
+        }
+    }
+    private async Task ClosePageAsync()
+    {
+        if (Navigation.ModalStack.Count > 0)
+        {
+            await Navigation.PopModalAsync();
+        }
+        else
+        {
+            await Shell.Current.GoToAsync(".."); // Standard Shell back-navigation
+        }
     }
 }
