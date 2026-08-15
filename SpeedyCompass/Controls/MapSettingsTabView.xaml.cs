@@ -59,6 +59,15 @@ public partial class MapSettingsTabView : ContentView
 
         int throttle = Preferences.Default.Get("Map_BackgroundBatteryThrottlePercentage", 20);
         BatteryThrottleSlider.Value = throttle;
+
+        // Load Weather Settings
+        bool isWeatherEnabled = Preferences.Default.Get("Map_WeatherRadarEnabled", true);
+        WeatherRadarSwitch.IsToggled = isWeatherEnabled;
+        WeatherDistanceContainer.IsVisible = isWeatherEnabled;
+
+        double weatherDist = Preferences.Default.Get("Map_WeatherLookAheadKm", 15.0);
+        WeatherDistanceSlider.Value = weatherDist;
+        WeatherDistanceLabel.Text = $"{Math.Round(weatherDist)} km";
     }
 
     // =====================================================================
@@ -83,10 +92,16 @@ public partial class MapSettingsTabView : ContentView
 
     private void UpdateVisualStateForNavMode(MapNavigationMode mode)
     {
-        // If in background sharing, visually architectural architectural architectural standard dim architectural standard immersive only standard settings standard standard standard standard
+        // If in background sharing, visually dim immersive only standard settings
         bool isImmersive = mode == MapNavigationMode.Immersive;
         CameraPhysicsContainer.Opacity = isImmersive ? 1.0 : 0.4;
-        CameraPhysicsContainer.IsEnabled = isImmersive; // Cannot toggle standard sub standard choices if master standard standard is standard standard off standard
+        CameraPhysicsContainer.IsEnabled = isImmersive; // Cannot toggle sub choices if master switch is off
+
+        if (WeatherRadarContainer != null)
+        {
+            WeatherRadarContainer.Opacity = isImmersive ? 1.0 : 0.4;
+            WeatherRadarContainer.IsEnabled = isImmersive;
+        }
     }
 
     // =====================================================================
@@ -169,5 +184,21 @@ public partial class MapSettingsTabView : ContentView
         LocalMaxUpdateSlider.Value = val;
         LocalMaxUpdateLabel.Text = $"{val}m";
         if (!_isInitializing) Preferences.Default.Set("Map_LocalMaxUpdate", val);
+    }
+    private void OnWeatherRadarToggled(object sender, ToggledEventArgs e)
+    {
+        Preferences.Default.Set("Map_WeatherRadarEnabled", e.Value);
+
+        // Expand/Collapse the slider smoothly
+        WeatherDistanceContainer.IsVisible = e.Value;
+    }
+
+    private void OnWeatherDistanceChanged(object sender, ValueChangedEventArgs e)
+    {
+        // Snap the UI text to whole numbers for cleanliness
+        WeatherDistanceLabel.Text = $"{Math.Round(e.NewValue)} km";
+
+        // Save the exact double to Preferences
+        Preferences.Default.Set("Map_WeatherLookAheadKm", e.NewValue);
     }
 }

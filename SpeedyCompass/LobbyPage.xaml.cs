@@ -105,6 +105,7 @@ public partial class LobbyPage : ContentPage
     private DateTime _lastCrashEvent = DateTime.MinValue;
     private CancellationTokenSource _crashCts;
     private List<MapElement> _turnOverlayLines = new();
+    private WeatherService weatherService;
 
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
@@ -216,6 +217,7 @@ public partial class LobbyPage : ContentPage
         _placeDiscoveryService = IPlatformApplication.Current?.Services.GetService<IPlaceDiscoveryService>();
         _deviceCapabilityService = IPlatformApplication.Current?.Services.GetService<DeviceCapabilityService>();
         _mapCameraEngine = IPlatformApplication.Current?.Services.GetService<MapCameraEngine>();
+        weatherService = IPlatformApplication.Current?.Services.GetService<WeatherService>();
 
         _simulatorService = IPlatformApplication.Current?.Services.GetService<RideSimulatorService>();
         _poiManager = new MapPoiManager(LiveMap, _rideCache, _placeDiscoveryService);
@@ -1431,11 +1433,27 @@ public partial class LobbyPage : ContentPage
             {
                 _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Baseline_Navigate_Clean);
             }
+            await Task.Delay(3000); // Give the simulator a moment to start before we speak
 #endif
         }
 
         if (!isSyncRequired)
             _voiceEngine.Speak($"Navigation started to {destName}. Ride safe!");
+
+        weatherService.StartRadarLoopAsync(
+            getCurrentLocation: () => _lastKnownLocation,
+            rideCache: _rideCache,
+            routingEngine: _routingEngine,
+            voiceEngine: _voiceEngine,
+            onBadWeatherDetected: (alert) =>
+            {
+                // The service handles the math and voice; we just handle the UI flash!
+                MainThread.BeginInvokeOnMainThread(() =>
+                {
+                    SensoryAlertOverlay.TriggerAlertAsync("Weather", alert.IconEmoji, alert.WarningMessage, Color.Parse(alert.AlertColor)).SafeFireAndForget();
+                });
+            },
+            cancelToken: _rideCts.Token).SafeFireAndForget();
     }
 
     private async void OnNavigationCompleted(string adminName)

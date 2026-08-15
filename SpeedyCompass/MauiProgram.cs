@@ -20,6 +20,8 @@ namespace SpeedyCompass
                 {
                     fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
                     fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
+                    // YOUR FONT HERE:
+                    fonts.AddFont("MaterialSymbols.ttf", "MaterialSymbols");
                 })
                 .ConfigureMauiHandlers(handlers =>
                 {
@@ -35,6 +37,7 @@ namespace SpeedyCompass
             builder.Configuration.AddUserSecrets<App>();
 
             // 1. Register the Services (Singletons live forever)
+            builder.Services.AddSingleton<WeatherService>();
             builder.Services.AddSingleton<MsalAuthService>();
             builder.Services.AddSingleton<RideStateService>();
             builder.Services.AddSingleton<SignalRService>();

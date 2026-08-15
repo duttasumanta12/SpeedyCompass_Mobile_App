@@ -29,8 +29,6 @@ public partial class MainPage : ContentPage
     private readonly MsalAuthService _authService;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    private string _pendingJoinGroupName = string.Empty;
-
     public ObservableCollection<GroupItemViewModel> AvailableGroups { get; set; } = new();
 
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);

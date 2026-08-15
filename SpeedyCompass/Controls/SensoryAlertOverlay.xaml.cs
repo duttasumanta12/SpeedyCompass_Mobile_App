@@ -12,7 +12,7 @@ public partial class SensoryAlertOverlay : ContentView
     }
 
     // Existing sensory flash logic
-    public async Task TriggerAlertAsync(string alertType, string senderName)
+    public async Task TriggerAlertAsync(string alertType, string senderName, string alertMessage = "", Color alertColor = default)
     {
         int durationSeconds = 5;
         CrashControlsContainer.IsVisible = false;
@@ -37,6 +37,13 @@ public partial class SensoryAlertOverlay : ContentView
             AlertBackgroundGrid.BackgroundColor = Colors.DodgerBlue;
             AlertTitleLabel.Text = "REST STOP";
             AlertIconLabel.Text = "☕";
+            durationSeconds = 5;
+        }
+        else if (alertType == "Weather")
+        {
+            AlertBackgroundGrid.BackgroundColor = alertColor;
+            AlertTitleLabel.Text = $"WEATHER ALERT: {alertMessage}";
+            AlertIconLabel.Text = senderName;
             durationSeconds = 5;
         }
         else { return; }

@@ -2,6 +2,7 @@
 using Microsoft.Maui.Controls.Maps;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared.Constants;
 using System.Globalization;
 using System.Text.Json;
 
@@ -74,6 +75,7 @@ public interface IRoutingEngine
     Task<Location> CalculateDynamicMeetupPointAsync();
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
     Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false);
+    Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm);
 }
 
 public class RoutingEngine : IRoutingEngine
@@ -233,74 +235,83 @@ public class RoutingEngine : IRoutingEngine
     // =====================================================================
     private (string IconName, bool IsFlatArrow) GetDirectionData(string instruction)
     {
-        if (string.IsNullOrEmpty(instruction)) return ("straight", false);
-
-        string instrLower = instruction.ToLowerInvariant();
-
-        // =====================================================================
-        // 1. MAJOR MANEUVERS (Drawn as Standing White/Blue Material Bubbles)
-        // =====================================================================
-
-        // U-Turns
-        if (instrLower.Contains("u-turn"))
+        var direction = GetTurnDirection(instruction);
+        return direction switch
         {
-            if (instrLower.Contains("right")) return ("u_turn_right", false);
-            return ("u_turn_left", false);
+            TurnDirectionEnum.UTurnLeft => ("u_turn_left", false),
+            TurnDirectionEnum.UTurnRight => ("u_turn_right", false),
+            TurnDirectionEnum.RoundaboutLeft => ("roundabout_left", false),
+            TurnDirectionEnum.RoundaboutRight => ("roundabout_right", false),
+            TurnDirectionEnum.RampLeft => ("ramp_left", false),
+            TurnDirectionEnum.RampRight => ("ramp_right", false),
+            TurnDirectionEnum.ForkLeft => ("fork_left", false),
+            TurnDirectionEnum.ForkRight => ("fork_right", false),
+            TurnDirectionEnum.Merge => ("merge", false),
+            TurnDirectionEnum.Destination => ("location_on", false),
+
+            TurnDirectionEnum.SharpLeft => ("turn_sharp_left", true),
+            TurnDirectionEnum.SharpRight => ("turn_sharp_right", true),
+            TurnDirectionEnum.SlightLeft => ("turn_slight_left", true),
+            TurnDirectionEnum.SlightRight => ("turn_slight_right", true),
+            TurnDirectionEnum.KeepLeft => ("turn_slight_left", true),
+            TurnDirectionEnum.KeepRight => ("turn_slight_right", true),
+            TurnDirectionEnum.TurnLeft => ("turn_left", true),
+            TurnDirectionEnum.TurnRight => ("turn_right", true),
+
+            _ => ("straight", false)
+        };
+    }
+    private static TurnDirectionEnum GetTurnDirection(string instruction)
+    {
+        if (string.IsNullOrWhiteSpace(instruction))
+            return TurnDirectionEnum.Straight;
+
+        var text = instruction.Trim().ToLowerInvariant();
+
+        bool hasLeft = System.Text.RegularExpressions.Regex.IsMatch(text, @"\bleft\b");
+        bool hasRight = System.Text.RegularExpressions.Regex.IsMatch(text, @"\bright\b");
+
+        if (text.Contains("u-turn"))
+            return hasRight ? TurnDirectionEnum.UTurnRight : TurnDirectionEnum.UTurnLeft;
+
+        if (text.Contains("roundabout") || text.Contains("rotary"))
+            return hasRight ? TurnDirectionEnum.RoundaboutRight : TurnDirectionEnum.RoundaboutLeft;
+
+        if (text.Contains("exit") || text.Contains("ramp"))
+            return hasLeft ? TurnDirectionEnum.RampLeft : TurnDirectionEnum.RampRight;
+
+        if (text.Contains("merge"))
+            return TurnDirectionEnum.Merge;
+
+        if (text.Contains("fork"))
+            return hasLeft ? TurnDirectionEnum.ForkLeft : TurnDirectionEnum.ForkRight;
+
+        if (text.Contains("sharp left")) return TurnDirectionEnum.SharpLeft;
+        if (text.Contains("sharp right")) return TurnDirectionEnum.SharpRight;
+
+        if (text.Contains("slight left")) return TurnDirectionEnum.SlightLeft;
+        if (text.Contains("slight right")) return TurnDirectionEnum.SlightRight;
+
+        if (text.Contains("keep left")) return TurnDirectionEnum.KeepLeft;
+        if (text.Contains("keep right")) return TurnDirectionEnum.KeepRight;
+
+        if (text.Contains("flyover") || text.Contains("overpass"))
+        {
+            if (hasLeft) return TurnDirectionEnum.SlightLeft;
+            if (hasRight) return TurnDirectionEnum.SlightRight;
+            return TurnDirectionEnum.Straight;
         }
 
-        // Roundabouts / Rotaries
-        if (instrLower.Contains("roundabout") || instrLower.Contains("rotary"))
-        {
-            if (instrLower.Contains("right")) return ("roundabout_right", false);
-            return ("roundabout_left", false);
-        }
+        if (text.Contains("arrive") || text.Contains("destination"))
+            return TurnDirectionEnum.Destination;
 
-        // Exits & Ramps
-        if (instrLower.Contains("exit") || instrLower.Contains("ramp"))
-        {
-            if (instrLower.Contains("left")) return ("ramp_left", false);
-            return ("ramp_right", false); // Exits default to the right
-        }
+        if (text.Contains("turn left") || (hasLeft && !hasRight))
+            return TurnDirectionEnum.TurnLeft;
 
-        // Merges
-        if (instrLower.Contains("merge")) return ("merge", false);
+        if (text.Contains("turn right") || (hasRight && !hasLeft))
+            return TurnDirectionEnum.TurnRight;
 
-        // Forks
-        if (instrLower.Contains("fork"))
-        {
-            if (instrLower.Contains("left")) return ("fork_left", false);
-            return ("fork_right", false);
-        }
-
-        // Flyovers / Overpasses
-        if (instrLower.Contains("flyover") || instrLower.Contains("overpass") && instrLower.Contains("right"))
-            return ("slight_right", false);
-
-        if (instrLower.Contains("flyover") || instrLower.Contains("overpass") && instrLower.Contains("left"))
-            return ("slight_left", false);
-
-        // Destination Reached
-        if (instrLower.Contains("arrive") || instrLower.Contains("destination"))
-            return ("location_on", false);
-
-        // =====================================================================
-        // 2. NORMAL TURNS (Drawn as Flat Chevrons Embedded in the Blue Line)
-        // =====================================================================
-
-        // Sharp Turns
-        if (instrLower.Contains("sharp left")) return ("turn_sharp_left", true);
-        if (instrLower.Contains("sharp right")) return ("turn_sharp_right", true);
-
-        // Slight Turns & Lane Keeps
-        if (instrLower.Contains("slight left") || instrLower.Contains("keep left")) return ("turn_slight_left", true);
-        if (instrLower.Contains("slight right") || instrLower.Contains("keep right")) return ("turn_slight_right", true);
-
-        // Standard Turns
-        if (instrLower.Contains("turn left") || instrLower.Contains("left")) return ("turn_left", true);
-        if (instrLower.Contains("turn right") || instrLower.Contains("right")) return ("turn_right", true);
-
-        // Default Fallback
-        return ("straight", false);
+        return TurnDirectionEnum.Straight;
     }
 
     public async Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute = false)
@@ -346,7 +357,8 @@ public class RoutingEngine : IRoutingEngine
                         bubbleIcons.Add("flyover"); // Use the Material symbol for a bridge!
                     else if (instruction.Contains("merge"))
                     {
-                        instruction = "Merge";
+                        bubbleIcons.Add("merge");
+                        instruction = "Merging Roads";
                     }
                     else if (instruction.Contains("fork"))
                         bubbleIcons.Add(instruction.Contains("left") ? "fork_left" : "fork_right");
@@ -388,7 +400,7 @@ public class RoutingEngine : IRoutingEngine
                     // 2. Trace backwards ~25 meters
                     double backDist = 0;
                     int startIdx = turnIdx;
-                    while (startIdx > 0 && backDist < 0.010) // 0.025 km = 25m
+                    while (startIdx > 0 && backDist < 0.020) // 0.025 km = 25m
                     {
                         backDist += Location.CalculateDistance(combinedPoints[startIdx], combinedPoints[startIdx - 1], DistanceUnits.Kilometers);
                         startIdx--;
@@ -397,7 +409,7 @@ public class RoutingEngine : IRoutingEngine
                     // 3. Trace forwards ~25 meters
                     double fwdDist = 0;
                     int endIdx = turnIdx;
-                    while (endIdx < combinedPoints.Count - 1 && fwdDist < 0.010)
+                    while (endIdx < combinedPoints.Count - 1 && fwdDist < 0.020)
                     {
                         fwdDist += Location.CalculateDistance(combinedPoints[endIdx], combinedPoints[endIdx + 1], DistanceUnits.Kilometers);
                         endIdx++;
@@ -677,6 +689,28 @@ public class RoutingEngine : IRoutingEngine
         }
 
         return currentRoute[finalTargetIndex];
+    }
+    // Grabs a coordinate roughly X kilometers ahead of your current position on the route line
+    public Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm)
+    {
+        if (routePoints == null || currentIndex < 0 || currentIndex >= routePoints.Count)
+            return null;
+
+        double accumulatedDistance = 0;
+
+        for (int i = currentIndex; i < routePoints.Count - 1; i++)
+        {
+            double segmentDist = Location.CalculateDistance(routePoints[i], routePoints[i + 1], DistanceUnits.Kilometers);
+            accumulatedDistance += segmentDist;
+
+            if (accumulatedDistance >= targetDistanceKm)
+            {
+                return routePoints[i + 1];
+            }
+        }
+
+        // If the route is shorter than the look-ahead distance, just check the destination!
+        return routePoints.Last();
     }
 
     private void EncodeDifference(System.Text.StringBuilder str, int diff)
