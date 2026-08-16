@@ -1,4 +1,5 @@
 ﻿using SpeedyCompass.Shared.Models;
+using SpeedyCompass.Engines;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -48,6 +49,12 @@ namespace SpeedyCompass.Services
         public double? LastAnnouncedElevation { get; set; } = null;
         public DateTime? StopStartTime { get; set; } = null;
         public DateTime LastAutoPausePromptTime { get; set; } = DateTime.MinValue;
+        public DateTime LastTrafficAlertTime { get; set; } = DateTime.MinValue;
+        public List<SpeedInterval> CurrentTrafficData { get; set; } = new();
+
+        // NEW: traffic refresh state
+        public DateTime LastTrafficRefreshTime { get; set; } = DateTime.MinValue;
+        public int LastTrafficRefreshRouteIndex { get; set; } = 0;
 
         // ==========================================
         // PHASE 1: DURABLE SNAPSHOT
@@ -145,6 +152,9 @@ namespace SpeedyCompass.Services
                     this.LastSplinterAlert = DateTime.MinValue;
                     this.LastLagAlert = DateTime.MinValue;
                     this.LastBroadcastLocation = null;
+                    this.LastTrafficAlertTime = DateTime.MinValue;
+                    this.LastTrafficRefreshTime = DateTime.MinValue;
+                    this.LastTrafficRefreshRouteIndex = 0;
                 }
             }
             catch (Exception ex)
@@ -194,6 +204,11 @@ namespace SpeedyCompass.Services
             LastGroupPitstopKm = 0;
             OffRouteStrikeCount = 0;
             TopSpeedKmh = 0;
+
+            LastTrafficAlertTime = DateTime.MinValue;
+            LastTrafficRefreshTime = DateTime.MinValue;
+            LastTrafficRefreshRouteIndex = 0;
+            CurrentTrafficData.Clear();
         }
 
         public bool ShouldBroadcastLocation(Location currentLocation, double speedKmh)

@@ -78,64 +78,67 @@ namespace SpeedyCompass.Engines
             // FACTOR 2: SPEED-DEPENDENT DISTANCE THRESHOLD
             // ============================================================
             double speedBasedThreshold = CalculateSpeedBasedThreshold(currentSpeedKmh);
-
-            // CRITICAL: Way too far from any part of the route
-            if (distanceToRouteMeters > speedBasedThreshold * 1.5)
-            {
-                analysis.Severity = DeviationSeverity.Severe;
-                analysis.ConfidenceScore = Math.Min(1.0, distanceToRouteMeters / (speedBasedThreshold * 2.0));
-                analysis.Reason = $"Too far from route: {distanceToRouteMeters:F0}m (threshold: {speedBasedThreshold:F0}m)";
-                analysis.IsOffRoute = true;
-                analysis.UserMessage = $"Off route - {distanceToRouteMeters:F0}m away";
-                analysis.AlertColor = Colors.Red;
+            double gpsNoiseBufferMeters = CalculateGpsNoiseBuffer(currentSpeedKmh);
+            double severeDistanceCutoff = (speedBasedThreshold * 1.8) + gpsNoiseBufferMeters;
+            bool hasReliableHeading = !double.IsNaN(currentHeading) && currentSpeedKmh >= 12;
+ 
+             // CRITICAL: Way too far from any part of the route
+             if (distanceToRouteMeters > severeDistanceCutoff)
+             {
+                 analysis.Severity = DeviationSeverity.Severe;
+                 analysis.ConfidenceScore = Math.Min(1.0, distanceToRouteMeters / (severeDistanceCutoff * 1.2));
+                 analysis.Reason = $"Too far from route: {distanceToRouteMeters:F0}m (threshold: {speedBasedThreshold:F0}m)";
+                 analysis.IsOffRoute = true;
+                 analysis.UserMessage = $"Off route - {distanceToRouteMeters:F0}m away";
+                 analysis.AlertColor = Colors.Red;
                 return analysis;
-            }
+             }
 
             // ============================================================
             // FACTOR 3: HEADING ALIGNMENT CHECK
             // ============================================================
             double expectedHeading = 0;
             double headingDifference = 0;
-
-            if (closestIndex < routePoints.Count - 1)
-            {
-                // Look ahead 5 points for smoother route heading calculation
-                var lookAheadIndex = Math.Min(closestIndex + 5, routePoints.Count - 1);
-                expectedHeading = CalculateBearing(routePoints[closestIndex], routePoints[lookAheadIndex]);
-                headingDifference = NormalizeHeadingDifference(currentHeading, expectedHeading);
+ 
+             if (hasReliableHeading && closestIndex < routePoints.Count - 1)
+             {
+                 // Look ahead 5 points for smoother route heading calculation
+                 var lookAheadIndex = Math.Min(closestIndex + 5, routePoints.Count - 1);
+                 expectedHeading = CalculateBearing(routePoints[closestIndex], routePoints[lookAheadIndex]);
+                 headingDifference = NormalizeHeadingDifference(currentHeading, expectedHeading);
 
                 analysis.HeadingDifferenceDegreesFromRoute = headingDifference;
 
                 // Speed-dependent heading tolerance
                 double headingTolerance = currentSpeedKmh > 60 ? 60.0 : 30.0;
-
-                if (headingDifference > headingTolerance)
-                {
-                    double headingConfidence = Math.Min(1.0, headingDifference / 180.0);
-
-                    // Only count as OFF if ALSO at distance threshold
-                    if (distanceToRouteMeters > speedBasedThreshold)
-                    {
-                        analysis.Severity = DeviationSeverity.Severe;
-                        analysis.ConfidenceScore = Math.Max(headingConfidence, analysis.ConfidenceScore);
-                        analysis.Reason = $"Wrong direction: {headingDifference:F0}° off + {distanceToRouteMeters:F0}m away";
-                        analysis.IsOffRoute = true;
-                        analysis.UserMessage = $"Wrong direction - {headingDifference:F0}° off";
-                        analysis.AlertColor = Colors.Red;
-                        return analysis;
-                    }
-                    else if (distanceToRouteMeters > speedBasedThreshold * 0.6)
-                    {
-                        // Minor distance + wrong heading = Moderate concern
-                        analysis.Severity = DeviationSeverity.Moderate;
-                        analysis.ConfidenceScore = (headingConfidence + distanceToRouteMeters / speedBasedThreshold) / 2.0;
-                        analysis.Reason = $"Possible wrong turn: {headingDifference:F0}° + {distanceToRouteMeters:F0}m";
-                        analysis.UserMessage = $"Possible wrong turn";
-                        analysis.AlertColor = Colors.OrangeRed;
-                        return analysis;
-                    }
-                }
-            }
+ 
+                 if (headingDifference > headingTolerance)
+                 {
+                     double headingConfidence = Math.Min(1.0, headingDifference / 180.0);
+ 
+                     // Only count as OFF if ALSO at distance threshold
+                     if (distanceToRouteMeters > speedBasedThreshold + gpsNoiseBufferMeters)
+                     {
+                         analysis.Severity = DeviationSeverity.Severe;
+                         analysis.ConfidenceScore = Math.Max(headingConfidence, analysis.ConfidenceScore);
+                         analysis.Reason = $"Wrong direction: {headingDifference:F0}° off + {distanceToRouteMeters:F0}m away";
+                         analysis.IsOffRoute = true;
+                         analysis.UserMessage = $"Wrong direction - {headingDifference:F0}° off";
+                         analysis.AlertColor = Colors.Red;
+                         return analysis;
+                     }
+                     else if (distanceToRouteMeters > (speedBasedThreshold * 0.7))
+                     {
+                         // Minor distance + wrong heading = Moderate concern
+                         analysis.Severity = DeviationSeverity.Moderate;
+                         analysis.ConfidenceScore = (headingConfidence + distanceToRouteMeters / speedBasedThreshold) / 2.0;
+                         analysis.Reason = $"Possible wrong turn: {headingDifference:F0}° + {distanceToRouteMeters:F0}m";
+                         analysis.UserMessage = $"Possible wrong turn";
+                         analysis.AlertColor = Colors.OrangeRed;
+                         return analysis;
+                     }
+                 }
+             }
 
             // ============================================================
             // FACTOR 4: ROAD GEOMETRY ANALYSIS
@@ -209,6 +212,19 @@ namespace SpeedyCompass.Engines
         }
 
         /// <summary>
+        /// Extra tolerance to absorb real-world GPS jitter.
+        /// </summary>
+        public double CalculateGpsNoiseBuffer(double speedKmh)
+        {
+            return speedKmh switch
+            {
+                < 10 => 20,
+                < 40 => 15,
+                _ => 10
+            };
+        }
+
+        /// <summary>
         /// Normalize heading difference to 0-180 range
         /// </summary>
         public double NormalizeHeadingDifference(double heading1, double heading2)
@@ -250,26 +266,56 @@ namespace SpeedyCompass.Engines
             int searchStart = Math.Max(0, startIndex - 10);
             int searchEnd = Math.Min(routePoints.Count - 1, startIndex + 30);
 
-            double minDistance = double.MaxValue;
+            double minDistanceMeters = double.MaxValue;
             int closestIndex = startIndex;
 
-            for (int i = searchStart; i <= searchEnd; i++)
-            {
-                double dist = Location.CalculateDistance(current, routePoints[i], DistanceUnits.Kilometers);
-                if (dist < minDistance)
-                {
-                    minDistance = dist;
-                    closestIndex = i;
-                }
-            }
-
-            return (closestIndex, minDistance);
-        }
-
-        /// <summary>
-        /// Check if rider might be on a parallel/alternate road
-        /// (e.g., service road parallel to highway, different lane on divided highway)
-        /// </summary>
+            // 1) Segment-aware local search (better than vertex-only)
+            for (int i = searchStart; i < searchEnd; i++)
+             {
+                double pointDistMeters = Location.CalculateDistance(current, routePoints[i], DistanceUnits.Kilometers) * 1000.0;
+                if (pointDistMeters < minDistanceMeters)
+                 {
+                    minDistanceMeters = pointDistMeters;
+                     closestIndex = i;
+                 }
+ 
+                double segDistMeters = DistancePointToSegmentMeters(current, routePoints[i], routePoints[i + 1]);
+                if (segDistMeters < minDistanceMeters)
+                 {
+                    minDistanceMeters = segDistMeters;
+                     closestIndex = i;
+                 }
+             }
+ 
+             // Check last point in window
+             double lastPointDistMeters = Location.CalculateDistance(current, routePoints[searchEnd], DistanceUnits.Kilometers) * 1000.0;
+             if (lastPointDistMeters < minDistanceMeters)
+             {
+                 minDistanceMeters = lastPointDistMeters;
+                 closestIndex = searchEnd;
+             }
+ 
+             // 2) Recovery: if route index jumped badly, do sparse global scan then refine
+             if (minDistanceMeters > 200)
+             {
+                 for (int i = 0; i < routePoints.Count; i += 3)
+                 {
+                     double dMeters = Location.CalculateDistance(current, routePoints[i], DistanceUnits.Kilometers) * 1000.0;
+                     if (dMeters < minDistanceMeters)
+                     {
+                         minDistanceMeters = dMeters;
+                         closestIndex = i;
+                     }
+                 }
+             }
+ 
+            return (closestIndex, minDistanceMeters / 1000.0);
+         }
+ 
+         /// <summary>
+         /// Check if rider might be on a parallel/alternate road
+         /// (e.g., service road parallel to highway, different lane on divided highway)
+         /// </summary>
         public (bool OnAlternate, double Confidence) CheckAlternateRoadPossibility(
             Location current,
             List<Location> routePoints,
@@ -301,6 +347,41 @@ namespace SpeedyCompass.Engines
             return (false, 0);
         }
 
+        private double DistancePointToSegmentMeters(Location p, Location a, Location b)
+        {
+            // Local equirectangular projection for short distances
+            double lat0 = (a.Latitude + b.Latitude + p.Latitude) / 3.0 * (Math.PI / 180.0);
+            double metersPerDegLat = 111_320.0;
+            double metersPerDegLon = 111_320.0 * Math.Cos(lat0);
+
+            double ax = a.Longitude * metersPerDegLon;
+            double ay = a.Latitude * metersPerDegLat;
+            double bx = b.Longitude * metersPerDegLon;
+            double by = b.Latitude * metersPerDegLat;
+            double px = p.Longitude * metersPerDegLon;
+            double py = p.Latitude * metersPerDegLat;
+
+            double abx = bx - ax;
+            double aby = by - ay;
+            double apx = px - ax;
+            double apy = py - ay;
+            double ab2 = (abx * abx) + (aby * aby);
+            if (ab2 < 0.000001)
+            {
+                double dx0 = px - ax;
+                double dy0 = py - ay;
+                return Math.Sqrt((dx0 * dx0) + (dy0 * dy0));
+            }
+
+            double t = ((apx * abx) + (apy * aby)) / ab2;
+            t = Math.Max(0.0, Math.Min(1.0, t));
+            double cx = ax + (t * abx);
+            double cy = ay + (t * aby);
+            double dx = px - cx;
+            double dy = py - cy;
+            return Math.Sqrt((dx * dx) + (dy * dy));
+        }
+
         /// <summary>
         /// Update strike system based on deviation analysis
         /// Weighted by severity for realistic reroute triggering
@@ -322,12 +403,12 @@ namespace SpeedyCompass.Engines
                     return Math.Max(0, currentStrikes - 1); // Slowly forgive
 
                 case DeviationSeverity.Moderate:
-                    // Moderate issues add 2 strikes
-                    return currentStrikes + 2;
+                    // Moderate issues add 1 strike
+                    return currentStrikes + 1;
 
                 case DeviationSeverity.Severe:
-                    // Severe issues: immediate action (add 3 strikes)
-                    return currentStrikes + 3;
+                    // Severe issues add 2 strikes
+                    return currentStrikes + 2;
 
                 default:
                     return currentStrikes;
@@ -342,9 +423,9 @@ namespace SpeedyCompass.Engines
         {
             return analysis.Severity switch
             {
-                DeviationSeverity.Severe => 1,      // Immediate reroute
-                DeviationSeverity.Moderate => 2,    // Quick reroute (1-2 bad pings)
-                DeviationSeverity.Minor => 10,       // Lenient reroute (multiple drifts)
+                DeviationSeverity.Severe => 2,      // Require persistence
+                DeviationSeverity.Moderate => 3,    // Avoid one-ping false reroutes
+                DeviationSeverity.Minor => 12,      // Lenient reroute
                 _ => 999                             // Never reroute if on-route
             };
         }
@@ -366,9 +447,9 @@ namespace SpeedyCompass.Engines
             // ADAPTIVE THROTTLING based on severity
             double minSecondsBetweenReroutes = analysis.Severity switch
             {
-                DeviationSeverity.Severe => 5,      // Severe: quick response
-                DeviationSeverity.Moderate => 10,   // Moderate: responsive
-                DeviationSeverity.Minor => 20,      // Minor: patient
+                DeviationSeverity.Severe => 8,      // Severe: quick response
+                DeviationSeverity.Moderate => 15,   // Moderate: more stable
+                DeviationSeverity.Minor => 30,      // Minor: patient
                 _ => 60                              // Paranoid safety
             };
 
@@ -376,9 +457,17 @@ namespace SpeedyCompass.Engines
             bool timeOkay = timeSinceLastReroute > minSecondsBetweenReroutes;
 
             // Confidence must be high before we act
-            bool confidenceOkay = analysis.ConfidenceScore > 0.75;
+            bool confidenceOkay = analysis.Severity switch
+            {
+                DeviationSeverity.Severe => analysis.ConfidenceScore > 0.70,
+                DeviationSeverity.Moderate => analysis.ConfidenceScore > 0.80,
+                _ => false
+            };
 
-            return timeOkay && confidenceOkay;
+            if (analysis.Severity == DeviationSeverity.Minor || !analysis.IsOffRoute)
+                return false;
+ 
+             return timeOkay && confidenceOkay;
         }
     }
 }

@@ -653,6 +653,11 @@ public partial class LobbyPage : ContentPage
             if (telemetry.SpeakDestinationReached)
                 MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("You have arrived at your destination."));
 
+            if (telemetry.SpeakTrafficAlert && !string.IsNullOrWhiteSpace(telemetry.TrafficAlertMessage))
+            {
+                MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak(telemetry.TrafficAlertMessage));
+            }
+
             if (_currentNavMode == MapNavigationMode.Immersive &&
                     groupDetails?.CurrentState == GroupState.Navigating &&
                     voiceEnabled)
@@ -812,6 +817,9 @@ public partial class LobbyPage : ContentPage
                     _rideCache.CurrentRouteIndex = routeUi.SpliceIndex;
                     _rideCache.OffRouteStrikeCount = 0;
 
+                    // NEW: keep latest traffic intervals for telemetry loop
+                    _rideCache.CurrentTrafficData = routeUi.TrafficData?.ToList() ?? new List<SpeedInterval>();
+
                     if (PreNavDistLabel != null)
                         PreNavDistLabel.Text = $"{routeUi.DistanceKm} km, ETA {routeUi.EtaText}";
 
@@ -936,6 +944,7 @@ public partial class LobbyPage : ContentPage
         _rideCache.CurrentRoutePoints = combinedPoints;
         _rideCache.OffRouteStrikeCount = 0;
         _rideCache.LastRerouteTime = DateTime.Now;
+        _rideCache.CurrentTrafficData.Clear();
 
         lock (_routeStateLock)
         {
@@ -1324,7 +1333,8 @@ public partial class LobbyPage : ContentPage
 
         string context = e.NewState == GroupState.PausedBreak ? "for a break" :
                          e.NewState == GroupState.PausedHazard ? "due to a hazard" :
-                         "for mechanical repairs";
+                         e.NewState == GroupState.PausedMechanical ? "for mechanical repairs" :
+                         "waiting for riders";
 
         string spokenReason = string.IsNullOrEmpty(e.Reason) ? context : e.Reason;
 
@@ -1463,7 +1473,7 @@ public partial class LobbyPage : ContentPage
 #if DEBUG
             if (_rideCache.CurrentRoutePoints != null && _rideCache.CurrentRoutePoints.Any())
             {
-                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.Baseline_Navigate_Clean);
+                _ = _simulatorService?.StartSimulationAsync(() => groupDetails.CurrentState, _rideCts.Token, RideScenario.WrongTurn_Reroute_Recovery);
             }
             await Task.Delay(3000); // Give the simulator a moment to start before we speak
 #endif
@@ -1930,7 +1940,7 @@ public partial class LobbyPage : ContentPage
         // =====================================================================
         if (action == "👁️ Show on Map" || action == "👻 Hide from Map")
         {
-            bool hide = action == "👻 Hide from Map";
+            bool hide = action == "👻 Hide";
 
             if (hide && isEssential)
             {
@@ -2111,7 +2121,9 @@ public partial class LobbyPage : ContentPage
                 dynamicRouting: s.EnableDynamicRouting,
                 minUpdate: s.MinUpdateDistanceMeters,
                 sensitivity: s.DeviationSensitivityMeters,
-                maxUpdate: s.MaxUpdateDistanceMeters);
+                maxUpdate: s.MaxUpdateDistanceMeters
+                //arrivalGeofence: 1000 // Hardcode for now
+            );
         }
     }
 
@@ -2670,6 +2682,19 @@ public partial class LobbyPage : ContentPage
 
             if (_currentNavMode == MapNavigationMode.Immersive)
             {
+                try
+                {
+                    await _routingEngine.RefreshTrafficWindowIfNeededAsync(
+                        e.Location,
+                        currentSpeedKmh,
+                        _rideCts?.Token ?? CancellationToken.None);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("Traffic", ex, "Traffic window refresh failed.");
+                }
+
                 await TrimRouteVisuals(e.Location);
             }
             else

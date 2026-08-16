@@ -5,6 +5,7 @@ using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Constants;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SpeedyCompass.Engines;
 
@@ -23,6 +24,7 @@ public class RouteCalculationResult
     public List<RouteStep> VoiceSteps { get; set; } = new();
     public double DistanceKm { get; set; }
     public string EtaText { get; set; } = "0m";
+    public List<SpeedInterval> TrafficData { get; set; } = new();
 }
 public class RouteUIData
 {
@@ -35,6 +37,24 @@ public class RouteUIData
     public int SpliceIndex { get; internal set; }
     public List<MapElement> TurnOverlays { get; set; } = new();
     public List<MapBubble> MapBubbles { get; set; } = new();
+    public List<SpeedInterval> TrafficData { get; set; } = new();
+}
+public class SpeedInterval
+{
+    [JsonPropertyName("startPolylinePointIndex")]
+    public int StartPolylinePointIndex { get; set; }
+
+    [JsonPropertyName("endPolylinePointIndex")]
+    public int EndPolylinePointIndex { get; set; }
+
+    [JsonPropertyName("speed")]
+    public string Speed { get; set; } // Returns "NORMAL", "SLOW", or "TRAFFIC_JAM"
+}
+// 2) Add inside RoutingEngine class (near other private fields)
+public sealed class TrafficWindowFetchResult
+{
+    public List<Location> DecodedPoints { get; set; } = new();
+    public List<SpeedInterval> Intervals { get; set; } = new();
 }
 
 // 2. DTO for the Telemetry UI updates
@@ -65,6 +85,8 @@ public class RouteTelemetryResult
     public bool UpdatedHasAnnouncedArrival { get; set; }
     public Location UpdatedLastAnnouncedTurn { get; set; }
     public double DistLeftKm { get; set; } // <-- Add this!
+    public string TrafficAlertMessage { get; set; }
+    public bool SpeakTrafficAlert { get; set; }
 }
 
 public interface IRoutingEngine
@@ -76,6 +98,7 @@ public interface IRoutingEngine
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
     Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false);
     Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm);
+    Task RefreshTrafficWindowIfNeededAsync(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default);
 }
 
 public class RoutingEngine : IRoutingEngine
@@ -83,6 +106,7 @@ public class RoutingEngine : IRoutingEngine
     private readonly HttpClient _httpClient;
     private readonly string _googleApiKey;
     private readonly RideStateService _rideCache;
+    private readonly TrafficAwarenessEngine _trafficEngine = new();
 
     public RoutingEngine(IConfiguration configuration, RideStateService rideCache)
     {
@@ -137,7 +161,7 @@ public class RoutingEngine : IRoutingEngine
             var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
             request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
 
-            string fieldMask = "routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration";
+            string fieldMask = "routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration,routes.travelAdvisory.speedReadingIntervals";
             if (includeVoiceSteps)
                 fieldMask += ",routes.legs.steps.startLocation,routes.legs.steps.navigationInstruction";
 
@@ -156,6 +180,22 @@ public class RoutingEngine : IRoutingEngine
                     result.DecodedPoints = DecodeGooglePolyline(result.EncodedPolyline);
                     result.DistanceKm = Math.Round(mainRoute.DistanceMeters / 1000.0, 1);
                     result.EtaText = ToEtaText(mainRoute.Duration);
+
+                    if (mainRoute.TravelAdvisory?.SpeedReadingIntervals != null)
+                    {
+                        result.TrafficData = mainRoute.TravelAdvisory.SpeedReadingIntervals
+                            .Select(x => new SpeedInterval
+                            {
+                                StartPolylinePointIndex = x.StartPolylinePointIndex,
+                                EndPolylinePointIndex = x.EndPolylinePointIndex,
+                                Speed = x.Speed ?? "NORMAL"
+                            })
+                            .ToList();
+                    }
+                    else
+                    {
+                        result.TrafficData = new List<SpeedInterval>();
+                    }
 
                     if (includeVoiceSteps && mainRoute.Legs != null)
                     {
@@ -459,8 +499,9 @@ public class RoutingEngine : IRoutingEngine
             VoiceSteps = routeData.VoiceSteps ?? new List<RouteStep>(),
             SpliceIndex = seamIndex,
             TurnOverlays = turnOverlays ,
-            MapBubbles = mapBubbles
-        };
+            MapBubbles = mapBubbles,
+            TrafficData = routeData.TrafficData ?? new List<SpeedInterval>()
+         };
     }
 
     // =====================================================================
@@ -536,6 +577,20 @@ public class RoutingEngine : IRoutingEngine
             double movingAvg = Math.Max(currentSpeedKmh, 40);
             DateTime eta = DateTime.Now.AddHours(distLeft / movingAvg);
 
+            // --- Traffic Analysis ---
+            string trafficAlert = ScanForTrafficAhead(
+                closestActualIndex,
+                currentRouteSnapshot,
+                rideCache.CurrentTrafficData,
+                currentSpeedKmh);
+
+            bool speakTraffic = false;
+            if (!string.IsNullOrWhiteSpace(trafficAlert))
+            {
+                speakTraffic = voiceNavEnabled;
+                rideCache.LastTrafficAlertTime = DateTime.Now;
+            }
+
             // --- Deviation Analysis ---
             var deviationAnalysis = deviationEngine.AnalyzeRouteDeviation(
                 currentLocation, currentRouteSnapshot, closestActualIndex, currentLocation?.Course ?? 0, currentSpeedKmh, rideCache.OffRouteStrikeCount);
@@ -561,8 +616,10 @@ public class RoutingEngine : IRoutingEngine
                 EtaStr = eta.ToString("h:mm tt"),
                 UpdatedHasAnnouncedArrival = currentHasAnnouncedArrival,
                 UpdatedLastAnnouncedTurn = currentLastAnnouncedTurn,
-                DistLeftKm = distLeft
-            };
+                DistLeftKm = distLeft,
+                TrafficAlertMessage = trafficAlert,
+                SpeakTrafficAlert = speakTraffic
+             };
             result.ProgressPercentStr = $"{(int)(result.ProgressVal * 100)}%";
 
             // --- Arrival Prompt ---
@@ -769,5 +826,320 @@ public class RoutingEngine : IRoutingEngine
         arrow.Geopath.Add(new Location(baseLat - wingLatDelta, baseLon - wingLonDelta)); // Right wing
 
         return arrow;
+    }
+
+    public string ScanForTrafficAhead(int currentIndex, List<Location> polylinePoints, List<SpeedInterval> trafficData, double currentSpeedKmh)
+    {
+        var analysis = _trafficEngine.AnalyzeTrafficAhead(
+            currentIndex,
+            polylinePoints,
+            trafficData,
+            currentSpeedKmh,
+            _rideCache.LastTrafficAlertTime);
+
+        return analysis.ShouldAlert ? analysis.Message : null;
+    }
+
+    public async Task RefreshTrafficWindowIfNeededAsync(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default)
+    {
+        if (currentLocation == null) return;
+        if (_rideCache.ActiveDestination == null) return;
+        if (_rideCache.CurrentRoutePoints == null || _rideCache.CurrentRoutePoints.Count < 2) return;
+
+        var routePoints = _rideCache.CurrentRoutePoints;
+        int currentIndex = FindClosestRouteIndex(currentLocation, routePoints, _rideCache.CurrentRouteIndex);
+
+        if (!ShouldRefreshTrafficData(currentSpeedKmh, currentIndex))
+            return;
+
+        double horizonKm = GetTrafficHorizonKm(currentSpeedKmh); // up to 20km
+        int horizonEndIndex = GetIndexAtDistanceAhead(currentIndex, horizonKm, routePoints);
+        if (horizonEndIndex <= currentIndex) return;
+
+        Location horizonDestination = routePoints[horizonEndIndex];
+
+        var trafficWindow = await FetchTrafficWindowAsync(currentLocation, horizonDestination, cancellationToken);
+        if (trafficWindow == null || trafficWindow.DecodedPoints.Count == 0 || trafficWindow.Intervals.Count == 0)
+        {
+            _rideCache.LastTrafficRefreshTime = DateTime.UtcNow;
+            _rideCache.LastTrafficRefreshRouteIndex = currentIndex;
+            return;
+        }
+
+        var mappedIntervals = MapWindowIntervalsToMainRoute(
+            trafficWindow.Intervals,
+            trafficWindow.DecodedPoints,
+            routePoints,
+            currentIndex,
+            horizonEndIndex);
+
+        _rideCache.CurrentTrafficData = MergeTrafficIntervals(
+            _rideCache.CurrentTrafficData,
+            mappedIntervals,
+            currentIndex,
+            horizonEndIndex);
+
+        // NEW: keep memory stable, drop old segments behind rider
+        _rideCache.CurrentTrafficData = PruneTrafficIntervalsBehind(_rideCache.CurrentTrafficData, currentIndex, keepBehindPoints: 80);
+
+        _rideCache.LastTrafficRefreshTime = DateTime.UtcNow;
+        _rideCache.LastTrafficRefreshRouteIndex = currentIndex;
+    }
+
+    private bool ShouldRefreshTrafficData(double speedKmh, int currentIndex)
+    {
+        if (_rideCache.CurrentTrafficData == null || _rideCache.CurrentTrafficData.Count == 0)
+            return true;
+
+        double elapsedSeconds = (DateTime.UtcNow - _rideCache.LastTrafficRefreshTime).TotalSeconds;
+        int indexAdvance = Math.Max(0, currentIndex - _rideCache.LastTrafficRefreshRouteIndex);
+
+        double minRefreshSeconds = speedKmh switch
+        {
+            < 10 => 150,
+            < 30 => 90,
+            < 60 => 60,
+            < 90 => 45,
+            _ => 30
+        };
+
+        int minAdvancePoints = speedKmh switch
+        {
+            < 20 => 12,
+            < 50 => 24,
+            < 90 => 40,
+            _ => 55
+        };
+
+        bool severeAhead = HasSevereTrafficAhead(currentIndex, _rideCache.CurrentTrafficData);
+        if (severeAhead && elapsedSeconds >= 20) return true;
+
+        return elapsedSeconds >= minRefreshSeconds || indexAdvance >= minAdvancePoints;
+    }
+
+    private static bool HasSevereTrafficAhead(int currentIndex, List<SpeedInterval> intervals)
+    {
+        if (intervals == null || intervals.Count == 0) return false;
+
+        return intervals.Any(i =>
+            i.EndPolylinePointIndex >= currentIndex &&
+            i.StartPolylinePointIndex <= currentIndex + 120 &&
+            string.Equals(i.Speed, "TRAFFIC_JAM", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static double GetTrafficHorizonKm(double speedKmh)
+    {
+        return speedKmh switch
+        {
+            < 20 => 6.0,
+            < 40 => 10.0,
+            < 70 => 14.0,
+            < 100 => 18.0,
+            _ => 20.0
+        };
+    }
+
+    private static int GetIndexAtDistanceAhead(int startIndex, double distanceKm, List<Location> points)
+    {
+        double acc = 0;
+        for (int i = startIndex; i < points.Count - 1; i++)
+        {
+            acc += Location.CalculateDistance(points[i], points[i + 1], DistanceUnits.Kilometers);
+            if (acc >= distanceKm) return i + 1;
+        }
+        return points.Count - 1;
+    }
+
+    private async Task<TrafficWindowFetchResult> FetchTrafficWindowAsync(Location origin, Location destination, CancellationToken cancellationToken)
+    {
+        var result = new TrafficWindowFetchResult();
+
+        int? validHeading = null;
+        if (origin.Course.HasValue && !double.IsNaN(origin.Course.Value))
+        {
+            validHeading = (int)Math.Round(origin.Course.Value) % 360;
+            if (validHeading < 0) validHeading += 360;
+        }
+
+        // Traffic-window specific request: only what is needed
+        var requestBody = new
+        {
+            origin = new
+            {
+                location = new
+                {
+                    latLng = new { latitude = origin.Latitude, longitude = origin.Longitude },
+                    heading = validHeading
+                }
+            },
+            destination = new
+            {
+                location = new
+                {
+                    latLng = new { latitude = destination.Latitude, longitude = destination.Longitude }
+                }
+            },
+            travelMode = "TWO_WHEELER",
+            routingPreference = "TRAFFIC_AWARE_OPTIMAL",
+            extraComputations = new[] { "TRAFFIC_ON_POLYLINE" },
+            languageCode = "en-US"
+        };
+
+        var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
+        request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
+        request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals");
+        request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode) return result;
+
+        var routeResult = JsonSerializer.Deserialize<RoutesResponse>(await response.Content.ReadAsStringAsync(cancellationToken));
+        var route = routeResult?.Routes?.FirstOrDefault();
+        if (route?.Polyline?.EncodedPolyline == null) return result;
+
+        result.DecodedPoints = DecodeGooglePolyline(route.Polyline.EncodedPolyline);
+        result.Intervals = route.TravelAdvisory?.SpeedReadingIntervals?
+            .Select(x => new SpeedInterval
+            {
+                StartPolylinePointIndex = x.StartPolylinePointIndex,
+                EndPolylinePointIndex = x.EndPolylinePointIndex,
+                Speed = x.Speed ?? "NORMAL"
+            })
+            .ToList() ?? new List<SpeedInterval>();
+
+        return result;
+    }
+
+    private List<SpeedInterval> MapWindowIntervalsToMainRoute(
+        List<SpeedInterval> windowIntervals,
+        List<Location> windowPolyline,
+        List<Location> mainRoute,
+        int searchStartIndex,
+        int searchEndIndex)
+    {
+        var mapped = new List<SpeedInterval>();
+        if (windowIntervals == null || windowIntervals.Count == 0 || windowPolyline == null || windowPolyline.Count == 0)
+            return mapped;
+
+        int safeStart = Math.Max(0, searchStartIndex - 10);
+        int safeEnd = Math.Min(mainRoute.Count - 1, searchEndIndex + 20);
+
+        foreach (var interval in windowIntervals)
+        {
+            int ws = Math.Clamp(interval.StartPolylinePointIndex, 0, windowPolyline.Count - 1);
+            int we = Math.Clamp(interval.EndPolylinePointIndex, ws, windowPolyline.Count - 1);
+
+            int ms = FindClosestRouteIndex(windowPolyline[ws], mainRoute, safeStart, safeEnd);
+            int me = FindClosestRouteIndex(windowPolyline[we], mainRoute, ms, safeEnd);
+
+            if (me < ms) (ms, me) = (me, ms);
+
+            mapped.Add(new SpeedInterval
+            {
+                StartPolylinePointIndex = ms,
+                EndPolylinePointIndex = me,
+                Speed = interval.Speed ?? "NORMAL"
+            });
+        }
+
+        return NormalizeIntervals(mapped);
+    }
+
+    private static List<SpeedInterval> MergeTrafficIntervals(
+        List<SpeedInterval> existing,
+        List<SpeedInterval> fresh,
+        int replaceStart,
+        int replaceEnd)
+    {
+        var output = new List<SpeedInterval>();
+
+        if (existing != null)
+        {
+            output.AddRange(existing.Where(i =>
+                i.EndPolylinePointIndex < replaceStart ||
+                i.StartPolylinePointIndex > replaceEnd));
+        }
+
+        if (fresh != null && fresh.Count > 0)
+            output.AddRange(fresh);
+
+        return NormalizeIntervals(output);
+    }
+
+    private static List<SpeedInterval> NormalizeIntervals(List<SpeedInterval> input)
+    {
+        if (input == null || input.Count == 0) return new List<SpeedInterval>();
+
+        var sorted = input
+        .OrderBy(i => i.StartPolylinePointIndex)
+        .ThenBy(i => i.EndPolylinePointIndex)
+        .ToList();
+
+        var merged = new List<SpeedInterval> { new SpeedInterval
+        {
+            StartPolylinePointIndex = sorted[0].StartPolylinePointIndex,
+            EndPolylinePointIndex = sorted[0].EndPolylinePointIndex,
+            Speed = sorted[0].Speed
+        }};
+
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            var last = merged[^1];
+            var cur = sorted[i];
+
+            if (string.Equals(last.Speed, cur.Speed, StringComparison.OrdinalIgnoreCase) &&
+                cur.StartPolylinePointIndex <= last.EndPolylinePointIndex + 1)
+            {
+                last.EndPolylinePointIndex = Math.Max(last.EndPolylinePointIndex, cur.EndPolylinePointIndex);
+            }
+            else
+            {
+                merged.Add(new SpeedInterval
+                {
+                    StartPolylinePointIndex = cur.StartPolylinePointIndex,
+                    EndPolylinePointIndex = cur.EndPolylinePointIndex,
+                    Speed = cur.Speed
+                });
+            }
+        }
+
+        return merged;
+    }
+
+    private int FindClosestRouteIndex(Location target, List<Location> routePoints, int startIndex, int endIndex)
+    {
+        int s = Math.Max(0, startIndex);
+        int e = Math.Min(routePoints.Count - 1, endIndex);
+
+        double minDist = double.MaxValue;
+        int best = s;
+
+        for (int i = s; i <= e; i++)
+        {
+            double d = Location.CalculateDistance(target, routePoints[i], DistanceUnits.Kilometers);
+            if (d < minDist)
+            {
+                minDist = d;
+                best = i;
+            }
+        }
+
+        return best;
+    }
+
+    private int FindClosestRouteIndex(Location target, List<Location> routePoints, int anchorIndex)
+    {
+        int s = Math.Max(0, anchorIndex - 25);
+        int e = Math.Min(routePoints.Count - 1, anchorIndex + 80);
+        return FindClosestRouteIndex(target, routePoints, s, e);
+    }
+    private static List<SpeedInterval> PruneTrafficIntervalsBehind(List<SpeedInterval> intervals, int currentIndex, int keepBehindPoints)
+    {
+        if (intervals == null || intervals.Count == 0) return new List<SpeedInterval>();
+
+        int minIndexToKeep = Math.Max(0, currentIndex - keepBehindPoints);
+        return intervals
+            .Where(i => i.EndPolylinePointIndex >= minIndexToKeep)
+            .ToList();
     }
 }

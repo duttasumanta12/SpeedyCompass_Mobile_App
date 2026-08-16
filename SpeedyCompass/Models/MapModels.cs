@@ -28,9 +28,29 @@ public class RouteData
     [JsonPropertyName("polyline")] public RoutePolyline Polyline { get; set; }
     // NEW: Add Legs to get the turn-by-turn steps
     [JsonPropertyName("legs")] public List<RouteLeg> Legs { get; set; }
+    [JsonPropertyName("travelAdvisory")] public RouteTravelAdvisory TravelAdvisory { get; set; }
 }
 public class RouteLeg { [JsonPropertyName("steps")] public List<RouteStepApi> Steps { get; set; } }
 public class RoutePolyline { [JsonPropertyName("encodedPolyline")] public string EncodedPolyline { get; set; } }
+
+public class RouteTravelAdvisory
+{
+    [JsonPropertyName("speedReadingIntervals")]
+    public List<RouteSpeedReadingInterval> SpeedReadingIntervals { get; set; } = new();
+}
+
+public class RouteSpeedReadingInterval
+{
+    [JsonPropertyName("startPolylinePointIndex")]
+    public int StartPolylinePointIndex { get; set; }
+
+    [JsonPropertyName("endPolylinePointIndex")]
+    public int EndPolylinePointIndex { get; set; }
+
+    [JsonPropertyName("speed")]
+    public string Speed { get; set; } = "NORMAL";
+}
+
 public class NearbySearchRequest
 {
     [JsonPropertyName("includedTypes")] public List<string> IncludedTypes { get; set; }
