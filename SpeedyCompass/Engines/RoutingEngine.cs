@@ -93,12 +93,13 @@ public interface IRoutingEngine
 {
     List<Location> DecodeGooglePolyline(string encodedPoints);
     string EncodeLocationList(List<Location> points);
-    Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute);
+    RouteUIData BuildRouteVisuals(RouteCalculationResult routeData, Color routeColor, bool generateOverlays, bool isReroute = false);
     Task<Location> CalculateDynamicMeetupPointAsync();
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
     Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false);
     Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm);
     Task RefreshTrafficWindowIfNeededAsync(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default);
+    Location SnapToRouteLine(Location rawLocation, List<Location> routePoints, int currentIndex);
 }
 
 public class RoutingEngine : IRoutingEngine
@@ -354,47 +355,48 @@ public class RoutingEngine : IRoutingEngine
         return TurnDirectionEnum.Straight;
     }
 
-    public async Task<RouteUIData> FetchAndBuildPolylineAsync(Location origin, Location dest, Location meetup, Color routeColor, bool includeVoiceSteps, bool isReroute = false)
+    // =====================================================================
+    // THE FIX: PURE GRAPHICS BUILDER (DECOUPLED FROM API FETCH)
+    // =====================================================================
+    public RouteUIData BuildRouteVisuals(RouteCalculationResult routeData, Color routeColor, bool generateOverlays, bool isReroute = false)
     {
-        var routeData = await GetRouteDataAsync(origin, dest, meetup, includeVoiceSteps, isReroute);
-        if (string.IsNullOrEmpty(routeData?.EncodedPolyline) || routeData.DecodedPoints.Count == 0) return null;
+        if (routeData == null || routeData.DecodedPoints.Count == 0) return null;
 
         var combinedPoints = new List<Location>();
         int seamIndex = 0;
 
+        // 1. Reroute Splice Logic
         if (isReroute && _rideCache.CurrentRoutePoints != null)
         {
             var historySlice = _rideCache.CurrentRoutePoints.Take(_rideCache.CurrentRouteIndex).ToList();
             combinedPoints.AddRange(historySlice);
             seamIndex = historySlice.Count;
         }
-
         combinedPoints.AddRange(routeData.DecodedPoints);
 
+        // 2. Base Route Line
         var polyline = new Polyline { StrokeColor = routeColor, StrokeWidth = 22f };
         foreach (var coord in combinedPoints) polyline.Geopath.Add(coord);
 
         var mapBubbles = new List<MapBubble>();
-        var turnOverlays = new List<MapElement>(); // <-- NEW
+        var turnOverlays = new List<MapElement>();
 
-        if (routeData.VoiceSteps != null)
+        // 3. ON-DEMAND OVERLAYS (Only runs when Navigation is active!)
+        if (generateOverlays && routeData.VoiceSteps != null)
         {
             foreach (var step in routeData.VoiceSteps)
             {
                 var instruction = step.Instruction.Split(Environment.NewLine)[0] ?? string.Empty;
                 var dirData = GetDirectionData(instruction);
 
-                // =====================================================================
-                // THE FIX: If it's a Ramp or Exit, create a floating text bubble!
-                // =====================================================================
+                // --- BUBBLE GENERATOR ---
                 if (instruction.Contains("ramp") || instruction.Contains("fork") ||
                     instruction.Contains("merge") || instruction.Contains("flyover") || instruction.Contains("overpass"))
                 {
                     var bubbleIcons = new List<string>();
 
-                    // 1. Primary Infrastructure Icon
                     if (instruction.Contains("flyover") || instruction.Contains("overpass"))
-                        bubbleIcons.Add("flyover"); // Use the Material symbol for a bridge!
+                        bubbleIcons.Add("flyover");
                     else if (instruction.Contains("merge"))
                     {
                         bubbleIcons.Add("merge");
@@ -405,7 +407,6 @@ public class RoutingEngine : IRoutingEngine
                     else if (instruction.Contains("ramp") || instruction.Contains("exit"))
                         bubbleIcons.Add(instruction.Contains("left") ? "ramp_left" : "ramp_right");
 
-                    // 2. Secondary Direction Icon (For complex maneuvers like Flyovers)
                     if (instruction.Contains("flyover") || instruction.Contains("overpass"))
                     {
                         if (instruction.Contains("left")) bubbleIcons.Add("turn_slight_left");
@@ -417,18 +418,17 @@ public class RoutingEngine : IRoutingEngine
                     mapBubbles.Add(new MapBubble
                     {
                         Location = step.TurnLocation,
-                        IconNames = bubbleIcons, // Pass the list!
+                        IconNames = bubbleIcons,
                         Instruction = instruction
                     });
                 }
 
+                // --- WHITE TURN TRACK & ARROW GENERATOR ---
                 if (dirData.IconName != "straight")
                 {
                     double roadHeading = 0;
                     Location pinPlacement = step.TurnLocation;
 
-
-                    // 1. Find the exact array index of the intersection
                     int turnIdx = 0;
                     double minDist = double.MaxValue;
                     for (int i = 0; i < combinedPoints.Count; i++)
@@ -437,16 +437,14 @@ public class RoutingEngine : IRoutingEngine
                         if (d < minDist) { minDist = d; turnIdx = i; }
                     }
 
-                    // 2. Trace backwards ~25 meters
                     double backDist = 0;
                     int startIdx = turnIdx;
-                    while (startIdx > 0 && backDist < 0.020) // 0.025 km = 25m
+                    while (startIdx > 0 && backDist < 0.020)
                     {
                         backDist += Location.CalculateDistance(combinedPoints[startIdx], combinedPoints[startIdx - 1], DistanceUnits.Kilometers);
                         startIdx--;
                     }
 
-                    // 3. Trace forwards ~25 meters
                     double fwdDist = 0;
                     int endIdx = turnIdx;
                     while (endIdx < combinedPoints.Count - 1 && fwdDist < 0.020)
@@ -455,7 +453,6 @@ public class RoutingEngine : IRoutingEngine
                         endIdx++;
                     }
 
-                    // 4. Extract the curved path segment
                     var overlayCoords = new List<Location>();
                     for (int i = startIdx; i <= endIdx; i++) overlayCoords.Add(combinedPoints[i]);
 
@@ -465,25 +462,15 @@ public class RoutingEngine : IRoutingEngine
                         foreach (var c in overlayCoords) whiteLine.Geopath.Add(c);
                         turnOverlays.Add(whiteLine);
 
-                        // =====================================================================
-                        // THE FIX: NATIVE SCALING POLYGON ARROWHEAD
-                        // =====================================================================
                         var arrowTip = overlayCoords.Last();
                         var arrowBase = overlayCoords[overlayCoords.Count - 2];
                         double arrowBearing = CalculateBearing(arrowBase, arrowTip);
 
-                        // Create a physical shape mapped to the globe (10 meters long)
                         double arrowSizeKm = 0.010;
                         var arrowPolygon = CreateArrowhead(arrowTip, arrowBearing, arrowSizeKm);
                         turnOverlays.Add(arrowPolygon);
 
-                        // Nullify pin placement so we DO NOT draw the Android marker!
                         pinPlacement = null;
-                    }
-                    else if (turnIdx < combinedPoints.Count - 1)
-                    {
-                        // Fallback if the route ends immediately at the turn
-                        roadHeading = CalculateBearing(combinedPoints[turnIdx], combinedPoints[turnIdx + 1]);
                     }
                 }
             }
@@ -498,10 +485,10 @@ public class RoutingEngine : IRoutingEngine
             DecodedPoints = combinedPoints,
             VoiceSteps = routeData.VoiceSteps ?? new List<RouteStep>(),
             SpliceIndex = seamIndex,
-            TurnOverlays = turnOverlays ,
+            TurnOverlays = turnOverlays,
             MapBubbles = mapBubbles,
             TrafficData = routeData.TrafficData ?? new List<SpeedInterval>()
-         };
+        };
     }
 
     // =====================================================================
@@ -1141,5 +1128,52 @@ public class RoutingEngine : IRoutingEngine
         return intervals
             .Where(i => i.EndPolylinePointIndex >= minIndexToKeep)
             .ToList();
+    }
+    // =====================================================================
+    // THE FIX: MAGNETIC SNAP-TO-ROUTE ALGORITHM
+    // =====================================================================
+    public Location SnapToRouteLine(Location rawLocation, List<Location> routePoints, int currentIndex)
+    {
+        if (routePoints == null || routePoints.Count < 2 || currentIndex < 0)
+            return rawLocation;
+
+        // We check the line segment BEFORE and AFTER the rider's current index 
+        // to find exactly which chunk of asphalt they are riding next to.
+        int prevIdx = Math.Max(0, currentIndex - 1);
+        int nextIdx = Math.Min(routePoints.Count - 1, currentIndex + 1);
+
+        var snap1 = GetClosestPointOnSegment(rawLocation, routePoints[prevIdx], routePoints[currentIndex]);
+        var snap2 = GetClosestPointOnSegment(rawLocation, routePoints[currentIndex], routePoints[nextIdx]);
+
+        double d1 = Location.CalculateDistance(rawLocation, snap1, DistanceUnits.Kilometers);
+        double d2 = Location.CalculateDistance(rawLocation, snap2, DistanceUnits.Kilometers);
+
+        var bestSnap = d1 < d2 ? snap1 : snap2;
+        double bestDistMeters = Math.Min(d1, d2) * 1000;
+
+        // THE MAGNET: Only snap if the raw GPS is within 25 meters of the blue line!
+        // If it's further, the rider took a detour, so let the pin float free!
+        if (bestDistMeters < 25.0)
+        {
+            return bestSnap;
+        }
+
+        return rawLocation;
+    }
+
+    private Location GetClosestPointOnSegment(Location p, Location a, Location b)
+    {
+        // 2D Vector Projection mapping the GPS point onto the Polyline vector
+        double dx = b.Longitude - a.Longitude;
+        double dy = b.Latitude - a.Latitude;
+
+        if (dx == 0 && dy == 0) return a;
+
+        double t = ((p.Longitude - a.Longitude) * dx + (p.Latitude - a.Latitude) * dy) / (dx * dx + dy * dy);
+
+        // Clamp the projection so it doesn't shoot past the start or end of the line segment
+        t = Math.Max(0, Math.Min(1, t));
+
+        return new Location(a.Latitude + t * dy, a.Longitude + t * dx);
     }
 }

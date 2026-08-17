@@ -1,9 +1,11 @@
-﻿using SpeedyCompass.Shared.Models;
-using SpeedyCompass.Engines;
+﻿using SpeedyCompass.Engines;
+using SpeedyCompass.Shared.Constants;
+using SpeedyCompass.Shared.Models;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 
@@ -26,15 +28,16 @@ namespace SpeedyCompass.Services
         public double CumulativeDistanceKm { get; set; } = 0;
         public Location LastOdometerLocation { get; set; } = null;
         public double MaxSpeedKmh { get; set; } = 0;
+        public double TopSpeedKmh { get; set; } = 0;
         public TimeSpan TotalStoppedTime { get; set; } = TimeSpan.Zero;
         public DateTime? LastStopTime { get; set; } = null;
-        public DateTime RideStartTime { get; set; }
+        public DateTime RideStartTime { get; set; } = DateTime.UtcNow;
 
         // --- 4. LIVE CONVOY TRACKING ---
         public ConcurrentDictionary<string, Location> OtherRiderLocations { get; set; } = new();
         public ConcurrentDictionary<string, double> OtherRiderSpeeds { get; set; } = new();
 
-        // --- 5. TELEMETRY COOLDOWNS ---
+        // --- 5. TELEMETRY COOLDOWNS & STATE ---
         public DateTime LastSpeedAlert { get; set; } = DateTime.MinValue;
         public DateTime LastArrivalAlert { get; set; } = DateTime.MinValue;
         public DateTime LastSplinterAlert { get; set; } = DateTime.MinValue;
@@ -44,43 +47,73 @@ namespace SpeedyCompass.Services
         public int CurrentRouteIndex { get; set; } = 0;
         public bool RunningInBackground { get; internal set; }
         public int OffRouteStrikeCount { get; set; } = 0;
-        public List<Location> DrivenBreadcrumbs { get; set; } = new List<Location>();
-        public double TopSpeedKmh { get; set; } = 0;
+        public List<Location> DrivenBreadcrumbs { get; set; } = new();
         public double? LastAnnouncedElevation { get; set; } = null;
         public DateTime? StopStartTime { get; set; } = null;
         public DateTime LastAutoPausePromptTime { get; set; } = DateTime.MinValue;
+
+        // --- 6. LIVE TRAFFIC STATE ---
         public DateTime LastTrafficAlertTime { get; set; } = DateTime.MinValue;
         public List<SpeedInterval> CurrentTrafficData { get; set; } = new();
-
-        // NEW: traffic refresh state
         public DateTime LastTrafficRefreshTime { get; set; } = DateTime.MinValue;
         public int LastTrafficRefreshRouteIndex { get; set; } = 0;
+        public RouteCalculationResult CachedMainRouteData { get; set; }
+        // --- VISIBILITY & NETWORK STATE ---
+        public HashSet<string> HiddenRiders { get; set; } = new();
+        public HashSet<string> UsersWhoMutedMe { get; set; } = new();
+        public HashSet<string> VisibilityInitialized { get; set; } = new();
+
+        // --- NAVIGATION FLAGS ---
+        public bool HaveIReachedMeetup { get; set; } = false;
+        public bool HasAnnouncedArrival { get; set; } = false;
+        public Location LastAnnouncedTurn { get; set; } = null;
+        public HashSet<string> RidersAtMeetup { get; set; } = new();
+        public GroupState? PendingCatchUpState { get; set; } = null;
+
+        // --- SENSOR & TIMING COOLDOWNS ---
+        public DateTime LastCrashEvent { get; set; } = DateTime.MinValue;
+        public DateTime LastNetworkBroadcastTime { get; set; } = DateTime.MinValue;
 
         // ==========================================
         // PHASE 1: DURABLE SNAPSHOT
         // ==========================================
         private string SnapshotFilePath => Path.Combine(FileSystem.AppDataDirectory, "ride_snapshot.json");
+        private readonly object _snapshotLock = new();
 
         public async Task SaveSnapshotAsync()
         {
             try
             {
                 List<Location> breadcrumbsSnapshot;
+                List<Location> routePointsSnapshot;
+                List<SpeedInterval> trafficSnapshot;
 
-                // THE FIX: Take a locked copy before JSON serialization runs!
+                // 1. Thread-safe snapshots of all collections
                 lock (this.DrivenBreadcrumbs)
                 {
                     breadcrumbsSnapshot = this.DrivenBreadcrumbs.ToList();
                 }
-                // 1. Map to strict DTO
+
+                lock (this.CurrentRoutePoints)
+                {
+                    routePointsSnapshot = this.CurrentRoutePoints.ToList();
+                }
+
+                lock (this.CurrentTrafficData)
+                {
+                    trafficSnapshot = this.CurrentTrafficData.ToList();
+                }
+
+                // 2. Map to strict DTO
                 var dto = new RideSnapshotDto
                 {
+                    SnapshotVersion = 1,
                     CurrentSettings = this.CurrentSettings,
                     MyRole = this.MyRole,
                     ActiveDestination = this.ActiveDestination,
                     ActiveDestinationName = this.ActiveDestinationName,
                     ActiveMeetupPoint = this.ActiveMeetupPoint,
-                    CurrentRoutePoints = this.CurrentRoutePoints,
+                    CurrentRoutePoints = routePointsSnapshot,
                     CurrentRouteIndex = this.CurrentRouteIndex,
                     CumulativeDistanceKm = this.CumulativeDistanceKm,
                     LastOdometerLocation = this.LastOdometerLocation,
@@ -88,15 +121,27 @@ namespace SpeedyCompass.Services
                     TopSpeedKmh = this.TopSpeedKmh,
                     DrivenBreadcrumbs = breadcrumbsSnapshot,
 
-                    // Convert ConcurrentDictionary to standard Dictionary for safe serialization
+                    // Summary & Alert Continuity
+                    RideStartTime = this.RideStartTime,
+                    TotalStoppedTimeSeconds = this.TotalStoppedTime.TotalSeconds,
+                    LastGroupPitstopKm = this.LastGroupPitstopKm,
+                    LastAnnouncedElevation = this.LastAnnouncedElevation,
+
+                    // Traffic Window Snapshot
+                    CurrentTrafficData = trafficSnapshot,
+
+                    // Safe copy of other riders
                     OtherRiderLocations = new Dictionary<string, Location>(this.OtherRiderLocations)
                 };
 
-                // 2. Safely write to disk
+                // 3. Isolated file write with explicit scoping to release file lock
                 var tempFile = SnapshotFilePath + ".tmp";
-                using var stream = File.Create(tempFile);
-                await JsonSerializer.SerializeAsync(stream, dto);
-                stream.Close();
+
+                await using (var stream = File.Create(tempFile))
+                {
+                    await JsonSerializer.SerializeAsync(stream, dto);
+                    await stream.FlushAsync();
+                } // Stream is guaranteed closed/disposed here
 
                 File.Move(tempFile, SnapshotFilePath, true);
             }
@@ -112,8 +157,11 @@ namespace SpeedyCompass.Services
             {
                 if (!File.Exists(SnapshotFilePath)) return;
 
-                using var stream = File.OpenRead(SnapshotFilePath);
-                var snapshot = await JsonSerializer.DeserializeAsync<RideSnapshotDto>(stream);
+                RideSnapshotDto snapshot;
+                await using (var stream = File.OpenRead(SnapshotFilePath))
+                {
+                    snapshot = await JsonSerializer.DeserializeAsync<RideSnapshotDto>(stream);
+                }
 
                 if (snapshot != null)
                 {
@@ -131,6 +179,13 @@ namespace SpeedyCompass.Services
                     this.TopSpeedKmh = snapshot.TopSpeedKmh;
                     this.DrivenBreadcrumbs = snapshot.DrivenBreadcrumbs ?? new();
 
+                    // Restore summary continuity
+                    this.RideStartTime = snapshot.RideStartTime == default ? DateTime.UtcNow : snapshot.RideStartTime;
+                    this.TotalStoppedTime = TimeSpan.FromSeconds(snapshot.TotalStoppedTimeSeconds);
+                    this.LastGroupPitstopKm = snapshot.LastGroupPitstopKm;
+                    this.LastAnnouncedElevation = snapshot.LastAnnouncedElevation;
+                    this.CurrentTrafficData = snapshot.CurrentTrafficData ?? new();
+
                     // Restore offline pins
                     this.OtherRiderLocations.Clear();
                     if (snapshot.OtherRiderLocations != null)
@@ -139,14 +194,14 @@ namespace SpeedyCompass.Services
                             this.OtherRiderLocations[kvp.Key] = kvp.Value;
                     }
 
-                    // 2. THE FIX: Explicitly zero out dependent/ephemeral state!
-                    // This prevents stale alerts or frozen speedometer values on resume.
+                    // 2. Zero out ephemeral / in-flight state
                     this.OtherRiderSpeeds.Clear();
                     this.RunningInBackground = false;
-                    this.TotalStoppedTime = TimeSpan.Zero;
                     this.LastStopTime = null;
+                    this.StopStartTime = null;
+                    this.OffRouteStrikeCount = 0;
 
-                    // Reset all network & notification cooldowns
+                    // Reset network & alert cooldowns so rider gets immediate alerts
                     this.LastSpeedAlert = DateTime.MinValue;
                     this.LastArrivalAlert = DateTime.MinValue;
                     this.LastSplinterAlert = DateTime.MinValue;
@@ -154,7 +209,7 @@ namespace SpeedyCompass.Services
                     this.LastBroadcastLocation = null;
                     this.LastTrafficAlertTime = DateTime.MinValue;
                     this.LastTrafficRefreshTime = DateTime.MinValue;
-                    this.LastTrafficRefreshRouteIndex = 0;
+                    this.LastTrafficRefreshRouteIndex = snapshot.CurrentRouteIndex;
                 }
             }
             catch (Exception ex)
@@ -165,17 +220,23 @@ namespace SpeedyCompass.Services
 
         public void ClearSnapshot()
         {
-            if (File.Exists(SnapshotFilePath)) File.Delete(SnapshotFilePath);
+            try
+            {
+                if (File.Exists(SnapshotFilePath)) File.Delete(SnapshotFilePath);
+                var tempFile = SnapshotFilePath + ".tmp";
+                if (File.Exists(tempFile)) File.Delete(tempFile);
+            }
+            catch { }
         }
 
         // ==========================================
-        // EDGE CASE RESET HANDLERS
+        // RESET HANDLERS
         // ==========================================
         public void HardResetAll()
         {
             ResetNavigationState();
             ResetTelemetryState();
-            ClearSnapshot(); // Wipe the disk on a hard reset
+            ClearSnapshot();
         }
 
         public void ResetNavigationState()
@@ -186,6 +247,8 @@ namespace SpeedyCompass.Services
             CurrentRoutePoints.Clear();
             LastRerouteTime = DateTime.MinValue;
             CurrentRouteIndex = 0;
+            CurrentTrafficData.Clear();
+            CachedMainRouteData = null;
         }
 
         public void ResetTelemetryState()
@@ -193,9 +256,11 @@ namespace SpeedyCompass.Services
             CumulativeDistanceKm = 0;
             LastOdometerLocation = null;
             MaxSpeedKmh = 0;
+            TopSpeedKmh = 0;
             TotalStoppedTime = TimeSpan.Zero;
             LastStopTime = null;
-            RideStartTime = DateTime.Now;
+            StopStartTime = null;
+            RideStartTime = DateTime.UtcNow;
 
             LastSpeedAlert = DateTime.MinValue;
             LastArrivalAlert = DateTime.MinValue;
@@ -203,32 +268,34 @@ namespace SpeedyCompass.Services
             LastLagAlert = DateTime.MinValue;
             LastGroupPitstopKm = 0;
             OffRouteStrikeCount = 0;
-            TopSpeedKmh = 0;
+            LastAnnouncedElevation = null;
 
             LastTrafficAlertTime = DateTime.MinValue;
             LastTrafficRefreshTime = DateTime.MinValue;
             LastTrafficRefreshRouteIndex = 0;
-            CurrentTrafficData.Clear();
-        }
+            // --- VISIBILITY & NETWORK STATE ---
+            HiddenRiders = new();
+            UsersWhoMutedMe = new();
+            VisibilityInitialized = new();
 
-        public bool ShouldBroadcastLocation(Location currentLocation, double speedKmh)
-        {
-            if (LastBroadcastLocation == null) return true;
+            // --- NAVIGATION FLAGS ---
+            HaveIReachedMeetup = false;
+            HasAnnouncedArrival = false;
+            LastAnnouncedTurn = null;
+            RidersAtMeetup = new();
+            PendingCatchUpState = null;
 
-            int minDist = CurrentSettings?.MinUpdateDistanceMeters ?? 10;
-            int maxDist = CurrentSettings?.MaxUpdateDistanceMeters ?? 100;
+            // --- SENSOR & TIMING COOLDOWNS ---
+            LastCrashEvent = DateTime.MinValue;
+            LastNetworkBroadcastTime = DateTime.MinValue;
 
-            double speedRatio = Math.Clamp(speedKmh / 120.0, 0.0, 1.0);
-            double dynamicThresholdMeters = minDist + ((maxDist - minDist) * speedRatio);
-            double distTraveledMeters = Location.CalculateDistance(LastBroadcastLocation, currentLocation, DistanceUnits.Kilometers) * 1000;
-
-            return distTraveledMeters >= dynamicThresholdMeters;
         }
     }
-    // --- PHASE 1: DURABLE SNAPSHOT DTO ---
+    // ==========================================
+    // SNAPSHOT DTO
+    // ==========================================
     public class RideSnapshotDto
     {
-        // The exact version of the snapshot structure (for future migrations)
         public int SnapshotVersion { get; set; } = 1;
 
         public GroupSettingsDto CurrentSettings { get; set; }
@@ -246,8 +313,15 @@ namespace SpeedyCompass.Services
         public double TopSpeedKmh { get; set; }
         public List<Location> DrivenBreadcrumbs { get; set; }
 
-        // We save the last known locations so the map isn't completely empty 
-        // while waiting for the network, but we drop their speeds.
+        // Time & Metrics Continuity
+        public DateTime RideStartTime { get; set; }
+        public double TotalStoppedTimeSeconds { get; set; }
+        public double LastGroupPitstopKm { get; set; }
+        public double? LastAnnouncedElevation { get; set; }
+
+        // Traffic state
+        public List<SpeedInterval> CurrentTrafficData { get; set; }
+
         public Dictionary<string, Location> OtherRiderLocations { get; set; }
     }
 }

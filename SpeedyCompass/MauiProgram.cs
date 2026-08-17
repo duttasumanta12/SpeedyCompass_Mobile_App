@@ -87,6 +87,7 @@ namespace SpeedyCompass
             
 #endif
 
+            // Added per your suggestion
 #if DEBUG
             builder.Logging.AddDebug();
 #endif

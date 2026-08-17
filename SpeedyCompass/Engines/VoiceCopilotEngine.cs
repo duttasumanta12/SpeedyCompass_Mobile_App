@@ -1,4 +1,5 @@
-﻿using SpeedyCompass.Models;
+﻿using Microsoft.Extensions.Logging;
+using SpeedyCompass.Models;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Models;
 using System.Text.RegularExpressions;
@@ -9,6 +10,7 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
 {
     private readonly HardwareButtonService _hwButton;
     private readonly SemaphoreSlim _speechGate = new(1, 1);
+    private readonly ILogger<VoiceCopilotEngine> _logger;
     private readonly object _speechLock = new();
 
     private DateTime _lastSpokenAtUtc = DateTime.MinValue;
@@ -17,9 +19,10 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
     private const int MinSpeechGapMs = 1100;
     private const int DuplicateCooldownMs = 6000;
 
-    public VoiceCopilotEngine(HardwareButtonService hwButton)
+    public VoiceCopilotEngine(HardwareButtonService hwButton, ILogger<VoiceCopilotEngine> logger)
     {
         _hwButton = hwButton;
+        _logger = logger;
     }
 
     public void Speak(string message)
@@ -117,27 +120,42 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
 
     private async Task SpeakInternalAsync(string message)
     {
+        bool gateAcquired = false;
         try
         {
-            await _speechGate.WaitAsync();
+            gateAcquired = await _speechGate.WaitAsync(TimeSpan.FromSeconds(2));
+            if (!gateAcquired)
+            {
+                _logger.LogWarning("TTS gate timeout. Dropping speech: {Message}", message);
+                return;
+            }
 
             int waitMs = 0;
             lock (_speechLock)
             {
                 var elapsed = (DateTime.UtcNow - _lastSpokenAtUtc).TotalMilliseconds;
                 if (elapsed < MinSpeechGapMs)
-                {
                     waitMs = (int)(MinSpeechGapMs - elapsed);
-                }
             }
 
             if (waitMs > 0) await Task.Delay(waitMs);
 
-            await TextToSpeech.Default.SpeakAsync(message, new SpeechOptions
+            var speakTask = TextToSpeech.Default.SpeakAsync(message, new SpeechOptions
             {
                 Pitch = 1.0f,
                 Volume = 1.0f
             });
+
+            // hard timeout so queue doesn't freeze forever on emulator quirks
+            var completed = await Task.WhenAny(speakTask, Task.Delay(TimeSpan.FromSeconds(8)));
+            if (completed != speakTask)
+            {
+                _logger.LogWarning("TTS timeout. Message skipped: {Message}", message);
+                return;
+            }
+
+            // observe exceptions from speakTask
+            await speakTask;
 
             lock (_speechLock)
             {
@@ -145,13 +163,14 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
                 _lastSpokenText = message;
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Intentionally swallow TTS failures so navigation loop never crashes.
+            _logger.LogWarning(ex, "TTS failed for message: {Message}", message);
         }
         finally
         {
-            _speechGate.Release();
+            if (gateAcquired)
+                _speechGate.Release();
         }
     }
 

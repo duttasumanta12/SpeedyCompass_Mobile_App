@@ -53,10 +53,6 @@ public partial class LobbyPage : ContentPage
     private Polyline _activeRouteLine;
 
     private readonly ConcurrentDictionary<string, RiderPin> _riderViewModels = new();
-
-    private bool _isSimulating = false;
-    private bool _haveIReachedMeetup = false;
-    private bool _hasAnnouncedArrival = false;
     private HashSet<string> _ridersAtMeetup = new();
 
     private bool _isLeavingGroupPermanently = false;
@@ -85,9 +81,6 @@ public partial class LobbyPage : ContentPage
     private readonly RideSimulatorService _simulatorService;
     private readonly MapPoiManager _poiManager;
     private CancellationTokenSource _rideCts;
-    private DateTime _lastNetworkBroadcastTime = DateTime.MinValue;
-    private Location _lastNetworkBroadcastLocation = null;
-    private Location _lastAnnouncedTurn = null;
     // --- NEW: Quick local tracker for calculating other riders' speeds ---
     private readonly Dictionary<string, DateTime> _riderLastUpdateTimes = new();
     private readonly DeviceCapabilityService _deviceCapabilityService;
@@ -100,14 +93,15 @@ public partial class LobbyPage : ContentPage
     private CancellationTokenSource _lifecycleCts;
     private readonly object _routeStateLock = new();
     private readonly LobbyStateMachine _stateMachine = new();
-    private GroupState? _pendingCatchUpState = null;
-    private DateTime _lastCrashEvent = DateTime.MinValue;
+    private readonly ILocationBroadcastPolicy _broadcastPolicy;
+    private DateTime _lastBroadcastPrefsRefreshUtc = DateTime.MinValue;
+    private int _broadcastAggroMode;
+    private int _broadcastBatteryThrottle;
+    private double _broadcastLocalMinUpdate;
+    private double _broadcastLocalMaxUpdate;
     private CancellationTokenSource _crashCts;
     private List<MapElement> _turnOverlayLines = new();
     private WeatherService weatherService;
-    private HashSet<string> _hiddenRiders = new(); // Who I am hiding
-    private readonly HashSet<string> _usersWhoMutedMe = new(); // Who has told me to stop sending to them
-    private HashSet<string> _visibilityInitialized = new();
 
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
@@ -141,55 +135,22 @@ public partial class LobbyPage : ContentPage
     }
     private bool ShouldBroadcastToNetwork(Location currentLoc, double speedKmh)
     {
-        if (_lastNetworkBroadcastLocation == null) return true;
+        RefreshBroadcastPrefsIfNeeded();
 
-        double timeSinceLastSeconds = (DateTime.UtcNow - _lastNetworkBroadcastTime).TotalSeconds;
+        var input = new BroadcastPolicyInput(
+            LastBroadcastLocation: _rideCache.LastBroadcastLocation,
+            LastNetworkBroadcastTimeUtc: _rideCache.LastNetworkBroadcastTime,
+            CurrentLocation: currentLoc,
+            SpeedKmh: speedKmh,
+            GroupDetails: groupDetails,
+            AggressivenessMode: _broadcastAggroMode,
+            BatteryThrottlePercentage: _broadcastBatteryThrottle,
+            BatteryLevelPercent: Battery.Default.ChargeLevel * 100,
+            BatteryState: Battery.Default.State,
+            LocalMinUpdateMeters: _broadcastLocalMinUpdate,
+            LocalMaxUpdateMeters: _broadcastLocalMaxUpdate);
 
-        // =====================================================================
-        // 1. BATTERY & AGGRESSIVENESS OVERRIDE (Perspective #2 Logic)
-        // =====================================================================
-        int aggroMode = Preferences.Default.Get("Map_GPSUpdateAggressiveness", 0); // 0=RealTime, 1=Eco
-        double batteryLevel = Battery.Default.ChargeLevel * 100;
-        int batteryThrottle = Preferences.Default.Get("Map_BackgroundBatteryThrottlePercentage", 20);
-
-        // Safety check: Are we dying and unplugged?
-        bool isLowBattery = batteryLevel > 0 && batteryLevel <= batteryThrottle && Battery.Default.State != BatteryState.Charging;
-
-        if ((aggroMode == 1 || isLowBattery))
-        {
-            // ECO-TRACKER MODE: Discard complex distance math. 
-            // Ping strictly every 15 seconds to keep the radio asleep longer.
-            return timeSinceLastSeconds >= 15;
-        }
-
-        // =====================================================================
-        // 2. STANDARD DYNAMIC DISTANCE FORMULA
-        // =====================================================================
-        if (timeSinceLastSeconds >= 10) return true; // Keepalive fallback
-
-        // 2. DYNAMIC DISTANCE FORMULA
-        double minUpdateDist = 10;
-        double maxUpdateDist = 100;
-
-        if (aggroMode == 2)
-        {
-            // USER OVERRIDE: Prioritize their custom Local Sliders
-            minUpdateDist = Preferences.Default.Get("Map_LocalMinUpdate", 10);
-            maxUpdateDist = Preferences.Default.Get("Map_LocalMaxUpdate", 100);
-        }
-        else
-        {
-            // REAL-TIME: Adhere to the Admin's group-wide protocol
-            int protocol = (int)(groupDetails?.Settings?.ConvoyUpdateProtocol ?? 0);
-            minUpdateDist = protocol == 0 ? (groupDetails?.Settings?.MinUpdateDistanceMeters ?? 10) : 50;
-            maxUpdateDist = protocol == 0 ? (groupDetails?.Settings?.MaxUpdateDistanceMeters ?? 100) : 300;
-        }
-
-        double distSinceLastMeters = Location.CalculateDistance(_lastNetworkBroadcastLocation, currentLoc, DistanceUnits.Kilometers) * 1000;
-        double speedRatio = Math.Min(speedKmh, 100.0) / 100.0;
-        double dynamicThresholdMeters = minUpdateDist + (speedRatio * (maxUpdateDist - minUpdateDist));
-
-        return distSinceLastMeters >= dynamicThresholdMeters;
+        return _broadcastPolicy.ShouldBroadcast(input);
     }
 
     public LobbyPage(SignalRService signalRService,  GroupDetailsDto groupDetails)
@@ -223,6 +184,7 @@ public partial class LobbyPage : ContentPage
 
         _simulatorService = IPlatformApplication.Current?.Services.GetService<RideSimulatorService>();
         _poiManager = new MapPoiManager(LiveMap, _rideCache, _placeDiscoveryService);
+        _broadcastPolicy = IPlatformApplication.Current?.Services.GetService<ILocationBroadcastPolicy>()!;
 
         // Wire up the POI UI callbacks
         _poiManager.OnPoisRendered = () => MainThread.BeginInvokeOnMainThread(() => ClearPoisBtn.IsVisible = true);
@@ -573,26 +535,26 @@ public partial class LobbyPage : ContentPage
                 if (r.GoogleId != CurrentGoogleId)
                 {
                     // Promoted to an essential role: Show them
-                    if (isEssential && _hiddenRiders.Contains(r.Name))
+                    if (isEssential && _rideCache.HiddenRiders.Contains(r.Name))
                     {
-                        _hiddenRiders.Remove(r.Name);
+                        _rideCache.HiddenRiders.Remove(r.Name);
                         _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, false).SafeFireAndForget();
                     }
                     // First time seeing them: Apply default rules
-                    else if (!_visibilityInitialized.Contains(r.Name))
+                    else if (!_rideCache.VisibilityInitialized.Contains(r.Name))
                     {
-                        _visibilityInitialized.Add(r.Name);
+                        _rideCache.VisibilityInitialized.Add(r.Name);
 
                         // Hide standard riders by default
                         if (!isEssential)
                         {
-                            _hiddenRiders.Add(r.Name);
+                            _rideCache.HiddenRiders.Add(r.Name);
                             _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, true).SafeFireAndForget();
                         }
                     }
                 }
 
-                if (_hiddenRiders.Contains(r.Name)) displayName += " 👻 (Hidden)";
+                if (_rideCache.HiddenRiders.Contains(r.Name)) displayName += " 👻 (Hidden)";
 
                 updatedRiders.Add(new Rider
                 {
@@ -643,12 +605,12 @@ public partial class LobbyPage : ContentPage
 
             // 1. Let the engine run its math and POP passed turns off the snapshot
             var telemetry = await _routingEngine.ProcessRouteTelemetryAsync(
-                currentLocation, _rideCache, _deviationEngine, stepsSnapshot, _hasAnnouncedArrival, _lastAnnouncedTurn, voiceEnabled, _rideCts.Token);
+                currentLocation, _rideCache, _deviationEngine, stepsSnapshot, _rideCache.HasAnnouncedArrival, _rideCache.LastAnnouncedTurn, voiceEnabled, _rideCts.Token);
 
             _rideCache.CurrentRouteIndex = telemetry.NewRouteIndex;
             _rideCache.LastOdometerLocation = currentLocation;
-            _hasAnnouncedArrival = telemetry.UpdatedHasAnnouncedArrival;
-            _lastAnnouncedTurn = telemetry.UpdatedLastAnnouncedTurn;
+            _rideCache.HasAnnouncedArrival = telemetry.UpdatedHasAnnouncedArrival;
+            _rideCache.LastAnnouncedTurn = telemetry.UpdatedLastAnnouncedTurn;
 
             if (telemetry.SpeakDestinationReached)
                 MainThread.BeginInvokeOnMainThread(() => _voiceEngine.Speak("You have arrived at your destination."));
@@ -686,18 +648,18 @@ public partial class LobbyPage : ContentPage
             if (_rideCache.ActiveMeetupPoint != null)
             {
                 double distToMeetup = Location.CalculateDistance(currentLocation, _rideCache.ActiveMeetupPoint, DistanceUnits.Kilometers);
-                if (!_haveIReachedMeetup && distToMeetup < 0.1)
+                if (!_rideCache.HaveIReachedMeetup && distToMeetup < 0.1)
                 {
-                    _haveIReachedMeetup = true;
+                    _rideCache.HaveIReachedMeetup = true;
                     MainThread.BeginInvokeOnMainThread(() =>
                     {
                         _voiceEngine.Speak(_amIAdmin ? "Meetup point reached. Please wait here." : "You have reached the meetup point.");
                         _signalRService.SendGroupAlert(GroupNameLabel.Text, "MeetupArrival", _myName).SafeFireAndForget();
                     });
                 }
-                else if (_haveIReachedMeetup && distToMeetup > 0.2 && _amIAdmin)
+                else if (_rideCache.HaveIReachedMeetup && distToMeetup > 0.2 && _amIAdmin)
                 {
-                    _haveIReachedMeetup = false;
+                    _rideCache.HaveIReachedMeetup = false;
                     _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0).SafeFireAndForget();
                 }
             }
@@ -792,90 +754,49 @@ public partial class LobbyPage : ContentPage
         _otherRiderRoutes.Clear();
         _otherRiderRoutePins.Clear();
     }
-
-    // --- MAP & ROUTING LOGIC ---
-    // =====================================================================
-    // --- UPDATED: REUSABLE ROUTE DRAWING ENGINE ---
-    // =====================================================================
-    // We added optional parameters to specify color, name, and if it's the main route
-    private async Task<string> CalculateAndDrawRoute(Location origin, Location dest, Location meetup = null, Color routeColor = null, string riderName = null, bool isMainRoute = true, bool isReroute = false)
+    private async Task<string> CalculateAndDrawRoute(
+    Location origin,
+    Location dest,
+    Location meetup = null,
+    Color routeColor = null,
+    string riderName = null,
+    bool isMainRoute = true,
+    bool isReroute = false,
+    bool allowNetworkFetch = true)
     {
-        bool includeVoiceSteps = groupDetails.CurrentState >= GroupState.Navigating;
-
+        bool isNavigating = groupDetails.CurrentState >= GroupState.Navigating;
         Color finalRouteColor = routeColor ?? (isMainRoute ? Colors.DodgerBlue : GetColorsForRider(CurrentGoogleId).RouteColor);
 
-        var routeUi = await _routingEngine.FetchAndBuildPolylineAsync(origin, dest, meetup, routeColor ?? finalRouteColor, includeVoiceSteps, isReroute: isReroute);
+        RouteCalculationResult routeData = null;
 
-        if (routeUi != null)
+        if (isMainRoute && !isReroute && _rideCache.CachedMainRouteData != null)
         {
-            MainThread.BeginInvokeOnMainThread(() =>
-            {
-                if (isMainRoute)
-                {
-                    // IMPORTANT: only main route updates navigation cache
-                    _rideCache.CurrentRoutePoints = routeUi.DecodedPoints;
-                    _rideCache.CurrentRouteIndex = routeUi.SpliceIndex;
-                    _rideCache.OffRouteStrikeCount = 0;
-
-                    // NEW: keep latest traffic intervals for telemetry loop
-                    _rideCache.CurrentTrafficData = routeUi.TrafficData?.ToList() ?? new List<SpeedInterval>();
-
-                    if (PreNavDistLabel != null)
-                        PreNavDistLabel.Text = $"{routeUi.DistanceKm} km, ETA {routeUi.EtaText}";
-
-                    if (groupDetails.CurrentState >= GroupState.Navigating && !isReroute)
-                    {
-                        TelemetryHeaderControl.UpdateTelemetryStats(
-                            distText: $"{routeUi.DistanceKm} km",
-                            distColor: Colors.DodgerBlue,
-                            totalTravel: "0.0 km",
-                            totalRoute: $"{routeUi.DistanceKm} km",
-                            progressVal: 0.0,
-                            progressPercent: "0%",
-                            eta: routeUi.EtaText,
-                            isOffRoute: false
-                        );
-                    }
-
-                    // 1. Erase old white turn lines
-                    foreach (var line in _turnOverlayLines) LiveMap.MapElements.Remove(line);
-                    _turnOverlayLines.Clear();
-
-                    if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
-
-                    _activeRouteLine = routeUi.MapLine;
-                    LiveMap.MapElements.Add(_activeRouteLine);
-
-                    // 3. THE FIX: Draw the white inner tracks ON TOP of the blue line
-                    if (routeUi.TurnOverlays != null)
-                    {
-                        foreach (var whiteOverlay in routeUi.TurnOverlays)
-                        {
-                            _turnOverlayLines.Add(whiteOverlay);
-                            LiveMap.MapElements.Add(whiteOverlay);
-                        }
-                    }
-
-                    DrawMapBubbles(routeUi.MapBubbles);
-
-                    lock (_routeStateLock)
-                    {
-                        _activeRouteSteps.Clear();
-                        if (routeUi.VoiceSteps != null) _activeRouteSteps.AddRange(routeUi.VoiceSteps);
-                    }
-                }
-                else
-                {
-                    // Non-main overlays must never mutate active navigation cache
-                    LiveMap.MapElements.Add(routeUi.MapLine);
-                    _otherRiderRoutes.Add(routeUi.MapLine);
-                }
-            });
-
-            return routeUi.EncodedPolyline;
+            var firstPt = _rideCache.CachedMainRouteData.DecodedPoints.FirstOrDefault();
+            if (firstPt != null && Location.CalculateDistance(origin, firstPt, DistanceUnits.Kilometers) < 0.5)
+                routeData = _rideCache.CachedMainRouteData;
         }
 
-        return null;
+        if (routeData == null && allowNetworkFetch)
+        {
+            routeData = await _routingEngine.GetRouteDataAsync(
+                origin,
+                dest,
+                meetup,
+                includeVoiceSteps: isMainRoute,
+                isReroute: isReroute);
+
+            if (isMainRoute && !isReroute)
+                _rideCache.CachedMainRouteData = routeData;
+        }
+
+        if (routeData == null || string.IsNullOrEmpty(routeData.EncodedPolyline))
+            return null;
+
+        bool generateOverlays = isMainRoute && isNavigating;
+        var routeUi = _routingEngine.BuildRouteVisuals(routeData, finalRouteColor, generateOverlays, isReroute);
+
+        ApplyRouteUi(routeUi, isMainRoute, isNavigating, isReroute);
+        return routeUi.EncodedPolyline;
     }
     // --- NEW VOICE NAV VARIABLES ---
     private List<RouteStep> _activeRouteSteps = new();
@@ -1004,7 +925,7 @@ public partial class LobbyPage : ContentPage
     }
     private void OnMeetupPointSet(double lat, double lng)
     {
-        _haveIReachedMeetup = false;
+        _rideCache.HaveIReachedMeetup = false;
         _ridersAtMeetup.Clear();
 
         if (lat == 0 && lng == 0)
@@ -1167,7 +1088,7 @@ public partial class LobbyPage : ContentPage
                     {
                         AppLogger.Info("CatchUp", $"Intercepted {newState}. Rider is {Math.Round(distToAdminKm, 1)}km behind Admin.");
 
-                        _pendingCatchUpState = newState;
+                        _rideCache.PendingCatchUpState = newState;
 
                         string action = newState == GroupState.Completed ? "completed the route" : "paused the ride";
                         _voiceEngine.Speak($"The admin has {action} ahead of you. Keep riding to catch up.");
@@ -1180,7 +1101,7 @@ public partial class LobbyPage : ContentPage
         }
 
         // If we make it here, clear the pending state (we are actively syncing)
-        _pendingCatchUpState = null;
+        _rideCache.PendingCatchUpState = null;
         // We offload the logic to the pure C# engine. It handles all validation!
         _stateMachine.TryTransition(newState, triggerUser, reason, forceSync);
         return Task.CompletedTask;
@@ -1426,7 +1347,7 @@ public partial class LobbyPage : ContentPage
         DestinationSearchControl.SetDestinationText(destName);
 
         _rideCache.ResetTelemetryState();
-        _hasAnnouncedArrival = false;
+        _rideCache.HasAnnouncedArrival = false;
 
         await ChangeGroupState(GroupState.Navigating, _myName, forceSync: isSyncRequired);
 
@@ -1446,7 +1367,24 @@ public partial class LobbyPage : ContentPage
 
             await _signalRService.UpdateLocation(groupName: GroupNameLabel.Text, userName: _myName, lat: loc2.Latitude, lng: loc2.Longitude, 0, new List<string>());
 
-            await CalculateAndDrawRoute(loc2, _rideCache.ActiveDestination);
+            bool canReusePreviewRoute =
+                sameDestination &&
+                _rideCache.CachedMainRouteData != null &&
+                _rideCache.CachedMainRouteData.DecodedPoints != null &&
+                _rideCache.CachedMainRouteData.DecodedPoints.Count > 1;
+
+            // Rebuild visuals from cached route first; fallback to network only if needed.
+            string encoded = await CalculateAndDrawRoute(
+                loc2,
+                _rideCache.ActiveDestination,
+                isMainRoute: true,
+                isReroute: false,
+                allowNetworkFetch: !canReusePreviewRoute);
+
+            if (string.IsNullOrEmpty(encoded))
+            {
+                await CalculateAndDrawRoute(loc2, _rideCache.ActiveDestination, isMainRoute: true, isReroute: false, allowNetworkFetch: true);
+            }
 
             MainThread.BeginInvokeOnMainThread(() =>
             {
@@ -1605,9 +1543,6 @@ public partial class LobbyPage : ContentPage
         DrawerActionsTab.IsEnabled = isEnabled;
         DrawerActionsTab.Opacity = isEnabled ? 1.0 : 0.4;
     }
-
-    // 🔄 REPLACE existing method
-    // 🔄 REPLACE existing method
     private void FitMapToBounds(List<Location> points = null)
     {
         if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested) return;
@@ -1916,7 +1851,7 @@ public partial class LobbyPage : ContentPage
         // 1. Visibility Toggle (Available to EVERYONE)
         if (selectedRider.GoogleId != CurrentGoogleId)
         {
-            bool isHidden = _hiddenRiders.Contains(rawName);
+            bool isHidden = _rideCache.HiddenRiders.Contains(rawName);
             options.Add(isHidden ? "👁️ Show on Map" : "👻 Hide from Map");
         }
 
@@ -1948,8 +1883,8 @@ public partial class LobbyPage : ContentPage
                 if (!confirm) return;
             }
 
-            if (hide) _hiddenRiders.Add(rawName);
-            else _hiddenRiders.Remove(rawName);
+            if (hide) _rideCache.HiddenRiders.Add(rawName);
+            else _rideCache.HiddenRiders.Remove(rawName);
 
             // Instantly remove them from the UI Map
             if (hide && _riderViewModels.TryGetValue(rawName, out var vm))
@@ -2565,6 +2500,15 @@ public partial class LobbyPage : ContentPage
                     }
 
                     TelemetryHeaderControl.UpdateSpeed(newSpeedStr);
+                    Location displayLocation = e.Location; // Default to raw GPS
+
+                    if (groupDetails?.CurrentState == GroupState.Navigating &&
+                        _rideCache.CurrentRoutePoints != null &&
+                        _rideCache.CurrentRoutePoints.Any())
+                    {
+                        // Pull the dot onto the blue line!
+                        displayLocation = _routingEngine.SnapToRouteLine(e.Location, _rideCache.CurrentRoutePoints, _rideCache.CurrentRouteIndex);
+                    }
                     AnimatePinMovement(_myPinVm, e.Location, e.Heading, 1000);
                     _myPinVm.Speed = newSpeedStr;
 
@@ -2591,7 +2535,7 @@ public partial class LobbyPage : ContentPage
         // CATCH-UP PROTOCOL: AUTO-SNAPPER
         // Check if we finally arrived at the Admin's parking spot!
         // =====================================================================
-        if (_pendingCatchUpState != null)
+        if (_rideCache.PendingCatchUpState != null)
         {
             var adminLoc = GetAdminLocation();
             if (adminLoc != null)
@@ -2604,8 +2548,8 @@ public partial class LobbyPage : ContentPage
                     AppLogger.Info("CatchUp", "Rider caught up to Admin. Applying pending state.");
                     _voiceEngine.Speak("You have caught up with the group.");
 
-                    var targetState = _pendingCatchUpState.Value;
-                    _pendingCatchUpState = null; // Clear it to allow the transition
+                    var targetState = _rideCache.PendingCatchUpState.Value;
+                    _rideCache.PendingCatchUpState = null; // Clear it to allow the transition
 
                     // Force the sync so the UI finally snaps to Paused/Completed
                     ChangeGroupState(targetState, "Auto-CatchUp", forceSync: true).SafeFireAndForget();
@@ -2615,11 +2559,11 @@ public partial class LobbyPage : ContentPage
 
         if (ShouldBroadcastToNetwork(e.Location, currentSpeedKmh))
         {
-            _lastNetworkBroadcastTime = DateTime.UtcNow;
-            _lastNetworkBroadcastLocation = e.Location;
+            _rideCache.LastNetworkBroadcastTime = DateTime.UtcNow;
+            _rideCache.LastBroadcastLocation = e.Location;
 
             List<string> excludedPeers;
-            lock (_usersWhoMutedMe) { excludedPeers = _usersWhoMutedMe.ToList(); }
+            lock (_rideCache.UsersWhoMutedMe) { excludedPeers = _rideCache.UsersWhoMutedMe.ToList(); }
 
             // THE FIX: Explicitly tell the server NOT to route this payload to these users!
             await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading, excludedPeers);
@@ -2780,9 +2724,9 @@ public partial class LobbyPage : ContentPage
                                   Math.Pow(e.Reading.Acceleration.Y, 2) +
                                   Math.Pow(e.Reading.Acceleration.Z, 2));
 
-        if (gForce > 4.5 && (DateTime.Now - _lastCrashEvent).TotalMinutes > 5)
+        if (gForce > 4.5 && (DateTime.Now - _rideCache.LastCrashEvent).TotalMinutes > 5)
         {
-            _lastCrashEvent = DateTime.Now;
+            _rideCache.LastCrashEvent = DateTime.Now;
             TriggerCrashProtocol();
         }
     }
@@ -2817,10 +2761,10 @@ public partial class LobbyPage : ContentPage
     }
     private void OnVisibilityToggleReceived(string mutedByUserName, bool hide)
     {
-        lock (_usersWhoMutedMe)
+        lock (_rideCache.UsersWhoMutedMe)
         {
-            if (hide) _usersWhoMutedMe.Add(mutedByUserName);
-            else _usersWhoMutedMe.Remove(mutedByUserName);
+            if (hide) _rideCache.UsersWhoMutedMe.Add(mutedByUserName);
+            else _rideCache.UsersWhoMutedMe.Remove(mutedByUserName);
         }
     }
     private async Task ClosePageAsync()
@@ -2833,5 +2777,77 @@ public partial class LobbyPage : ContentPage
         {
             await Shell.Current.GoToAsync(".."); // Standard Shell back-navigation
         }
+    }
+    private void ApplyRouteUi(RouteUIData routeUi, bool isMainRoute, bool isNavigating, bool isReroute)
+    {
+        if (routeUi == null) return;
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (isMainRoute)
+            {
+                _rideCache.CurrentRoutePoints = routeUi.DecodedPoints;
+                _rideCache.CurrentRouteIndex = routeUi.SpliceIndex;
+                _rideCache.OffRouteStrikeCount = 0;
+                _rideCache.CurrentTrafficData = routeUi.TrafficData?.ToList() ?? new List<SpeedInterval>();
+
+                if (PreNavDistLabel != null)
+                    PreNavDistLabel.Text = $"{routeUi.DistanceKm} km, ETA {routeUi.EtaText}";
+
+                if (isNavigating && !isReroute)
+                {
+                    TelemetryHeaderControl.UpdateTelemetryStats(
+                        distText: $"{routeUi.DistanceKm} km",
+                        distColor: Colors.DodgerBlue,
+                        totalTravel: "0.0 km",
+                        totalRoute: $"{routeUi.DistanceKm} km",
+                        progressVal: 0.0,
+                        progressPercent: "0%",
+                        eta: routeUi.EtaText,
+                        isOffRoute: false
+                    );
+                }
+
+                foreach (var line in _turnOverlayLines) LiveMap.MapElements.Remove(line);
+                _turnOverlayLines.Clear();
+
+                if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
+                _activeRouteLine = routeUi.MapLine;
+                LiveMap.MapElements.Add(_activeRouteLine);
+
+                if (routeUi.TurnOverlays != null)
+                {
+                    foreach (var whiteOverlay in routeUi.TurnOverlays)
+                    {
+                        _turnOverlayLines.Add(whiteOverlay);
+                        LiveMap.MapElements.Add(whiteOverlay);
+                    }
+                }
+
+                DrawMapBubbles(routeUi.MapBubbles);
+
+                lock (_routeStateLock)
+                {
+                    _activeRouteSteps.Clear();
+                    if (routeUi.VoiceSteps != null) _activeRouteSteps.AddRange(routeUi.VoiceSteps);
+                }
+            }
+            else
+            {
+                LiveMap.MapElements.Add(routeUi.MapLine);
+                _otherRiderRoutes.Add(routeUi.MapLine);
+            }
+        });
+    }
+    private void RefreshBroadcastPrefsIfNeeded()
+    {
+        if ((DateTime.UtcNow - _lastBroadcastPrefsRefreshUtc).TotalSeconds < 10) return;
+
+        _broadcastAggroMode = Preferences.Default.Get("Map_GPSUpdateAggressiveness", 0);
+        _broadcastBatteryThrottle = Preferences.Default.Get("Map_BackgroundBatteryThrottlePercentage", 20);
+        _broadcastLocalMinUpdate = Preferences.Default.Get("Map_LocalMinUpdate", 10.0);
+        _broadcastLocalMaxUpdate = Preferences.Default.Get("Map_LocalMaxUpdate", 100.0);
+
+        _lastBroadcastPrefsRefreshUtc = DateTime.UtcNow;
     }
 }
