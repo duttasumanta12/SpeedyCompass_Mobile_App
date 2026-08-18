@@ -100,6 +100,9 @@ public interface IRoutingEngine
     Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm);
     Task RefreshTrafficWindowIfNeededAsync(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default);
     Location SnapToRouteLine(Location rawLocation, List<Location> routePoints, int currentIndex);
+    Location CalculateCenterOfMassMeetup(List<Location> riderLocations);
+    Polyline CreateStraightLineSpiderweb(Location lostRider, Location target, Color riderColor);
+    Task<RouteCalculationResult> GetMapboxOverviewRouteAsync(List<Location> routePoints);
 }
 
 public class RoutingEngine : IRoutingEngine
@@ -1113,7 +1116,28 @@ public class RoutingEngine : IRoutingEngine
 
         return best;
     }
+    public Location CalculateCenterOfMassMeetup(List<Location> riderLocations)
+    {
+        if (riderLocations == null || riderLocations.Count == 0) return null;
 
+        double avgLat = riderLocations.Average(l => l.Latitude);
+        double avgLng = riderLocations.Average(l => l.Longitude);
+
+        return new Location(avgLat, avgLng);
+    }
+    public Polyline CreateStraightLineSpiderweb(Location lostRider, Location target, Color riderColor)
+    {
+        var polyline = new Polyline
+        {
+            StrokeColor = riderColor.WithAlpha(0.6f), // Make it slightly transparent
+            StrokeWidth = 8f
+            // In a custom mapper, you'd set StrokePattern to Dotted here!
+        };
+        polyline.Geopath.Add(lostRider);
+        polyline.Geopath.Add(target);
+
+        return polyline;
+    }
     private int FindClosestRouteIndex(Location target, List<Location> routePoints, int anchorIndex)
     {
         int s = Math.Max(0, anchorIndex - 25);
@@ -1175,5 +1199,43 @@ public class RoutingEngine : IRoutingEngine
         t = Math.Max(0, Math.Min(1, t));
 
         return new Location(a.Latitude + t * dy, a.Longitude + t * dx);
+    }
+    public async Task<RouteCalculationResult> GetMapboxOverviewRouteAsync(List<Location> routePoints)
+    {
+        var result = new RouteCalculationResult();
+
+        // Mapbox requires at least 2 points, and max 25 points.
+        if (routePoints == null || routePoints.Count < 2) return result;
+        if (routePoints.Count > 25) routePoints = routePoints.Take(25).ToList();
+
+        try
+        {
+            string mapboxToken = "pk.eyJ1IjoiZHV0dGFzdW1hbnRhMTIiLCJhIjoiY21zeDc4bG5iMGp5NzJ6c2FiamFjaW1oZyJ9.bMogWiCgbR4u8rZBw_cz5w";
+
+            // Format coordinates as: lon1,lat1;lon2,lat2;lon3,lat3
+            var coordString = string.Join(";", routePoints.Select(p =>
+                $"{p.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},{p.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}"));
+
+            string url = $"https://api.mapbox.com/directions/v5/mapbox/driving/{coordString}?geometries=polyline&overview=full&access_token={mapboxToken}";
+
+            var response = await _httpClient.GetAsync(url);
+            if (response.IsSuccessStatusCode)
+            {
+                string json = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(json);
+                var route = doc.RootElement.GetProperty("routes")[0];
+
+                result.EncodedPolyline = route.GetProperty("geometry").GetString();
+                result.DecodedPoints = DecodeGooglePolyline(result.EncodedPolyline);
+
+                result.DistanceKm = Math.Round(route.GetProperty("distance").GetDouble() / 1000.0, 1);
+
+                double durationSec = route.GetProperty("duration").GetDouble();
+                result.EtaText = ToEtaText(durationSec.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Mapbox Error: {ex.Message}"); }
+
+        return result;
     }
 }

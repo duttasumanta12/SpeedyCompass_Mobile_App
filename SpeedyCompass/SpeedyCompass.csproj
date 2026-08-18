@@ -84,6 +84,15 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <AndroidResource Remove="ControlHandlers\**" />
+	  <Compile Remove="ControlHandlers\**" />
+	  <EmbeddedResource Remove="ControlHandlers\**" />
+	  <MauiCss Remove="ControlHandlers\**" />
+	  <MauiXaml Remove="ControlHandlers\**" />
+	  <None Remove="ControlHandlers\**" />
+	</ItemGroup>
+
+	<ItemGroup>
 	  <Compile Remove="ActiveMapPage.xaml.cs" />
 	  <Compile Remove="DestinationPickerPage.xaml.cs" />
 	</ItemGroup>
@@ -149,6 +158,9 @@
 	    <Generator>MSBuild:Compile</Generator>
 	  </MauiXaml>
 	  <MauiXaml Update="Controls\PttOverlay.xaml">
+	    <Generator>MSBuild:Compile</Generator>
+	  </MauiXaml>
+	  <MauiXaml Update="Controls\RiderManagementPopup.xaml">
 	    <Generator>MSBuild:Compile</Generator>
 	  </MauiXaml>
 	  <MauiXaml Update="Controls\RideSummaryOverlay.xaml">

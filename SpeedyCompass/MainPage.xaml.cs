@@ -2,7 +2,7 @@
 using Microsoft.Maui.ApplicationModel;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Models;
-using SpeedyCompass.Controls; // THE FIX: Added the namespace for your new components!
+using SpeedyCompass.Controls;
 using System.Collections.ObjectModel;
 using System.Net.Http.Json;
 
@@ -29,7 +29,37 @@ public partial class MainPage : ContentPage
     private readonly MsalAuthService _authService;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    public ObservableCollection<GroupItemViewModel> AvailableGroups { get; set; } = new();
+    // ==========================================
+    // 1. DATA BINDINGS FOR THE LIST UI
+    // ==========================================
+    public ObservableCollection<GroupItemViewModel> Groups { get; set; } = new();
+
+    private bool _isFetchingData;
+    public bool IsFetchingData
+    {
+        get => _isFetchingData;
+        set { _isFetchingData = value; OnPropertyChanged(); }
+    }
+
+    private bool _isFetchingNextPage;
+    public bool IsFetchingNextPage
+    {
+        get => _isFetchingNextPage;
+        set { _isFetchingNextPage = value; OnPropertyChanged(); }
+    }
+
+    private string _dynamicEmptyText = "No active convoys right now.";
+    public string DynamicEmptyText
+    {
+        get => _dynamicEmptyText;
+        set { _dynamicEmptyText = value; OnPropertyChanged(); }
+    }
+
+    // --- Pagination State ---
+    private int _currentPage = 1;
+    private const int PageSize = 10;
+    private string _currentSearchQuery = string.Empty;
+    private bool _hasMoreData = true;
 
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
     private string CurrentUsername => Preferences.Default.Get("username", "Rider");
@@ -41,7 +71,8 @@ public partial class MainPage : ContentPage
         _authService = authService;
         _httpClientFactory = httpClientFactory;
 
-        GroupsListControl.ItemsSource = AvailableGroups;
+        // THE FIX: Set the BindingContext so the XAML bindings work!
+        BindingContext = this;
     }
 
     protected override async void OnAppearing()
@@ -51,14 +82,120 @@ public partial class MainPage : ContentPage
         if (DashboardView.IsVisible)
         {
             await _signalRService.StopAsync();
-            await LoadGroupsAsync();
+            await LoadGroupsAsync(isLoadMore: false);
             return;
         }
 
         await AttemptSilentLoginAsync();
     }
 
-    // --- AUTHENTICATION ---
+    // ==========================================
+    // 2. LIST EVENT HANDLERS (From the Component)
+    // ==========================================
+    private async void OnListRefreshed(object sender, EventArgs e)
+    {
+        await LoadGroupsAsync(isLoadMore: false);
+    }
+
+    private async void OnListSearched(object sender, string query)
+    {
+        _currentSearchQuery = query;
+        await LoadGroupsAsync(isLoadMore: false);
+    }
+
+    private async void OnListLoadMore(object sender, EventArgs e)
+    {
+        await LoadGroupsAsync(isLoadMore: true);
+    }
+
+    private void OnListJoin(object sender, GroupItemViewModel groupData)
+    {
+        OnJoinGroupClicked(this, groupData);
+    }
+
+    private void OnListDelete(object sender, string groupName)
+    {
+        OnDeleteGroupClicked(this, groupName);
+    }
+
+
+    // ==========================================
+    // 3. PAGINATED DATA LOADER
+    // ==========================================
+    private async Task LoadGroupsAsync(bool isLoadMore = false)
+    {
+        if (!isLoadMore)
+        {
+            _currentPage = 1;
+            _hasMoreData = true;
+            IsFetchingData = true; // Shows the full-screen overlay
+
+            // Update the empty message depending on if they are searching
+            DynamicEmptyText = string.IsNullOrWhiteSpace(_currentSearchQuery)
+                ? "No active convoys right now."
+                : $"No convoys found matching '{_currentSearchQuery}'.";
+        }
+        else
+        {
+            if (!_hasMoreData) return;
+            IsFetchingNextPage = true; // Shows the footer spinner
+            _currentPage++;
+        }
+
+        try
+        {
+            var client = _httpClientFactory.CreateClient("CompassBackend");
+            var googleId = Preferences.Default.Get("GoogleId", "");
+
+            if (string.IsNullOrEmpty(googleId)) throw new NullReferenceException("GoogleId cannot be null/empty.");
+
+            // -------------------------------------------------------------------------
+            // THE FIX: Pass Search & Pagination info to your ASP.NET Backend
+            // You will need to update your Backend Controller to accept these variables!
+            // -------------------------------------------------------------------------
+            string url = $"api/groups?googleId={googleId}&searchTerm={Uri.EscapeDataString(_currentSearchQuery)}&page={_currentPage}&pageSize={PageSize}";
+            var fetchedGroups = await client.GetFromJsonAsync<List<ActiveGroupDto>>(url) ?? new List<ActiveGroupDto>();
+
+            if (!isLoadMore)
+            {
+                Groups.Clear();
+            }
+
+            // If the backend returned fewer items than the page size, we hit the end of the list
+            if (fetchedGroups.Count < PageSize)
+            {
+                _hasMoreData = false;
+            }
+
+            foreach (var g in fetchedGroups)
+            {
+                Groups.Add(new GroupItemViewModel
+                {
+                    GroupName = g.GroupName,
+                    MemberCount = g.MemberCount,
+                    MaxGroupSize = g.MaxGroupSize,
+                    IsMyAdmin = g.AdminGoogleId == CurrentGoogleId,
+                    IsMember = g.IsMember
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fetching groups: {ex.Message}");
+            if (isLoadMore) _currentPage--; // Roll back the page count if it failed to load
+        }
+        finally
+        {
+            IsFetchingData = false;
+            IsFetchingNextPage = false;
+            GroupsListControl.EndRefresh();
+        }
+    }
+
+
+    // ==========================================
+    // 4. AUTHENTICATION & LOGIN FLOW
+    // ==========================================
     private async Task AttemptSilentLoginAsync()
     {
         try
@@ -141,7 +278,6 @@ public partial class MainPage : ContentPage
 
             if (!profile.HasConsented || string.IsNullOrEmpty(profile.EmergencyContact))
             {
-                // THE FIX: Use the new Component to force setup!
                 ProfileOverlay.LoadData(profile.Username, profile.BloodGroup, profile.EmergencyContact, profile.VehicleNumber, false, profile.HasConsented);
                 ProfileOverlay.Show(isMandatorySetup: true);
             }
@@ -188,53 +324,11 @@ public partial class MainPage : ContentPage
         return true;
     }
 
-    // --- DASHBOARD DATA LOADING ---
-    private async void OnRefreshGroups(object sender, EventArgs e)
-    {
-        await LoadGroupsAsync();
-        GroupsListControl.EndRefresh();
-    }
-
-    private async Task LoadGroupsAsync()
-    {
-        try
-        {
-            var client = _httpClientFactory.CreateClient("CompassBackend");
-            var googleId = Preferences.Default.Get("GoogleId", "");
-
-            if (string.IsNullOrEmpty(googleId))
-            {
-                throw new NullReferenceException("GoogleId cannot be null/empty.");
-            }
-
-            var groups = await client.GetFromJsonAsync<List<ActiveGroupDto>>($"api/groups?googleId={googleId}") ?? new List<ActiveGroupDto>();
-
-            AvailableGroups.Clear();
-
-            foreach (var g in groups)
-            {
-                AvailableGroups.Add(new GroupItemViewModel
-                {
-                    GroupName = g.GroupName,
-                    MemberCount = g.MemberCount,
-                    MaxGroupSize = g.MaxGroupSize,
-                    IsMyAdmin = g.AdminGoogleId == CurrentGoogleId,
-                    IsMember = g.IsMember
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error fetching groups: {ex.Message}");
-        }
-    }
-    // =========================================================================================
-    // --- THE FIX: NEW COMPONENT-BASED PROFILE & LOGOUT LOGIC ---
-    // =========================================================================================
-
+    // ==========================================
+    // 5. PROFILE & SETTINGS
+    // ==========================================
     private void OnOpenProfileClicked(object sender, EventArgs e)
     {
-        // 1. Pass the exact settings to the new Component
         ProfileOverlay.LoadData(
             username: Preferences.Default.Get("username", "Rider"),
             bloodGroup: Preferences.Default.Get("BloodGroup", "Unknown"),
@@ -244,7 +338,6 @@ public partial class MainPage : ContentPage
             consent: Preferences.Default.Get("HasConsented", true)
         );
 
-        // 2. Tell it to show as a standard editor!
         ProfileOverlay.Show(isMandatorySetup: false);
     }
 
@@ -274,10 +367,9 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Set("VehicleNumber", updatedProfile.VehicleNumber);
                 Preferences.Default.Set("BloodGroup", updatedProfile.BloodGroup);
                 Preferences.Default.Set("HasConsented", updatedProfile.HasConsented);
-
                 Preferences.Default.Set("KeepScreenOn", e.KeepScreenOn);
-                DeviceDisplay.Current.KeepScreenOn = e.KeepScreenOn;
 
+                DeviceDisplay.Current.KeepScreenOn = e.KeepScreenOn;
                 WelcomeNameLabel.Text = updatedProfile.Username;
 
                 await LoadGroupsAsync();
@@ -293,7 +385,6 @@ public partial class MainPage : ContentPage
         }
     }
 
-    // The overlay component fires this when the user clicks the red Log Out button
     private async void OnLogoutRequested(object sender, EventArgs e)
     {
         bool confirm = await DisplayAlert("Sign Out", "Are you sure you want to log out?", "Yes", "Cancel");
@@ -311,7 +402,7 @@ public partial class MainPage : ContentPage
             Preferences.Default.Remove("BloodGroup");
             Preferences.Default.Remove("HasConsented");
 
-            AvailableGroups.Clear();
+            Groups.Clear();
             DashboardView.IsVisible = false;
             LoginView.IsVisible = true;
         }
@@ -325,7 +416,9 @@ public partial class MainPage : ContentPage
         }
     }
 
-    // --- ADMIN ACTION ---
+    // ==========================================
+    // 6. ADMIN & CONVOY ACTIONS
+    // ==========================================
     private async void OnDeleteGroupClicked(object sender, string groupName)
     {
         bool confirm = await DisplayAlert("Delete Group", $"Are you sure you want to delete {groupName}?", "Yes", "No");
@@ -337,9 +430,7 @@ public partial class MainPage : ContentPage
             await LoadGroupsAsync();
         }
     }
-    // ==========================================
-    // --- 1. CREATE GROUP ---
-    // ==========================================
+
     private void OnOpenCreateGroupModalClicked(object sender, EventArgs e)
     {
         ConvoySettingsOverlay.ShowForCreate();
@@ -347,14 +438,11 @@ public partial class MainPage : ContentPage
 
     private async void OnSettingsSubmitted(object sender, ConvoySettingsSubmittedEventArgs e)
     {
-        // Safety check: MainPage only handles creation, not editing!
         if (!e.IsCreationMode) return;
 
         GlobalLoadingOverlay.Show("Generating Convoy PIN...");
 
         string generatedPin = new Random().Next(100000, 999999).ToString();
-
-        // THE FIX: Pass all the advanced settings directly to the backend!
         var initialSettings = new GroupSettingsDto
         {
             MaxGroupSize = e.MaxGroupSize,
@@ -375,7 +463,6 @@ public partial class MainPage : ContentPage
             await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
 
             GlobalLoadingOverlay.Show("Joining Convoy...");
-
             await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
         catch (Exception ex)
@@ -388,9 +475,6 @@ public partial class MainPage : ContentPage
         }
     }
 
-    // ==========================================
-    // --- 2. JOIN GROUP ---
-    // ==========================================
     private async void OnJoinGroupClicked(object sender, GroupItemViewModel groupData)
     {
         if (groupData.IsMyAdmin || groupData.IsMember)

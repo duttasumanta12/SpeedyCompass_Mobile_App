@@ -11,14 +11,16 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<CompassStateManager>();
 
+// Register MVC controllers
+builder.Services.AddControllers();
+
 // 1. Add SignalR and configure it to use Azure SignalR Service.
 // It will automatically look for a connection string in your appsettings.json
 // under the key: "Azure:SignalR:ConnectionString"
 builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
 {
     options.EnableDetailedErrors = true;
-});
-                //.AddAzureSignalR();
+}).AddAzureSignalR();
 
 builder.Services.AddMemoryCache();
 
@@ -60,55 +62,11 @@ app.MapHub<CompassHub>("/compasshub", config =>
     config.Transports = Microsoft.AspNetCore.Http.Connections.HttpTransportType.LongPolling;
 });
 
+// Map attribute-routed controllers (e.g., GroupsController)
+app.MapControllers();
+
 // 3. Simple health check endpoint
 app.MapGet("/", () => "Speedy Compass SignalR Server is running!");
-
-//app.MapPost("/api/users/auth/{googleId}", async (string googleId, CompassStateManager state) =>
-//{
-//    ar account = await state.UserAccounts.Find(u => u.GoogleId == googleId).FirstOrDefaultAsync();
-//    if (account == null) return Results.Unauthorized();
-
-//    // DECRYPT before sending back to the owning user
-//    return new UserProfileDto
-//    {
-//        Username = account.Username,
-//        EmergencyContact = EncryptionHelper.Decrypt(account.EmergencyContact),
-//        VehicleNumber = EncryptionHelper.Decrypt(account.VehicleNumber),
-//        BloodGroup = EncryptionHelper.Decrypt(account.BloodGroup),
-//        HasConsented = account.HasConsented
-//    };
-
-//    return Results.Ok(profile);
-//});
-
-// --- UPDATED: HTTP REST API FOR DASHBOARD ---
-// Allows the app to fetch active groups and dynamically check membership!
-app.MapGet("/api/groups", async (string googleId, CompassStateManager state) =>
-{
-    var groups = await state.ActiveGroups.Find(_ => true).ToListAsync();
-
-    var groupList = new List<object>();
-    foreach (var g in groups)
-    {
-        // 1. Count total members associated with this group in the new table
-        long memberCount = await state.GroupMembers.CountDocumentsAsync(m => m.GroupName == g.GroupName);
-
-        // 2. Check if the specific user requesting the list is already in the group
-        bool isMember = !string.IsNullOrEmpty(googleId) &&
-                        await state.GroupMembers.Find(m => m.GroupName == g.GroupName && m.GoogleId == googleId).AnyAsync();
-
-        groupList.Add(new
-        {
-            GroupName = g.GroupName,
-            MemberCount = (int)memberCount,
-            MaxGroupSize = g.Settings.MaxGroupSize,
-            AdminGoogleId = g.AdminGoogleId,
-            IsMember = isMember
-        });
-    }
-
-    return Results.Ok(groupList);
-});
 
 // 3. Save User Profile
 app.MapPut("/api/users/{googleId}/profile", async (string googleId, UserProfileDto profile, CompassStateManager state) =>

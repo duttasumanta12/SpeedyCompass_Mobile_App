@@ -73,6 +73,7 @@ namespace SpeedyCompass.Services
         // --- SENSOR & TIMING COOLDOWNS ---
         public DateTime LastCrashEvent { get; set; } = DateTime.MinValue;
         public DateTime LastNetworkBroadcastTime { get; set; } = DateTime.MinValue;
+        public List<Location> ActiveWaypoints { get; set; } = new();
 
         // ==========================================
         // PHASE 1: DURABLE SNAPSHOT
@@ -249,6 +250,7 @@ namespace SpeedyCompass.Services
             CurrentRouteIndex = 0;
             CurrentTrafficData.Clear();
             CachedMainRouteData = null;
+            ActiveWaypoints.Clear();
         }
 
         public void ResetTelemetryState()

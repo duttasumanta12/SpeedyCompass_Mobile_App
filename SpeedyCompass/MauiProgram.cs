@@ -37,6 +37,9 @@ namespace SpeedyCompass
             builder.Configuration.AddUserSecrets<App>();
 
             // 1. Register the Services (Singletons live forever)
+            // Added per your suggestion
+            builder.Services.AddSingleton<ILocationBroadcastPolicy, LocationBroadcastPolicy>();
+            builder.Services.AddSingleton<AppTierService>();
             builder.Services.AddSingleton<WeatherService>();
             builder.Services.AddSingleton<MsalAuthService>();
             builder.Services.AddSingleton<RideStateService>();
@@ -84,6 +87,9 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<HardwareButtonService>();
 #if ANDROID
             builder.Services.AddSingleton<ILocationTracker, SpeedyCompass.Platforms.Android.AndroidLocationTracker>();
+            builder.Services.AddSingleton<IAudioDuckingService, SpeedyCompass.Platforms.Android.AndroidAudioDuckingService>();
+#endif
+
             
 #endif
 

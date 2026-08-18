@@ -43,7 +43,11 @@
                         <Label x:Name="WelcomeNameLabel" Text="Rider" TextColor="White" FontSize="28" FontAttributes="Bold" LineBreakMode="TailTruncation"/>
                     </StackLayout>
 
-                    <Button Grid.Column="1" Text="⚙ Profile" BackgroundColor="#33FFFFFF" TextColor="White" FontAttributes="Bold" CornerRadius="20" HeightRequest="45" Padding="15,0" Clicked="OnOpenProfileClicked" VerticalOptions="Center"/>
+                    <Button Grid.Column="1" Text="Profile" BackgroundColor="#33FFFFFF" TextColor="White" FontAttributes="Bold" CornerRadius="20" HeightRequest="45" Padding="15,0" Clicked="OnOpenProfileClicked" VerticalOptions="Center">
+                        <Button.ImageSource>
+                            <FontImageSource FontFamily="MaterialSymbols" Glyph="account_circle" Color="White" Size="20" />
+                        </Button.ImageSource>
+                    </Button>
                 </Grid>
             </Border>
 
@@ -61,7 +65,7 @@
                         <Label Text="Start a new Convoy" FontAttributes="Bold" FontSize="16" TextColor="{AppThemeBinding Light=#333333, Dark=White}"/>
                         <Label Text="Generate a secure PIN for your riders" FontSize="12" TextColor="Gray"/>
                     </StackLayout>
-                    <Button Grid.Column="1" Text="+" FontSize="24" BackgroundColor="#FF8C00" TextColor="White" CornerRadius="25" WidthRequest="50" HeightRequest="50" FontAttributes="Bold" Clicked="OnOpenCreateGroupModalClicked">
+                    <Button Grid.Column="1" Text="add" Padding="0" FontFamily="MaterialSymbols" FontSize="24" BackgroundColor="#FF8C00" TextColor="White" CornerRadius="25" WidthRequest="50" HeightRequest="50" FontAttributes="Bold" Clicked="OnOpenCreateGroupModalClicked">
                         <Button.Shadow>
                             <Shadow Brush="#FF8C00" Offset="0,5" Opacity="0.4" Radius="10"/>
                         </Button.Shadow>
@@ -70,11 +74,18 @@
             </Border>
 
             <!-- ACTIVE GROUPS LIST -->
-            <controls:ActiveGroupsList x:Name="GroupsListControl" 
-                               Grid.Row="2"
-                               RefreshRequested="OnRefreshGroups"
-                               JoinClicked="OnJoinGroupClicked"
-                               DeleteClicked="OnDeleteGroupClicked" />
+            <controls:ActiveGroupsList 
+                                x:Name="GroupsListControl"
+                                            Grid.Row="2"
+                                ItemsSource="{Binding Groups}"
+                                IsLoading="{Binding IsFetchingData}"
+                                IsLoadingMore="{Binding IsFetchingNextPage}"
+                                EmptyMessage="{Binding DynamicEmptyText}"
+    
+                                RefreshRequested="OnListRefreshed"
+                                SearchQueryChanged="OnListSearched"
+                                LoadMoreRequested="OnListLoadMore"
+                                JoinClicked="OnListJoin" />
         </Grid>
 
         <!-- THE FIX: The unified settings component handles group creation now! -->

@@ -22,6 +22,26 @@ public partial class MapSettingsTabView : ContentView
         _isInitializing = false;
     }
 
+    // Called by parent page to enforce tier capabilities.
+    public void ApplyTierPolicy(bool isProTier)
+    {
+        if (isProTier)
+        {
+            NavModeMasterSwitch.IsEnabled = true;
+            return;
+        }
+
+        _isInitializing = true;
+
+        // Free tier: force BackgroundSharing
+        NavModeMasterSwitch.IsEnabled = false;
+        NavModeMasterSwitch.IsToggled = false;
+        Preferences.Default.Set("Map_NavigationMode", (int)MapNavigationMode.BackgroundSharing);
+        UpdateVisualStateForNavMode(MapNavigationMode.BackgroundSharing);
+
+        _isInitializing = false;
+    }
+
     private void LoadLocalMapSettings()
     {
         // Suppress toggled events during standard standard standard initial load to standard avoid standard infinite standard standard loops/Standard redundant calls standard standard

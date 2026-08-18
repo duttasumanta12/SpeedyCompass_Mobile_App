@@ -191,6 +191,11 @@
             </Border>
 
             <!-- Overlays same -->
+            <!-- Your new Rider Management Overlay! -->
+            <controls:RiderManagementOverlay x:Name="RiderManagementOverlay" 
+                                     ActionSelected="OnRiderManagementActionSelected" 
+                                     Grid.RowSpan="100" 
+                                     Grid.ColumnSpan="100" />
             <controls:SensoryAlertOverlay x:Name="SensoryAlertOverlay" Grid.RowSpan="100" ZIndex="999" />
             <controls:PttOverlay x:Name="PttOverlay" Grid.RowSpan="100" ZIndex="2000" />
             <controls:LocationDisabledOverlay x:Name="LocationDisabledOverlay" Grid.RowSpan="100" ZIndex="1000" OpenSettingsRequested="OnOpenSettingsClicked" RetryRequested="OnRetryLocationClicked" />

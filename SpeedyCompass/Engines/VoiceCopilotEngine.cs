@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared;
 using SpeedyCompass.Shared.Models;
 using System.Text.RegularExpressions;
 
@@ -18,10 +19,12 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
 
     private const int MinSpeechGapMs = 1100;
     private const int DuplicateCooldownMs = 6000;
+    IAudioDuckingService duckingService;
 
-    public VoiceCopilotEngine(HardwareButtonService hwButton, ILogger<VoiceCopilotEngine> logger)
+    public VoiceCopilotEngine(HardwareButtonService hwButton, IAudioDuckingService duckingService, ILogger<VoiceCopilotEngine> logger)
     {
         _hwButton = hwButton;
+        this.duckingService = duckingService;
         _logger = logger;
     }
 
@@ -140,11 +143,13 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
 
             if (waitMs > 0) await Task.Delay(waitMs);
 
+            duckingService?.RequestFocus();
             var speakTask = TextToSpeech.Default.SpeakAsync(message, new SpeechOptions
             {
                 Pitch = 1.0f,
                 Volume = 1.0f
             });
+            
 
             // hard timeout so queue doesn't freeze forever on emulator quirks
             var completed = await Task.WhenAny(speakTask, Task.Delay(TimeSpan.FromSeconds(8)));
@@ -156,6 +161,7 @@ public class VoiceCopilotEngine : IVoiceCopilotEngine
 
             // observe exceptions from speakTask
             await speakTask;
+            duckingService?.ReleaseFocus();
 
             lock (_speechLock)
             {

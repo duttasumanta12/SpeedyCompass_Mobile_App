@@ -125,6 +125,7 @@ public class WeatherService
         Action<WeatherAlert> onBadWeatherDetected,
         CancellationToken cancelToken)
     {
+        await Task.Delay(TimeSpan.FromSeconds(15), cancelToken);
         // Reset the clock every time a new ride starts so it pings immediately!
         _lastWeatherCheckTime = DateTime.MinValue;
 
