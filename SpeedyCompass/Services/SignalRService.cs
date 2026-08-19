@@ -76,6 +76,10 @@ public class SignalRService
     // Add this state flag near the top of your SignalRService class
     private bool _isBackgroundListenerMode = false;
     public event Action<string, bool> VisibilityToggleReceived;
+    // WebRTC Signaling Events
+    public event Action<string, string> WebRtcOfferReceived; // SenderGoogleId, SDP
+    public event Action<string, string> WebRtcAnswerReceived; // SenderGoogleId, SDP
+    public event Action<string, string> IceCandidateReceived; // SenderGoogleId, CandidateJSON
 
     public SignalRService()
     {
@@ -366,6 +370,9 @@ public class SignalRService
         {
             VisibilityToggleReceived?.Invoke(callerName, hide);
         });
+        _hubConnection.On<string, string>("ReceiveWebRtcOffer", (senderId, sdp) => WebRtcOfferReceived?.Invoke(senderId, sdp));
+        _hubConnection.On<string, string>("ReceiveWebRtcAnswer", (senderId, sdp) => WebRtcAnswerReceived?.Invoke(senderId, sdp));
+        _hubConnection.On<string, string>("ReceiveIceCandidate", (senderId, json) => IceCandidateReceived?.Invoke(senderId, json));
     }
 
     // Explicit Hub Commands with Global Exception Handling
@@ -726,5 +733,22 @@ public class SignalRService
                 // Swallow exception if backend Hub doesn't have this method yet.
             }
         }
+    }
+    public async Task SendWebRtcOffer(string groupName, string targetGoogleId, string sdp)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("SendWebRtcOffer", groupName, targetGoogleId, sdp);
+    }
+
+    public async Task SendWebRtcAnswer(string groupName, string targetGoogleId, string sdp)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("SendWebRtcAnswer", groupName, targetGoogleId, sdp);
+    }
+
+    public async Task SendIceCandidate(string groupName, string targetGoogleId, string json)
+    {
+        if (_hubConnection.State == HubConnectionState.Connected)
+            await _hubConnection.InvokeAsync("SendIceCandidate", groupName, targetGoogleId, json);
     }
 }

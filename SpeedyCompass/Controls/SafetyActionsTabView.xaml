@@ -4,7 +4,11 @@
              x:Class="SpeedyCompass.Controls.SafetyActionsTabView">
     <VerticalStackLayout Spacing="15">
         <!-- PTT Visual (Hardware Triggered) -->
-        <Border HeightRequest="80" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=#2C3E50, Dark=#1A1C1E}">
+        <Border x:Name="PttCard"
+                HeightRequest="80"
+                StrokeThickness="0"
+                IsVisible="False"
+                BackgroundColor="{AppThemeBinding Light=#2C3E50, Dark=#1A1C1E}">
             <Border.StrokeShape>
                 <RoundRectangle CornerRadius="20" />
             </Border.StrokeShape>

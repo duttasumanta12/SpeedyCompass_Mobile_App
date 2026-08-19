@@ -826,36 +826,42 @@ public class CompassHub : Hub
             await Clients.Group(groupName).SendAsync("PttReleased");
         }
     }
-
-    // --- WEBRTC MULTI-PEER MESH SIGNALING HUB ---
-
-    public async Task SendOffer(string groupName, string targetGoogleId, string offerSdp)
+    // =====================================================================
+    // THE FIX: 1-TO-1 WEBRTC SIGNALING ROUTER
+    // =====================================================================
+    public async Task SendWebRtcOffer(string groupName, string targetGoogleId, string offerSdp)
     {
         var sender = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
-        if (sender != null)
+        var target = await _state.GroupMembers.Find(m => m.GoogleId == targetGoogleId && m.GroupName == groupName).FirstOrDefaultAsync();
+
+        if (sender != null && target != null && !string.IsNullOrEmpty(target.ConnectionId))
         {
-            await Clients.Group(groupName).SendAsync("ReceiveOffer", sender.GoogleId, offerSdp);
+            // Send specifically to the target's ConnectionId, NOT the whole group!
+            await Clients.Client(target.ConnectionId).SendAsync("ReceiveWebRtcOffer", sender.GoogleId, offerSdp);
         }
     }
 
-    public async Task SendAnswer(string groupName, string targetGoogleId, string answerSdp)
+    public async Task SendWebRtcAnswer(string groupName, string targetGoogleId, string answerSdp)
     {
         var sender = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
-        if (sender != null)
+        var target = await _state.GroupMembers.Find(m => m.GoogleId == targetGoogleId && m.GroupName == groupName).FirstOrDefaultAsync();
+
+        if (sender != null && target != null && !string.IsNullOrEmpty(target.ConnectionId))
         {
-            await Clients.Group(groupName).SendAsync("ReceiveAnswer", sender.GoogleId, answerSdp);
+            await Clients.Client(target.ConnectionId).SendAsync("ReceiveWebRtcAnswer", sender.GoogleId, answerSdp);
         }
     }
 
     public async Task SendIceCandidate(string groupName, string targetGoogleId, string candidateJson)
     {
         var sender = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
-        if (sender != null)
+        var target = await _state.GroupMembers.Find(m => m.GoogleId == targetGoogleId && m.GroupName == groupName).FirstOrDefaultAsync();
+
+        if (sender != null && target != null && !string.IsNullOrEmpty(target.ConnectionId))
         {
-            await Clients.Group(groupName).SendAsync("ReceiveIceCandidate", sender.GoogleId, candidateJson);
+            await Clients.Client(target.ConnectionId).SendAsync("ReceiveIceCandidate", sender.GoogleId, candidateJson);
         }
     }
-    // --- NEW: DYNAMIC ROUTING & MEETUP POINTS ---
 
     public async Task UpdateGroupRoute(string groupName, string encodedPolyline)
     {

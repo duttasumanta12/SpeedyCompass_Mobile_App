@@ -14,4 +14,5 @@ public class AppTierService
     // Free Tier Features
     public bool UseMapboxOverview => !UseGoogleRoutesApi;
     public bool UseStraightLineSpiderwebs => !UseGoogleRoutesApi;
+    public bool UsePttVoice => IsProTierEnabled;
 }

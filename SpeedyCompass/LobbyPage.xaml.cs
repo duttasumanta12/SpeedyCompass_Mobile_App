@@ -37,7 +37,7 @@ public partial class LobbyPage : ContentPage
     private GroupDetailsDto groupDetails;
     private readonly IPlaceDiscoveryService _placeDiscoveryService;
     private readonly AppTierService _tierService;
-
+    private readonly IPttMeshService? _pttMesh;
     private bool _hasJoined = false;
     private bool _amIAdmin = false;
     private string _myName = "";
@@ -105,6 +105,7 @@ public partial class LobbyPage : ContentPage
     private List<MapElement> _turnOverlayLines = new();
     private WeatherService weatherService;
     private Rider _selectedRiderForManagement;
+    private readonly bool _isPttEnabled;
 
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
@@ -263,9 +264,6 @@ public partial class LobbyPage : ContentPage
         _signalRService.UserJoinedAlert += OnUserJoined;
         _signalRService.UserLeftAlert += OnUserLeft;
         _signalRService.GroupDeleted += OnGroupDeleted;
-        _signalRService.PttLocked += OnPttLocked;
-        _signalRService.PttDenied += OnPttDenied;
-        _signalRService.PttReleased += OnPttReleased;
         _signalRService.NavigationPaused += OnNavigationPaused;
         _signalRService.NavigationResumed += OnNavigationResumed;
         _signalRService.NavigationCompleted += OnNavigationCompleted;
@@ -275,11 +273,28 @@ public partial class LobbyPage : ContentPage
         _signalRService.GroupSettingsUpdated += OnSettingsPushedFromServer;
         _signalRService.VisibilityToggleReceived += OnVisibilityToggleReceived;
 
-        _hwButtonService = IPlatformApplication.Current?.Services.GetService<HardwareButtonService>();
-        if (_hwButtonService != null)
+        _pttMesh = IPlatformApplication.Current.Services.GetRequiredService<IPttMeshService>();
+        _isPttEnabled = _tierService.UsePttVoice;
+
+        if (_isPttEnabled)
         {
-            _hwButtonService.PttPressed += OnHardwarePttPressed;
-            _hwButtonService.PttReleased += OnHardwarePttReleased;
+            _pttMesh.InitializeSession(groupDetails.GroupName, CurrentGoogleId);
+            DrawerActionsTab.SetPttVisible(_isPttEnabled);
+            _pttMesh.AudioLevelsUpdated += OnPttAudioLevelsUpdated;
+
+            PttOverlay.CloseRequested += OnPttOverlayCloseRequested;
+            DrawerActionsTab.PttClicked += OnHardwarePttPressed;
+
+            _signalRService.PttLocked += OnPttLocked;
+            _signalRService.PttDenied += OnPttDenied;
+            _signalRService.PttReleased += OnPttReleased;
+
+            _hwButtonService = IPlatformApplication.Current?.Services.GetService<HardwareButtonService>();
+            if (_hwButtonService != null)
+            {
+                _hwButtonService.PttPressed += OnHardwarePttPressed;
+                _hwButtonService.PttReleased += OnHardwarePttReleased;
+            }
         }
         LoadLocalMapSettings();
     }
@@ -453,9 +468,6 @@ public partial class LobbyPage : ContentPage
         _signalRService.UserJoinedAlert -= OnUserJoined;
         _signalRService.UserLeftAlert -= OnUserLeft;
         _signalRService.GroupDeleted -= OnGroupDeleted;
-        _signalRService.PttLocked -= OnPttLocked;
-        _signalRService.PttDenied -= OnPttDenied;
-        _signalRService.PttReleased -= OnPttReleased;
         _signalRService.NavigationPaused -= OnNavigationPaused;
         _signalRService.NavigationResumed -= OnNavigationResumed;
         _signalRService.NavigationCompleted -= OnNavigationCompleted;
@@ -464,11 +476,23 @@ public partial class LobbyPage : ContentPage
         _signalRService.MeetupPointSet -= OnMeetupPointSet;
         _signalRService.GroupSettingsUpdated -= OnSettingsPushedFromServer;
         _signalRService.VisibilityToggleReceived -= OnVisibilityToggleReceived;
-
-        if (_hwButtonService != null)
+        if (_isPttEnabled)
         {
-            _hwButtonService.PttPressed -= OnHardwarePttPressed;
-            _hwButtonService.PttReleased -= OnHardwarePttReleased;
+            _signalRService.PttLocked -= OnPttLocked;
+            _signalRService.PttDenied -= OnPttDenied;
+            _signalRService.PttReleased -= OnPttReleased;
+            PttOverlay.CloseRequested -= OnPttOverlayCloseRequested;
+
+            if (_hwButtonService != null)
+            {
+                _hwButtonService.PttPressed -= OnHardwarePttPressed;
+                _hwButtonService.PttReleased -= OnHardwarePttReleased;
+            }
+
+            if (_pttMesh != null)
+            {
+                _pttMesh.AudioLevelsUpdated -= OnPttAudioLevelsUpdated;
+            }
         }
 
         if (_locationTracker != null)
@@ -538,7 +562,7 @@ public partial class LobbyPage : ContentPage
     // --- ROSTER SYNC ---
     private void OnRosterUpdated(List<Rider> roster)
     {
-        MainThread.BeginInvokeOnMainThread(() =>
+        MainThread.BeginInvokeOnMainThread(async () =>
         {
             var updatedRiders = new ObservableCollection<Rider>();
 
@@ -597,6 +621,10 @@ public partial class LobbyPage : ContentPage
 
             _locationTracker?.UpdateRiderCount(Riders.Count(r => r.IsOnline));
             UpdateAdminButtonsVisibility();
+            if (_pttMesh != null)
+            {
+                await _pttMesh.SyncMeshNetworkAsync(roster);
+            }
         });
     }
 
@@ -3055,5 +3083,28 @@ public partial class LobbyPage : ContentPage
                 isOffRoute: false
             );
         });
+    }
+    // Add near other PTT handlers
+    private void OnPttAudioLevelsUpdated(float outgoingLevel, float incomingLevel)
+    {
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (!PttOverlay.IsVisible) return;
+            PttOverlay.UpdateSpectrum(outgoingLevel, incomingLevel);
+        });
+    }
+    // Add near other PTT handlers
+    private async void OnPttOverlayCloseRequested(object sender, EventArgs e)
+    {
+        _pttCts?.Cancel();
+
+        if (_currentSpeaker == _myName)
+        {
+            await _signalRService.ReleasePtt(GroupNameLabel.Text, _myName);
+        }
+        else
+        {
+            PttOverlay.Hide();
+        }
     }
 }

@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="SpeedyCompass.Controls.PttOverlay"
              IsVisible="False"
-             InputTransparent="True">
+             InputTransparent="False">
 
     <Grid BackgroundColor="#E6000000" Padding="20">
         <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="15">
@@ -11,6 +11,30 @@
             <Label x:Name="PttStatusLabel" Text="Mic Open" TextColor="MediumSeaGreen" FontSize="28" FontAttributes="Bold" HorizontalOptions="Center" CharacterSpacing="1"/>
             <Label x:Name="PttSpeakerLabel" Text="You can now speak to the group." TextColor="White" FontSize="16" HorizontalOptions="Center"/>
             <Label x:Name="PttCountdownLabel" Text="Closing in 30s..." TextColor="LightCoral" FontSize="14" FontAttributes="Bold" HorizontalOptions="Center" IsVisible="False"/>
+
+            <Border BackgroundColor="#40000000" StrokeThickness="0" Padding="12" Margin="0,8,0,0">
+                <Border.StrokeShape>
+                    <RoundRectangle CornerRadius="12"/>
+                </Border.StrokeShape>
+
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Mic Level" TextColor="White" FontSize="13" />
+                    <ProgressBar x:Name="LocalLevelBar" Progress="0" ProgressColor="LimeGreen" BackgroundColor="#275B27" HeightRequest="8" />
+
+                    <Label Text="Incoming Level" TextColor="White" FontSize="13" Margin="0,6,0,0" />
+                    <ProgressBar x:Name="RemoteLevelBar" Progress="0" ProgressColor="DodgerBlue" BackgroundColor="#1F3F66" HeightRequest="8" />
+                </VerticalStackLayout>
+            </Border>
+
+            <Button Text="Close PTT"
+                    Clicked="OnCloseClicked"
+                    BackgroundColor="#D32F2F"
+                    TextColor="White"
+                    FontAttributes="Bold"
+                    CornerRadius="12"
+                    HeightRequest="42"
+                    HorizontalOptions="Center"
+                    WidthRequest="180" />
         </StackLayout>
     </Grid>
 </ContentView>

@@ -1,9 +1,11 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Maui.Maps.Handlers;
 using SpeedyCompass.Controls;
 using SpeedyCompass.Engines;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared;
 using System.Net.Http;
 
 namespace SpeedyCompass
@@ -54,7 +56,19 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<IPlaceDiscoveryService, PlaceDiscoveryService>();
             builder.Services.AddSingleton<RouteDeviationEngine>();
 
-            // --- NEW: Register HttpClientFactory and your Page ---
+            // Named/Keyed PTT registrations
+            builder.Services.AddKeyedSingleton<IPttMeshService, PttMeshService>("pro");
+            builder.Services.AddKeyedSingleton<IPttMeshService, NoOpPttMeshService>("free");
+
+            // Default IPttMeshService resolved by tier
+            builder.Services.AddSingleton<IPttMeshService>(sp =>
+            {
+                var tier = sp.GetRequiredService<AppTierService>();
+                return tier.UsePttVoice
+                    ? sp.GetRequiredKeyedService<IPttMeshService>("pro")
+                    : sp.GetRequiredKeyedService<IPttMeshService>("free");
+            });
+
             builder.Services.AddHttpClient("CompassBackend", client =>
             {
                 client.BaseAddress = new Uri("https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"); // Centralized URL config
@@ -88,9 +102,7 @@ namespace SpeedyCompass
 #if ANDROID
             builder.Services.AddSingleton<ILocationTracker, SpeedyCompass.Platforms.Android.AndroidLocationTracker>();
             builder.Services.AddSingleton<IAudioDuckingService, SpeedyCompass.Platforms.Android.AndroidAudioDuckingService>();
-#endif
-
-            
+            builder.Services.AddSingleton<IRealTimeAudio, AndroidRealTimeAudio>();
 #endif
 
             // Added per your suggestion

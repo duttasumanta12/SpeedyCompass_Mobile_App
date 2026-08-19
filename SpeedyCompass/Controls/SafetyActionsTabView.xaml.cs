@@ -10,6 +10,11 @@ public partial class SafetyActionsTabView : ContentView
 
     public SafetyActionsTabView() { InitializeComponent(); }
 
+    public void SetPttVisible(bool isVisible)
+    {
+        PttCard.IsVisible = isVisible;
+    }
+
     private void OnEmergencyStopClicked(object sender, EventArgs e) => EmergencyStopClicked?.Invoke(this, e);
     private void OnRefuelStopClicked(object sender, EventArgs e) => RefuelStopClicked?.Invoke(this, e);
     private void OnRestStopClicked(object sender, EventArgs e) => RestStopClicked?.Invoke(this, e);
