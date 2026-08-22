@@ -15,6 +15,8 @@ public partial class PttOverlay : ContentView
         PttStatusLabel.TextColor = Colors.MediumSeaGreen;
         PttSpeakerLabel.Text = "You can now speak to the group.";
         PttCountdownLabel.IsVisible = false;
+
+        SetSenderView();
         ResetSpectrum();
         IsVisible = true;
     }
@@ -25,6 +27,8 @@ public partial class PttOverlay : ContentView
         PttStatusLabel.TextColor = Colors.DodgerBlue;
         PttSpeakerLabel.Text = $"{speakerName} is speaking...";
         PttCountdownLabel.IsVisible = false;
+
+        SetListenerView();
         ResetSpectrum();
         IsVisible = true;
     }
@@ -51,6 +55,28 @@ public partial class PttOverlay : ContentView
     {
         PttCountdownLabel.IsVisible = true;
         PttCountdownLabel.Text = "Maximum speaking time reached.";
+    }
+
+    private void SetSenderView()
+    {
+        LocalLevelLabel.IsVisible = true;
+        LocalLevelBar.IsVisible = true;
+
+        RemoteLevelLabel.IsVisible = false;
+        RemoteLevelBar.IsVisible = false;
+
+        ClosePttButton.IsVisible = true;
+    }
+
+    private void SetListenerView()
+    {
+        LocalLevelLabel.IsVisible = false;
+        LocalLevelBar.IsVisible = false;
+
+        RemoteLevelLabel.IsVisible = true;
+        RemoteLevelBar.IsVisible = true;
+
+        ClosePttButton.IsVisible = false;
     }
 
     private void ResetSpectrum()

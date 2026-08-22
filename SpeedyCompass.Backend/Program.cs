@@ -5,11 +5,22 @@ using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Driver;
 using SpeedyCompass.Backend;
 using SpeedyCompass.Backend.Hubs;
+using SpeedyCompass.Backend.Services.Alerts;
 using SpeedyCompass.Shared.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<CompassStateManager>();
+builder.Services.AddSingleton<IRoleAlertDispatcher, RoleAlertDispatcher>();
+builder.Services.AddSingleton<IRoleAlertPolicy, EmergencyAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, RefuelAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, RestAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, MeetupArrivalAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, LaggingAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, SplinterAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, PitstopReminderAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, ArrivalAlertPolicy>();
+builder.Services.AddSingleton<IRoleAlertPolicy, RouteDeviationAlertPolicy>();
 
 // Register MVC controllers
 builder.Services.AddControllers();

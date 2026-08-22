@@ -15,7 +15,13 @@ namespace SpeedyCompass.Services
     {
         // --- 1. SETTINGS & IDENTIFICATION ---
         public GroupSettingsDto CurrentSettings { get; set; }
-        public string MyRole { get; set; } = "Rider";
+        public string MyRole { get; set; } = RiderRole.Rider.ToString();
+
+        public RiderRole MyRoleEnum
+        {
+            get => RiderRoleParser.ParseOrDefault(MyRole);
+            set => MyRole = value.ToString();
+        }
 
         // --- 2. NAVIGATION STATE ---
         public Location ActiveDestination { get; set; }

@@ -1,5 +1,6 @@
 ﻿// Models/Rider.cs
 
+using SpeedyCompass.Shared.Constants;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
@@ -10,9 +11,9 @@ namespace SpeedyCompass.Models
         public string Name { get; set; }
         public string GoogleId { get; set; } // Needed for targeting
         public bool IsAdmin { get; set; }
-        public string Role { get; set; } // Lead, Tail, Marshal, Rider
-                                         // Dynamically set the badge label
-        public string RoleDisplay => IsAdmin ? "Admin" : Role;
+        public string Role { get; set; } = RiderRole.Rider.ToString(); // Lead, Tail, Marshal, Rider
+
+        public string RoleDisplay => IsAdmin ? RiderRole.Admin.ToString() : Role;
 
         // Dynamically color code the badges
         public Color RoleColor
@@ -20,16 +21,20 @@ namespace SpeedyCompass.Models
             get
             {
                 if (IsAdmin) return Colors.DodgerBlue;
-                return Role switch
+
+                var parsedRole = RiderRoleParser.ParseOrDefault(Role);
+                return parsedRole switch
                 {
-                    "Lead" => Colors.MediumSeaGreen,
-                    "Tail" => Colors.DarkOrange,
-                    "Marshal" => Colors.DarkOrchid,
+                    RiderRole.Lead => Colors.MediumSeaGreen,
+                    RiderRole.Tail => Colors.DarkOrange,
+                    RiderRole.Marshal => Colors.DarkOrchid,
                     _ => Colors.Gray // Default Rider
                 };
             }
         }
+
         public bool IsOnline { get; set; }
+
         // NEW: Dynamic background color based on Online Status and Device Theme
         public Color CardBackgroundColor
         {
@@ -49,6 +54,7 @@ namespace SpeedyCompass.Models
                 }
             }
         }
+
         // NEW: Real-time Telemetry Properties
         private string _speedStr = "Standby";
         public string SpeedStr
@@ -56,13 +62,14 @@ namespace SpeedyCompass.Models
             get => _speedStr;
             set { _speedStr = value; OnPropertyChanged(); }
         }
-        // Add these right below your SpeedStr property
-        private string _statusStr = "Nearby";
+
+        private string _statusStr = TelemetryStatus.Nearby;
         public string StatusStr
         {
             get => _statusStr;
             set { _statusStr = value; OnPropertyChanged(); }
         }
+
         private Color _statusColor = Colors.MediumSeaGreen;
         public Color StatusColor
         {

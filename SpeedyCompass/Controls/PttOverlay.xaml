@@ -18,15 +18,16 @@
                 </Border.StrokeShape>
 
                 <VerticalStackLayout Spacing="8">
-                    <Label Text="Mic Level" TextColor="White" FontSize="13" />
+                    <Label x:Name="LocalLevelLabel" Text="Mic Level" TextColor="White" FontSize="13" />
                     <ProgressBar x:Name="LocalLevelBar" Progress="0" ProgressColor="LimeGreen" BackgroundColor="#275B27" HeightRequest="8" />
 
-                    <Label Text="Incoming Level" TextColor="White" FontSize="13" Margin="0,6,0,0" />
+                    <Label x:Name="RemoteLevelLabel" Text="Incoming Level" TextColor="White" FontSize="13" Margin="0,6,0,0" />
                     <ProgressBar x:Name="RemoteLevelBar" Progress="0" ProgressColor="DodgerBlue" BackgroundColor="#1F3F66" HeightRequest="8" />
                 </VerticalStackLayout>
             </Border>
 
-            <Button Text="Close PTT"
+            <Button x:Name="ClosePttButton"
+                    Text="Close PTT"
                     Clicked="OnCloseClicked"
                     BackgroundColor="#D32F2F"
                     TextColor="White"

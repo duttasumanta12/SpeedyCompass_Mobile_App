@@ -7,12 +7,18 @@ public partial class SafetyActionsTabView : ContentView
     public event EventHandler RestStopClicked;
     public event EventHandler LaunchNativeNavClicked;
     public event EventHandler PttClicked;
+    private bool _isPttEnabled;
 
     public SafetyActionsTabView() { InitializeComponent(); }
 
     public void SetPttVisible(bool isVisible)
     {
         PttCard.IsVisible = isVisible;
+    }
+    public void SetPttEnabled(bool isEnabled)
+    {
+        _isPttEnabled = isEnabled;
+        PttCard.Opacity = isEnabled ? 1.0 : 0.45;
     }
 
     private void OnEmergencyStopClicked(object sender, EventArgs e) => EmergencyStopClicked?.Invoke(this, e);

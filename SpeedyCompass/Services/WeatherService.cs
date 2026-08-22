@@ -121,7 +121,6 @@ public class WeatherService
         Func<Location> getCurrentLocation,
         RideStateService rideCache,
         IRoutingEngine routingEngine,
-        IVoiceCopilotEngine voiceEngine,
         Action<WeatherAlert> onBadWeatherDetected,
         CancellationToken cancelToken)
     {
@@ -160,8 +159,7 @@ public class WeatherService
 
                         if (alert != null && alert.IsBadWeather)
                         {
-                            // Trigger the injected voice and UI callbacks!
-                            voiceEngine?.Speak($"Weather alert. {alert.WarningMessage}");
+                            // UI + voice are now handled by caller plug-in pipeline
                             onBadWeatherDetected?.Invoke(alert);
                         }
                     }

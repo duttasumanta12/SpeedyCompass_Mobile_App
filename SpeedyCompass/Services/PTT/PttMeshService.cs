@@ -12,6 +12,7 @@ public class PttMeshService : IPttMeshService
     private const int MediaLogSampleWindow = 100;
     private static readonly TimeSpan AudioLevelPublishInterval = TimeSpan.FromMilliseconds(60);
     private static readonly TimeSpan AudioLevelStaleAfter = TimeSpan.FromMilliseconds(250);
+    private static readonly TimeSpan OfferRetryInterval = TimeSpan.FromSeconds(3);
 
     private readonly SignalRService _signalR;
     private readonly IRealTimeAudio _audioEngine;
@@ -23,6 +24,7 @@ public class PttMeshService : IPttMeshService
     private readonly ConcurrentDictionary<string, bool> _remoteDescriptionSetByPeer = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<RTCIceCandidateInit>> _pendingIceByPeer = new();
     private readonly ConcurrentDictionary<string, bool> _localOfferSentByPeer = new();
+    private readonly ConcurrentDictionary<string, DateTime> _lastOfferAttemptUtcByPeer = new();
 
     private readonly object _audioLevelLock = new();
     private DateTime _lastAudioLevelPublishUtc = DateTime.MinValue;
@@ -107,9 +109,8 @@ public class PttMeshService : IPttMeshService
             var connected = pc.connectionState == RTCPeerConnectionState.connected;
             var remoteSet = _remoteDescriptionSetByPeer.TryGetValue(peerId, out var rs) && rs;
             var shouldInitiate = ShouldInitiateOffer(_myGoogleId, peerId);
-            var localOfferSent = _localOfferSentByPeer.TryGetValue(peerId, out var sent) && sent;
 
-            if (!connected && shouldInitiate && !remoteSet && !localOfferSent)
+            if (!connected && shouldInitiate && !remoteSet && ShouldRetryOfferNow(peerId))
             {
                 Log($"Offer self-heal: retrying offer to '{peerId}'.");
                 await CreateAndSendOfferAsync(peerId, pc);
@@ -234,6 +235,8 @@ public class PttMeshService : IPttMeshService
     {
         _remoteDescriptionSetByPeer.TryRemove(peerGoogleId, out _);
         _pendingIceByPeer.TryRemove(peerGoogleId, out _);
+        _localOfferSentByPeer.TryRemove(peerGoogleId, out _);
+        _lastOfferAttemptUtcByPeer.TryRemove(peerGoogleId, out _);
 
         if (_negotiationByPeer.TryRemove(peerGoogleId, out var gate))
         {
@@ -265,6 +268,8 @@ public class PttMeshService : IPttMeshService
 
         try
         {
+            _lastOfferAttemptUtcByPeer[targetGoogleId] = DateTime.UtcNow;
+
             var offer = pc.createOffer(null);
             await pc.setLocalDescription(offer);
             await _signalR.SendWebRtcOffer(_currentGroupName, targetGoogleId, offer.toJSON());
@@ -541,5 +546,18 @@ public class PttMeshService : IPttMeshService
     {
         // deterministic role split for each pair in the mesh
         return string.CompareOrdinal(myGoogleId, peerGoogleId) < 0;
+    }
+
+    // Add helper
+    private bool ShouldRetryOfferNow(string peerGoogleId)
+    {
+        var now = DateTime.UtcNow;
+        var last = _lastOfferAttemptUtcByPeer.GetOrAdd(peerGoogleId, DateTime.MinValue);
+
+        if ((now - last) < OfferRetryInterval)
+            return false;
+
+        _lastOfferAttemptUtcByPeer[peerGoogleId] = now;
+        return true;
     }
 }

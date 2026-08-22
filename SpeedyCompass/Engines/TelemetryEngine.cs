@@ -1,6 +1,7 @@
 ﻿using System.Text.Json;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
+using SpeedyCompass.Shared.Constants;
 using SpeedyCompass.Shared.Models;
 
 namespace SpeedyCompass.Engines;
@@ -94,7 +95,7 @@ public class TelemetryEngine : ITelemetryEngine
         var settings = _rideCache.CurrentSettings;
         if (settings == null) return;
 
-        bool amILead = _rideCache.MyRole == "Lead" || (amIAdmin && string.IsNullOrEmpty(settings.LeadRiderGoogleId));
+        bool amILead = _rideCache.MyRoleEnum == RiderRole.Lead || (amIAdmin && string.IsNullOrEmpty(settings.LeadRiderGoogleId));
 
         // 1. Group Average Speed Check
         var activeSpeeds = _rideCache.OtherRiderSpeeds.Values.Where(s => s > 10).ToList();
@@ -208,7 +209,6 @@ public class TelemetryEngine : ITelemetryEngine
         var now = DateTime.UtcNow;
         double speedKmh = 0;
 
-        // 1. Calculate Speed
         if (rideCache.OtherRiderLocations.TryGetValue(riderId, out var oldLoc) && _riderLastUpdateTimes.TryGetValue(riderId, out var lastTime))
         {
             double distKm = Location.CalculateDistance(oldLoc, newLoc, DistanceUnits.Kilometers);
@@ -225,11 +225,11 @@ public class TelemetryEngine : ITelemetryEngine
         rideCache.OtherRiderSpeeds[riderId] = speedKmh;
         _riderLastUpdateTimes[riderId] = now;
 
-        string speedStr = speedKmh > 1 ? $"{Math.Round(speedKmh)} km/h" : "Stopped";
-        string gapStatus = "Nearby";
+        string speedStr = $"{Math.Round(speedKmh)} km/h";
+        RiderGapStatus gapStatus = RiderGapStatus.Nearby;
         Color gapColor = Colors.MediumSeaGreen;
+        string distDisplay = string.Empty;
 
-        // 2. Ahead / Behind Math
         if (myLoc != null && rideCache.CurrentRoutePoints != null && rideCache.CurrentRoutePoints.Count > 0)
         {
             double distToThemKm = Location.CalculateDistance(myLoc, newLoc, DistanceUnits.Kilometers);
@@ -246,37 +246,49 @@ public class TelemetryEngine : ITelemetryEngine
                     if (d < minDist) { minDist = d; theirIndex = i; }
                 }
 
-                string distDisplay = distToThemMeters > 1000 ? $"{Math.Round(distToThemKm, 1)} km" : $"{Math.Round(distToThemMeters)}m";
+                distDisplay = distToThemMeters > 1000
+                    ? $"{Math.Round(distToThemKm, 1)} km"
+                    : $"{Math.Round(distToThemMeters)}m";
+
                 int lagLimit = settings?.MaxLagDistanceMeters ?? 1000;
 
                 if (theirIndex > rideCache.CurrentRouteIndex + 5)
                 {
-                    gapStatus = $"{distDisplay} Ahead";
+                    gapStatus = RiderGapStatus.Ahead;
                     gapColor = Colors.DodgerBlue;
                 }
                 else if (theirIndex < rideCache.CurrentRouteIndex - 5)
                 {
-                    gapStatus = $"{distDisplay} Behind";
+                    gapStatus = RiderGapStatus.Behind;
                     gapColor = distToThemMeters > lagLimit ? Colors.Red : Colors.Orange;
                 }
                 else if (theirIndex <= 5 && rideCache.CurrentRouteIndex <= 5 && distToThemMeters > 100)
                 {
-                    gapStatus = $"{distDisplay} Behind";
+                    gapStatus = RiderGapStatus.Behind;
                     gapColor = distToThemMeters > lagLimit ? Colors.Red : Colors.Orange;
                 }
                 else
                 {
-                    gapStatus = $"{distDisplay} Away";
+                    gapStatus = RiderGapStatus.Away;
                     gapColor = Colors.Gray;
                 }
             }
         }
 
+        string gapStatusText = gapStatus switch
+        {
+            RiderGapStatus.Nearby => TelemetryStatus.Nearby,
+            RiderGapStatus.Ahead => $"{distDisplay} {TelemetryStatus.Ahead}",
+            RiderGapStatus.Behind => $"{distDisplay} {TelemetryStatus.Behind}",
+            RiderGapStatus.Away => $"{distDisplay} {TelemetryStatus.Away}",
+            _ => TelemetryStatus.Nearby
+        };
+
         return new RiderRelativeStatus
         {
             SpeedKmh = speedKmh,
             SpeedStr = speedStr,
-            StatusStr = gapStatus,
+            StatusStr = gapStatusText,
             StatusColor = gapColor,
             InterpolatedLocation = newLoc
         };

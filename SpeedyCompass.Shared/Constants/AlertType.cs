@@ -1,10 +1,14 @@
-﻿namespace SpeedyCompass.Shared.Constants
+﻿namespace SpeedyCompass.Shared.Constants;
+public enum AlertType
 {
-    public static class AlertType
-    {
-        public const string VoicePrompt = "VoicePrompt";
-        public const string Emergency = "Emergency";
-        public const string Refuel = "Refuel";
-        public const string Rest = "Rest";
-    }
+    Emergency = 0,
+    Refuel = 1,
+    Rest = 2,
+    Lagging = 3,
+    Splinter = 4,
+    Arrival = 5,
+    VoicePrompt = 6,
+    MeetupArrival = 7,
+    PitstopReminder = 8,
+    RouteDeviation = 9
 }

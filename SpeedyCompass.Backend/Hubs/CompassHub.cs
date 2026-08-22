@@ -1,6 +1,7 @@
 ﻿using Microsoft.AspNetCore.SignalR;
 using MongoDB.Driver;
 using SpeedyCompass.Backend.Models;
+using SpeedyCompass.Backend.Services.Alerts;
 using SpeedyCompass.Shared;
 using SpeedyCompass.Shared.Constants;
 using SpeedyCompass.Shared.Models;
@@ -25,10 +26,12 @@ public class CompassHub : Hub
     private static readonly ConcurrentDictionary<string, DateTime> _alertCooldowns = new();
     private static readonly ConcurrentDictionary<string, RiderTelemetry> _telemetryStats = new();
     private static readonly ConcurrentDictionary<string, DateTime> _processedOperations = new();
+    private readonly IRoleAlertDispatcher _alertDispatcher;
 
-    public CompassHub(CompassStateManager state)
+    public CompassHub(CompassStateManager state, IRoleAlertDispatcher alertDispatcher)
     {
         _state = state;
+        _alertDispatcher = alertDispatcher;
     }
 
     public async Task<List<GroupMember>> GetGroupRoster(string groupName)
@@ -412,8 +415,20 @@ public class CompassHub : Hub
 
     public async Task SendGroupAlert(string groupName, string alertType, string senderName)
     {
+
         var session = await _state.GetGroupCachedAsync(groupName);
-        if (session != null) await Clients.Group(groupName).SendAsync("ReceiveAlert", alertType, senderName);
+        if (session == null) return;
+
+        if (Enum.TryParse<AlertType>(alertType, true, out var typedAlert))
+        {
+            await _alertDispatcher.DispatchAsync(
+            typedAlert,
+            new AlertContext(groupName, senderName));
+            return;
+        }
+
+        // Backward-compatible fallback for unknown alert labels
+        await Clients.Group(groupName).SendAsync("ReceiveAlert", alertType, senderName);
     }
 
     // --- STRIPPED DOWN: LIGHTNING FAST LOCATION UPDATE ---
@@ -475,39 +490,34 @@ public class CompassHub : Hub
 
     public async Task RelayLagWarning(string groupName, string userName, double distanceMeters, bool isAhead)
     {
-        var session = await _state.GetGroupCachedAsync(groupName);
-        if (session == null) return;
-
-        string distText = distanceMeters > 1000 ? $"{Math.Round(distanceMeters / 1000.0, 1)} kilometers" : $"{Math.Round(distanceMeters)} meters";
-        string statusText = isAhead ? "ahead of" : "behind";
-        string msg = $"{userName} is {distText} {statusText} the Lead.";
-
-        // Send to Leadership ONLY
-        var leadershipConns = await _state.GroupMembers.Find(r =>
-            r.GroupName == groupName && r.IsOnline &&
-            (r.GoogleId == session.AdminGoogleId || r.Role == "Lead" || r.Role == "Marshal" || r.Role == "Tail")
-        ).ToListAsync();
-
-        foreach (var leader in leadershipConns)
-        {
-            if (!string.IsNullOrEmpty(leader.ConnectionId))
-                await Clients.Client(leader.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", msg);
-        }
+        await _alertDispatcher.DispatchAsync(
+                                AlertType.Lagging,
+                                new AlertContext(
+                                GroupName: groupName,
+                                SenderName: userName,
+                                DistanceMeters: distanceMeters,
+                                IsAhead: isAhead));
     }
 
     public async Task RelaySplinterWarning(string groupName)
     {
-        await Clients.Group(groupName).SendAsync("ReceiveAlert", "VoicePrompt", "Convoy splintered! The group is stretched too far.");
+        await _alertDispatcher.DispatchAsync(
+                                 AlertType.Splinter,
+                                 new AlertContext(groupName, "System"));
     }
 
     public async Task RelayPitstopReminder(string groupName, double distanceKm)
     {
-        await Clients.Group(groupName).SendAsync("ReceiveAlert", "VoicePrompt", $"The Lead has traveled {Math.Round(distanceKm)} kilometers. Consider a group rest stop.");
+        await _alertDispatcher.DispatchAsync(
+                                AlertType.PitstopReminder,
+                                new AlertContext(groupName, "Lead", DistanceKm: distanceKm));
     }
 
     public async Task RelayArrivalAlert(string groupName)
     {
-        await Clients.Group(groupName).SendAsync("ReceiveAlert", "VoicePrompt", "The Lead is arriving at the destination.");
+        await _alertDispatcher.DispatchAsync(
+                                AlertType.Arrival,
+                                new AlertContext(groupName, "Lead"));
     }
 
     public async Task NotifyRouteDeviation(string groupName, string userName)
@@ -527,9 +537,16 @@ public class CompassHub : Hub
                 if (!string.IsNullOrEmpty(leader.ConnectionId))
                 {
                     await Clients.Client(leader.ConnectionId).SendAsync("ReceiveRouteDeviation", userName);
-                    await Clients.Client(leader.ConnectionId).SendAsync("ReceiveAlert", "VoicePrompt", $"Warning. {userName} has deviated from the established route.");
+
                 }
             }
+
+            await _alertDispatcher.DispatchAsync(
+            AlertType.RouteDeviation,
+            new AlertContext(
+            GroupName: groupName,
+            SenderName: userName,
+            SubjectUserName: userName));
         }
     }
 
