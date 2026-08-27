@@ -31,12 +31,12 @@
 
             <!-- Pin Overlay with intact margins -->
             <AbsoluteLayout x:Name="PinOverlayLayout" 
-                InputTransparent="True" 
-                CascadeInputTransparent="True" 
-                ZIndex="10" 
-                Grid.RowSpan="2" 
-                BindableLayout.ItemsSource="{Binding MapPins, Source={x:Reference ThisPage}}" 
-                Margin="0,0,0,160">
+                            InputTransparent="True" 
+                            CascadeInputTransparent="True" 
+                            ZIndex="10" 
+                            Grid.RowSpan="2" 
+                            BindableLayout.ItemsSource="{Binding MapPins, Source={x:Reference ThisPage}}" 
+                            Margin="0,0,0,160">
 
                 <BindableLayout.ItemTemplate>
                     <DataTemplate>
@@ -45,12 +45,12 @@
                Data (Username, Speed, Color) is passed via bindings INTO the component.
             -->
                         <controls:MapPinView AbsoluteLayout.LayoutBounds="0,0,-1,-1"
-                                 TranslationX="{Binding ScreenX}"
+                         TranslationX="{Binding ScreenX}"
                                  TranslationY="{Binding ScreenY}"
-                                 Username="{Binding Username}"
-                                 Speed="{Binding Speed}"
-                                 BatteryLevel="{Binding BatteryLevel}"
-                                 PinColor="{Binding PinColor}" />
+                     Username="{Binding Username}"
+                     Speed="{Binding Speed}"
+                     BatteryLevel="{Binding BatteryLevel}"
+                     PinColor="{Binding PinColor}" />
                     </DataTemplate>
                 </BindableLayout.ItemTemplate>
             </AbsoluteLayout>

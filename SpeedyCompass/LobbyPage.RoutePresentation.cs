@@ -22,7 +22,8 @@ public partial class LobbyPage
         string? riderName = null,
         bool isMainRoute = true,
         bool isReroute = false,
-        bool allowNetworkFetch = true)
+        bool allowNetworkFetch = true,
+        bool isPreview = false)
     {
         var request = new RouteBuildRequest(
             origin,

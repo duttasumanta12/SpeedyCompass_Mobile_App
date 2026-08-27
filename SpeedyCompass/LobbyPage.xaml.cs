@@ -344,7 +344,6 @@ public partial class LobbyPage : ContentPage
                 }
                 else if (serverState == GroupState.DestinationSet && this.groupDetails.DestLat != 0)
                 {
-                    OnDestinationSet(this.groupDetails.DestLat, this.groupDetails.DestLng, this.groupDetails.DestName);
                     await ChangeGroupState(serverState, forceSync: true);
                 }
                 else
@@ -499,17 +498,34 @@ public partial class LobbyPage : ContentPage
         // 1. Set the pending destination to exactly where they tapped
         _pendingDestination = e.Location;
 
-        // 2. THE MAGIC: Because we caught the POI natively, we actually know the name of the place!
-        DestinationSearchControl.InjectExternalSelection(e.Name, e.Location);
+        string destName = e.Name;
+
+        // 2. Reverse Geocode to get a readable name for the Search Bar
+        try
+        {
+            var placemarks = await Geocoding.Default.GetPlacemarksAsync(e.Location.Latitude, e.Location.Longitude);
+            var placemark = placemarks?.FirstOrDefault();
+            if (placemark != null)
+            {
+                destName = $"{placemark.FeatureName} {placemark.Thoroughfare}, {placemark.Locality}".Trim(' ', ',');
+            }
+            else
+            {
+                destName = $"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}";
+            }
+        }
+        catch { destName = $"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}"; }
+
+        DestinationSearchControl.InjectExternalSelection(destName, e.Location);
 
         // 3. Update the visual pin
-        UpdateDestinationPin(_pendingDestination, e.Name);
+        UpdateDestinationPin(_pendingDestination, destName);
 
-        // 4. Draw the route
+        // THE FIX: Do NOT call CalculateAndDrawRoute here!
+        // Just frame the camera so both the user and the pin are on screen.
         var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         if (currentLoc != null)
         {
-            await CalculateAndDrawRoute(currentLoc, _pendingDestination);
             MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _pendingDestination]));
         }
 
@@ -1285,7 +1301,7 @@ public partial class LobbyPage : ContentPage
             if (currentLoc != null)
             {
                 // This updates PreNavDistLabel with the exact distance & ETA
-                await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination);
+                await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination, isPreview: true);
                 MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _rideCache.ActiveDestination]));
             }
 
@@ -1320,7 +1336,7 @@ public partial class LobbyPage : ContentPage
                                Math.Abs(_rideCache.ActiveDestination.Longitude - destLng) < 0.0001;
 
         // Always protect telemetry if route is already active to same destination
-        if (alreadyNavigating && sameDestination)
+        if (alreadyNavigating && sameDestination && !isSyncRequired)
         {
             AppLogger.Info("Navigation", "Ignored redundant Start command to protect active telemetry.");
             return;
@@ -1607,25 +1623,23 @@ public partial class LobbyPage : ContentPage
                     {
                         GroupState serverState = fetchedDetails.CurrentState;
 
-                        if (previousState < GroupState.Navigating && serverState == GroupState.Navigating)
-                        {
-                            AppLogger.Info("Network", "Catching up: Ride started while offline.");
-                            OnNavigationStarted(fetchedDetails.DestLat, fetchedDetails.DestLng, fetchedDetails.DestName, isSyncRequired: true);
-                        }
-                        else if (previousState < GroupState.Navigating && serverState >= GroupState.PausedBreak && serverState <= GroupState.PausedMechanical)
-                        {
-                            // THE FIX: Silently catch up to a paused ride!
-                            AppLogger.Info("Network", "Catching up: Ride paused while offline.");
-                            await RestorePausedStateSilentlyAsync(serverState);
-                        }
-                        else if (previousState < GroupState.DestinationSet && serverState == GroupState.DestinationSet)
+                        // Remove the redundant OnNavigationStarted trigger here during initial connection
+                        if (previousState < GroupState.DestinationSet && serverState == GroupState.DestinationSet)
                         {
                             AppLogger.Info("Network", "Catching up: Destination set while offline.");
                             OnDestinationSet(fetchedDetails.DestLat, fetchedDetails.DestLng, fetchedDetails.DestName);
                         }
+                        else if (previousState < GroupState.Navigating && serverState == GroupState.Navigating)
+                        {
+                            // Only run if the page has already completed its initial OnAppearing lifecycle
+                            if (_hasJoined && _activeRouteLine == null)
+                            {
+                                AppLogger.Info("Network", "Catching up: Ride started while disconnected.");
+                                OnNavigationStarted(fetchedDetails.DestLat, fetchedDetails.DestLng, fetchedDetails.DestName, isSyncRequired: true);
+                            }
+                        }
                         else
                         {
-                            AppLogger.Info("Network", $"Syncing state to {serverState}");
                             await ChangeGroupState(serverState, forceSync: true);
                         }
                     }
@@ -2172,22 +2186,16 @@ public partial class LobbyPage : ContentPage
     private async void OnDestinationPreviewRequested(object sender, PlaceSelectedEventArgs e)
     {
         _pendingDestination = e.Location;
-
-        // =====================================================================
-        // THE FIX: Cache the waypoints NOW so the Preview can use them!
-        // =====================================================================
         _rideCache.ActiveWaypoints = e.RouteWaypoints ?? new List<Location>();
 
         UpdateDestinationPin(_pendingDestination, e.Name);
         UpdateWaypointPins(_rideCache.ActiveWaypoints, _pendingDestination);
 
+        // THE FIX: Do NOT call CalculateAndDrawRoute here!
+        // Just center the map so the user can see the pins they selected.
         var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
         if (currentLoc != null)
         {
-            // The mapbox logic inside here will now automatically detect the ActiveWaypoints!
-            await CalculateAndDrawRoute(currentLoc, _pendingDestination);
-
-            // Create a list of all points so the camera zooms out to perfectly frame the whole route
             var cameraBoundsPoints = new List<Location> { currentLoc };
             if (_rideCache.ActiveWaypoints.Any())
             {

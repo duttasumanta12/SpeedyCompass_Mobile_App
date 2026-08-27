@@ -6,6 +6,7 @@ using MongoDB.Driver;
 using SpeedyCompass.Backend;
 using SpeedyCompass.Backend.Hubs;
 using SpeedyCompass.Backend.Services.Alerts;
+using SpeedyCompass.Backend.Services.External;
 using SpeedyCompass.Shared.Models;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,6 +23,9 @@ builder.Services.AddSingleton<IRoleAlertPolicy, PitstopReminderAlertPolicy>();
 builder.Services.AddSingleton<IRoleAlertPolicy, ArrivalAlertPolicy>();
 builder.Services.AddSingleton<IRoleAlertPolicy, RouteDeviationAlertPolicy>();
 
+builder.Services.AddScoped<RoutingGatewayService>();
+builder.Services.AddScoped<WeatherGatewayService>();
+
 // Register MVC controllers
 builder.Services.AddControllers();
 
@@ -34,6 +38,18 @@ builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
 }).AddAzureSignalR();
 
 builder.Services.AddMemoryCache();
+
+builder.Services.AddHttpClient("weatherapi", client =>
+{
+    client.BaseAddress = new Uri("https://api.open-meteo.com/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+}).ConfigurePrimaryHttpMessageHandler(() =>
+{
+    return new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+    };
+});
 
 
 

@@ -3,7 +3,9 @@ using Microsoft.Maui.Controls.Maps;
 using SpeedyCompass.Models;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Constants;
+using SpeedyCompass.Shared.Models;
 using System.Globalization;
+using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -97,7 +99,7 @@ public interface IRoutingEngine
     Task<Location> CalculateDynamicMeetupPointAsync();
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
     Task<RouteTelemetryResult> ProcessRouteTelemetryFreeAsync(Location currentLocation, RideStateService rideCache, double currentSpeedKmh, CancellationToken cancellationToken);
-    Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false);
+    Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false, bool isPreview = false);
     Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm);
     Task RefreshTrafficWindowIfNeededAsync(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default);
     Location SnapToRouteLine(Location rawLocation, List<Location> routePoints, int currentIndex);
@@ -108,21 +110,25 @@ public interface IRoutingEngine
 
 public class RoutingEngine : IRoutingEngine
 {
-    private readonly HttpClient _httpClient;
-    private readonly string _googleApiKey;
     private readonly RideStateService _rideCache;
+    private readonly IHttpClientFactory httpClientFactory;
     private readonly TrafficAwarenessEngine _trafficEngine = new();
 
-    public RoutingEngine(IConfiguration configuration, RideStateService rideCache)
+    public RoutingEngine(IConfiguration configuration, RideStateService rideCache, IHttpClientFactory httpClientFactory)
     {
-        _httpClient = new HttpClient();
-        _googleApiKey = configuration["GoogleApiKey"] ?? "AIzaSyA8t2qkOm6A9K8ZM-uYyJp5gnLVZCEHWzk";
         _rideCache = rideCache;
+        this.httpClientFactory = httpClientFactory;
     }
-
-    // 🔄 REPLACE entire method
-    // Note the added 'bool isReroute = false' parameter at the end!
-    public async Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false)
+    /// <summary>
+    /// Fetches route data from Google Directions API, including polyline, distance, duration, and optional voice steps.
+    /// </summary>
+    /// <param name="origin"></param>
+    /// <param name="dest"></param>
+    /// <param name="meetup"></param>
+    /// <param name="includeVoiceSteps"></param>
+    /// <param name="isReroute"></param>
+    /// <returns></returns>
+    public async Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false, bool isPreview = false)
     {
         var result = new RouteCalculationResult();
         try
@@ -136,90 +142,49 @@ public class RoutingEngine : IRoutingEngine
                 validHeading = (int)Math.Round(origin.Course.Value) % 360;
                 if (validHeading < 0) validHeading += 360;
             }
-
-            var requestBody = new RoutesRequest
+            var requestBody = new RouteRequestDto
             {
-                Origin = new RouteWaypoint
-                {
-                    Location = new RouteLocation
-                    {
-                        LatLng = new RouteLatLng { Latitude = origin.Latitude, Longitude = origin.Longitude },
-                        Heading = validHeading // Injects the heading (or stays null and is ignored by JSON)
-                    }
-                },
-                Destination = new RouteWaypoint
-                {
-                    Location = new RouteLocation
-                    {
-                        LatLng = new RouteLatLng { Latitude = dest.Latitude, Longitude = dest.Longitude }
-                    }
-                }
+                OriginLat = origin.Latitude,
+                OriginLng = origin.Longitude,
+                OriginHeading = validHeading,
+                DestLat = dest.Latitude,
+                DestLng = dest.Longitude,
+                MeetupLat = meetup?.Latitude,
+                MeetupLng = meetup?.Longitude,
+                IncludeVoiceSteps = includeVoiceSteps,
+                IsPreview = isPreview
             };
 
-            if (meetup != null)
-            {
-                requestBody.Intermediates = new List<RouteWaypoint> {
-                new RouteWaypoint { Location = new RouteLocation { LatLng = new RouteLatLng { Latitude = meetup.Latitude, Longitude = meetup.Longitude } } }
-            };
-            }
+            var httpClient = httpClientFactory.CreateClient("CompassBackend");
 
-            var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
-            request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
+            var response = await httpClient.PostAsJsonAsync($"api/locationengine/route", requestBody);
 
-            string fieldMask = "routes.polyline.encodedPolyline,routes.distanceMeters,routes.duration,routes.travelAdvisory.speedReadingIntervals";
-            if (includeVoiceSteps)
-                fieldMask += ",routes.legs.steps.startLocation,routes.legs.steps.navigationInstruction";
-
-            request.Headers.Add("X-Goog-FieldMask", fieldMask);
-            request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
-
-            var response = await _httpClient.SendAsync(request);
             if (response.IsSuccessStatusCode)
             {
-                var routeResult = JsonSerializer.Deserialize<RoutesResponse>(await response.Content.ReadAsStringAsync());
-                var mainRoute = routeResult?.Routes?.FirstOrDefault();
-
-                if (mainRoute != null)
+                var bffResponse = await response.Content.ReadFromJsonAsync<RouteBffResponse>();
+                if (bffResponse != null && !string.IsNullOrEmpty(bffResponse.EncodedPolyline))
                 {
-                    result.EncodedPolyline = mainRoute.Polyline.EncodedPolyline;
+                    result.EncodedPolyline = bffResponse.EncodedPolyline;
+
+                    // We only sent the encoded string over the network to save data!
+                    // The client decodes it instantly right here.
                     result.DecodedPoints = DecodeGooglePolyline(result.EncodedPolyline);
-                    result.DistanceKm = Math.Round(mainRoute.DistanceMeters / 1000.0, 1);
-                    result.EtaText = ToEtaText(mainRoute.Duration);
 
-                    if (mainRoute.TravelAdvisory?.SpeedReadingIntervals != null)
-                    {
-                        result.TrafficData = mainRoute.TravelAdvisory.SpeedReadingIntervals
-                            .Select(x => new SpeedInterval
-                            {
-                                StartPolylinePointIndex = x.StartPolylinePointIndex,
-                                EndPolylinePointIndex = x.EndPolylinePointIndex,
-                                Speed = x.Speed ?? "NORMAL"
-                            })
-                            .ToList();
-                    }
-                    else
-                    {
-                        result.TrafficData = new List<SpeedInterval>();
-                    }
+                    result.DistanceKm = bffResponse.DistanceKm;
+                    result.EtaText = bffResponse.EtaText;
 
-                    if (includeVoiceSteps && mainRoute.Legs != null)
+                    result.TrafficData = bffResponse.TrafficData.Select(t => new SpeedInterval
                     {
-                        foreach (var leg in mainRoute.Legs)
-                        {
-                            if (leg.Steps == null) continue;
-                            foreach (var step in leg.Steps)
-                            {
-                                if (step.NavigationInstruction != null && !string.IsNullOrEmpty(step.NavigationInstruction.Instructions) && step.StartLocation?.LatLng != null)
-                                {
-                                    result.VoiceSteps.Add(new RouteStep
-                                    {
-                                        TurnLocation = new Location(step.StartLocation.LatLng.Latitude, step.StartLocation.LatLng.Longitude),
-                                        Instruction = step.NavigationInstruction.Instructions
-                                    });
-                                }
-                            }
-                        }
-                    }
+                        StartPolylinePointIndex = t.StartIndex,
+                        EndPolylinePointIndex = t.EndIndex,
+                        Speed = t.Speed
+                    }).ToList();
+
+                    result.VoiceSteps = bffResponse.VoiceSteps.Select(v => new RouteStep
+                    {
+                        TurnLocation = new Location(v.TurnLat, v.TurnLng),
+                        Instruction = v.Instruction
+                    }).ToList();
                 }
             }
         }
@@ -1035,51 +1000,31 @@ public class RoutingEngine : IRoutingEngine
             if (validHeading < 0) validHeading += 360;
         }
 
-        // Traffic-window specific request: only what is needed
-        var requestBody = new
+        var requestBody = new RouteRequestDto
         {
-            origin = new
-            {
-                location = new
-                {
-                    latLng = new { latitude = origin.Latitude, longitude = origin.Longitude },
-                    heading = validHeading
-                }
-            },
-            destination = new
-            {
-                location = new
-                {
-                    latLng = new { latitude = destination.Latitude, longitude = destination.Longitude }
-                }
-            },
-            travelMode = "TWO_WHEELER",
-            routingPreference = "TRAFFIC_AWARE_OPTIMAL",
-            extraComputations = new[] { "TRAFFIC_ON_POLYLINE" },
-            languageCode = "en-US"
+            OriginLat = origin.Latitude,
+            OriginLng = origin.Longitude,
+            OriginHeading = validHeading,
+            DestLat = destination.Latitude,
+            DestLng = destination.Longitude
         };
 
-        var request = new HttpRequestMessage(HttpMethod.Post, "https://routes.googleapis.com/directions/v2:computeRoutes");
-        request.Headers.Add("X-Goog-Api-Key", _googleApiKey);
-        request.Headers.Add("X-Goog-FieldMask", "routes.polyline.encodedPolyline,routes.travelAdvisory.speedReadingIntervals");
-        request.Content = new StringContent(JsonSerializer.Serialize(requestBody), System.Text.Encoding.UTF8, "application/json");
-
-        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        var httpClient = httpClientFactory.CreateClient("CompassBackend");
+        var response = await httpClient.PostAsJsonAsync($"api/traffic", requestBody, cancellationToken);
         if (!response.IsSuccessStatusCode) return result;
 
-        var routeResult = JsonSerializer.Deserialize<RoutesResponse>(await response.Content.ReadAsStringAsync(cancellationToken));
-        var route = routeResult?.Routes?.FirstOrDefault();
-        if (route?.Polyline?.EncodedPolyline == null) return result;
+        var bffResponse = await response.Content.ReadFromJsonAsync<RouteBffResponse>(cancellationToken: cancellationToken);
 
-        result.DecodedPoints = DecodeGooglePolyline(route.Polyline.EncodedPolyline);
-        result.Intervals = route.TravelAdvisory?.SpeedReadingIntervals?
-            .Select(x => new SpeedInterval
+        if (bffResponse != null && !string.IsNullOrEmpty(bffResponse.EncodedPolyline))
+        {
+            result.DecodedPoints = DecodeGooglePolyline(bffResponse.EncodedPolyline);
+            result.Intervals = bffResponse.TrafficData.Select(t => new SpeedInterval
             {
-                StartPolylinePointIndex = x.StartPolylinePointIndex,
-                EndPolylinePointIndex = x.EndPolylinePointIndex,
-                Speed = x.Speed ?? "NORMAL"
-            })
-            .ToList() ?? new List<SpeedInterval>();
+                StartPolylinePointIndex = t.StartIndex,
+                EndPolylinePointIndex = t.EndIndex,
+                Speed = t.Speed
+            }).ToList();
+        }
 
         return result;
     }
@@ -1287,35 +1232,25 @@ public class RoutingEngine : IRoutingEngine
     public async Task<RouteCalculationResult> GetMapboxOverviewRouteAsync(List<Location> routePoints)
     {
         var result = new RouteCalculationResult();
-
-        // Mapbox requires at least 2 points, and max 25 points.
         if (routePoints == null || routePoints.Count < 2) return result;
-        if (routePoints.Count > 25) routePoints = routePoints.Take(25).ToList();
 
         try
         {
-            string mapboxToken = "pk.eyJ1IjoiZHV0dGFzdW1hbnRhMTIiLCJhIjoiY21zeDc4bG5iMGp5NzJ6c2FiamFjaW1oZyJ9.bMogWiCgbR4u8rZBw_cz5w";
+            // Simplify for the wire: just arrays of doubles
+            var pointsList = routePoints.Take(25).Select(p => new double[] { p.Longitude, p.Latitude }).ToList();
 
-            // Format coordinates as: lon1,lat1;lon2,lat2;lon3,lat3
-            var coordString = string.Join(";", routePoints.Select(p =>
-                $"{p.Longitude.ToString(System.Globalization.CultureInfo.InvariantCulture)},{p.Latitude.ToString(System.Globalization.CultureInfo.InvariantCulture)}"));
-
-            string url = $"https://api.mapbox.com/directions/v5/mapbox/driving/{coordString}?geometries=polyline&overview=full&access_token={mapboxToken}";
-
-            var response = await _httpClient.GetAsync(url);
+            var client = httpClientFactory.CreateClient("CompassBackend");
+            var response = await client.PostAsJsonAsync($"api/mapbox-overview", pointsList);
             if (response.IsSuccessStatusCode)
             {
-                string json = await response.Content.ReadAsStringAsync();
-                using var doc = JsonDocument.Parse(json);
-                var route = doc.RootElement.GetProperty("routes")[0];
-
-                result.EncodedPolyline = route.GetProperty("geometry").GetString();
-                result.DecodedPoints = DecodeGooglePolyline(result.EncodedPolyline);
-
-                result.DistanceKm = Math.Round(route.GetProperty("distance").GetDouble() / 1000.0, 1);
-
-                double durationSec = route.GetProperty("duration").GetDouble();
-                result.EtaText = ToEtaText(durationSec.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                var bffResponse = await response.Content.ReadFromJsonAsync<RouteBffResponse>();
+                if (bffResponse != null)
+                {
+                    result.EncodedPolyline = bffResponse.EncodedPolyline;
+                    result.DecodedPoints = DecodeGooglePolyline(result.EncodedPolyline);
+                    result.DistanceKm = bffResponse.DistanceKm;
+                    result.EtaText = bffResponse.EtaText;
+                }
             }
         }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Mapbox Error: {ex.Message}"); }

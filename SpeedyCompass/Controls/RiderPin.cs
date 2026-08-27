@@ -69,6 +69,9 @@ public class RiderPin : System.ComponentModel.INotifyPropertyChanged
         get => _batteryLevel;
         set { _batteryLevel = value; OnPropertyChanged(); }
     }
+
+    public int RawScreenX { get; internal set; }
+    public int RawScreenY { get; internal set; }
 }
 // Defining the CustomMap so XAML can find <controls:CustomMap>
 public class CustomMap : Microsoft.Maui.Controls.Maps.Map

@@ -476,6 +476,80 @@ namespace SpeedyCompass.Platforms.Android
             // resulting in a flawless 60FPS glide with zero snap-back.
             Map.AnimateCamera(CameraUpdateFactory.NewCameraPosition(cameraPosition), 1000, null);
         }
+        private void ResolvePinCollisions()
+        {
+            // 1. Get active pins and SORT THEM BY NAME. 
+            // Sorting is the secret to stopping the flickering. It ensures Pin A 
+            // is always drawn at 0 degrees, Pin B at 90 degrees, etc., every single frame!
+            var activePins = MarkerMap.Values
+                .Select(x => x.Pin)
+                .Where(p => p.RawScreenX > -5000 && p.RawScreenY > -5000)
+                .OrderBy(p => p.Username)
+                .ToList();
+
+            if (activePins.Count == 0) return;
+
+            double clusterThresholdPixels = 65.0; // Distance to consider pins "grouped"
+            double baseSpreadRadius = 45.0; // How far to push them out from the center
+
+            // 2. Group the pins into clusters
+            List<List<RiderPin>> clusters = new();
+
+            foreach (var pin in activePins)
+            {
+                bool addedToExisting = false;
+                foreach (var cluster in clusters)
+                {
+                    var centerPin = cluster[0];
+                    double dx = pin.RawScreenX - centerPin.RawScreenX;
+                    double dy = pin.RawScreenY - centerPin.RawScreenY;
+                    double distance = Math.Sqrt(dx * dx + dy * dy);
+
+                    if (distance < clusterThresholdPixels)
+                    {
+                        cluster.Add(pin);
+                        addedToExisting = true;
+                        break;
+                    }
+                }
+
+                if (!addedToExisting)
+                {
+                    clusters.Add(new List<RiderPin> { pin });
+                }
+            }
+
+            // 3. Position the pins based on their cluster
+            foreach (var cluster in clusters)
+            {
+                if (cluster.Count == 1)
+                {
+                    // No collision, just place it normally
+                    cluster[0].ScreenX = cluster[0].RawScreenX;
+                    cluster[0].ScreenY = cluster[0].RawScreenY;
+                }
+                else
+                {
+                    // Calculate the exact center point of the group
+                    double centerX = cluster.Average(p => p.RawScreenX);
+                    double centerY = cluster.Average(p => p.RawScreenY);
+
+                    // Slightly increase the circle size if there are a LOT of riders clumping
+                    double spreadRadius = baseSpreadRadius + (cluster.Count * 3.0);
+
+                    // Arrange them in a perfect circle
+                    for (int i = 0; i < cluster.Count; i++)
+                    {
+                        // Divide 360 degrees (2 * PI) evenly among the riders
+                        double angle = (2 * Math.PI / cluster.Count) * i;
+
+                        // Calculate stable X/Y offsets using Sine/Cosine
+                        cluster[i].ScreenX = centerX + (spreadRadius * Math.Cos(angle));
+                        cluster[i].ScreenY = centerY + (spreadRadius * Math.Sin(angle));
+                    }
+                }
+            }
+        }
         public void ProjectPinsToScreen()
         {
             if (Map == null) return;
@@ -493,6 +567,8 @@ namespace SpeedyCompass.Platforms.Android
 
                 if (pin.Username == "You" && isImmersiveMode)
                 {
+                    pin.RawScreenX = -10000;
+                    pin.RawScreenY = -10000;
                     pin.ScreenX = -10000;
                     pin.ScreenY = -10000;
                     continue;
@@ -502,9 +578,11 @@ namespace SpeedyCompass.Platforms.Android
                 var screenPoint = projection.ToScreenLocation(marker.Position);
 
                 // Pass it back to MAUI (divided by density so it matches XAML coordinates)
-                pin.ScreenX = screenPoint.X / density;
-                pin.ScreenY = screenPoint.Y / density;
+                pin.RawScreenX = (int)(screenPoint.X / density);
+                pin.RawScreenY = (int)(screenPoint.Y / density);
             }
+
+            ResolvePinCollisions();
         }
         public void UpdateMapTheme(bool isNightMode)
         {

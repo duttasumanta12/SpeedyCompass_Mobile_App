@@ -192,7 +192,7 @@ public class TelemetryEngine : ITelemetryEngine
                 DestinationName = _rideCache.ActiveDestinationName ?? "Unknown Destination",
                 TotalDistanceKm = Math.Round(_rideCache.CumulativeDistanceKm, 2),
                 TopSpeedKmh = Math.Round(_rideCache.MaxSpeedKmh, 1),
-                TotalElapsedTime = DateTime.Now - _rideCache.RideStartTime,
+                TotalElapsedTime = DateTime.UtcNow - _rideCache.RideStartTime,
                 StoppedTime = _rideCache.TotalStoppedTime,
             };
 

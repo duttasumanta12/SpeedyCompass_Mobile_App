@@ -82,19 +82,17 @@ namespace SpeedyCompass
                 };
             });
 
-            // --- NEW: Register HttpClientFactory and your Page ---
-            builder.Services.AddHttpClient("weatherapi", client =>
-            {
-                client.BaseAddress = new Uri("https://api.open-meteo.com/"); // Centralized URL config
-                client.Timeout = TimeSpan.FromSeconds(30);
-            }).ConfigurePrimaryHttpMessageHandler(() =>
-            {
-                return new HttpClientHandler
-                {
-                    ServerCertificateCustomValidationCallback =
-                                (message, cert, chain, errors) => { return true; }
-                };
-            });
+            //builder.Services.AddHttpClient("weatherapi", client =>
+            //{
+            //    client.BaseAddress = new Uri("https://api.open-meteo.com/");
+            //    client.Timeout = TimeSpan.FromSeconds(30);
+            //}).ConfigurePrimaryHttpMessageHandler(() =>
+            //{
+            //    return new HttpClientHandler
+            //    {
+            //        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+            //    };
+            //});
 
             // Register OS-Specific Location Tracker
             // NEW: Register the Hardware Button bridge

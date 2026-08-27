@@ -112,6 +112,7 @@
 		<PackageReference Include="Microsoft.Maui.Controls.Maps" Version="10.0.80" />
 		<PackageReference Include="Microsoft.Maui.Maps" Version="10.0.80" />
 		<PackageReference Include="Plugin.Maui.Audio" Version="4.0.0" />
+		<PackageReference Include="SIPSorcery" Version="10.0.15" />
 		<PackageReference Include="sqlite-net-pcl" Version="1.11.285" />
 		<PackageReference Include="Svg.Skia" Version="5.1.1" />
 		<PackageReference Include="Microsoft.Extensions.Http" Version="7.0.0" />
@@ -175,10 +176,6 @@
 	  <MauiXaml Update="LobbyPage.xaml">
 	    <Generator>MSBuild:Compile</Generator>
 	  </MauiXaml>
-	</ItemGroup>
-
-	<ItemGroup>
-	  <Folder Include="ControlHandlers\" />
 	</ItemGroup>
 
 	<ItemGroup>
