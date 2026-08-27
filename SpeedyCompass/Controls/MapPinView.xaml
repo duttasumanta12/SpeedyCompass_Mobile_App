@@ -32,7 +32,7 @@
                 <Shadow Brush="Black" Offset="0,4" Opacity="0.3" Radius="5"/>
             </Border.Shadow>
 
-            <VerticalStackLayout Spacing="0" InputTransparent="True">
+            <VerticalStackLayout Spacing="2" InputTransparent="True">
                 <!-- Username -->
                 <Label Text="{Binding Username, Source={x:Reference this}}" 
                        TextColor="White" 
@@ -42,21 +42,36 @@
                        LineBreakMode="TailTruncation" 
                        MaxLines="1"/>
 
-                <!-- Speed: Hide logic moved inside component -->
-                <Label Text="{Binding Speed, Source={x:Reference this}}" 
-                       TextColor="DodgerBlue" 
-                       FontSize="12" 
-                       FontAttributes="Bold" 
-                       HorizontalOptions="Center">
-                    <Label.Triggers>
-                        <!-- Reference the view itself to check Username -->
-                        <DataTrigger TargetType="Label" 
+                <!-- Speed & Battery Row -->
+                <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="8">
+
+                    <!-- Hide both Speed & Battery for the local rider -->
+                    <StackLayout.Triggers>
+                        <DataTrigger TargetType="StackLayout" 
                                      Binding="{Binding Username, Source={x:Reference this}}" 
                                      Value="You">
                             <Setter Property="IsVisible" Value="False" />
                         </DataTrigger>
-                    </Label.Triggers>
-                </Label>
+                    </StackLayout.Triggers>
+
+                    <!-- Speed -->
+                    <Label Text="{Binding Speed, Source={x:Reference this}}" 
+                           TextColor="DodgerBlue" 
+                           FontSize="11" 
+                           FontAttributes="Bold" 
+                           VerticalOptions="Center"/>
+
+                    <!-- Battery Level -->
+                    <StackLayout Orientation="Horizontal" Spacing="2" VerticalOptions="Center">
+                        <Label Text="battery_full" FontFamily="MaterialSymbols" FontSize="9" TextColor="LightGreen" VerticalOptions="Center"/>
+                        <Label Text="{Binding BatteryLevel, Source={x:Reference this}}" 
+                               TextColor="LightGreen" 
+                               FontSize="10" 
+                               FontAttributes="Bold"
+                               VerticalOptions="Center"/>
+                    </StackLayout>
+
+                </StackLayout>
             </VerticalStackLayout>
         </Border>
 

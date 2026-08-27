@@ -17,12 +17,12 @@ public partial class LobbyPage
         // Instantly queue the hardware update. No blocking!
         _localLocationChannel.Writer.TryWrite(e);
     }
-    private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading)
+    private void OnRiderLocationUpdated(string riderId, double lat, double lng, double heading, int batteryPct)
     {
         if (_rideCache.RunningInBackground) return; // CPU Shield
 
         // Instantly queue the network update. No blocking!
-        _networkLocationChannel.Writer.TryWrite((riderId, lat, lng, heading));
+        _networkLocationChannel.Writer.TryWrite((riderId, lat, lng, heading, batteryPct));
     }
 
     // =====================================================================
@@ -53,6 +53,7 @@ public partial class LobbyPage
 
                 await MainThread.InvokeOnMainThreadAsync(() =>
                 {
+                    string remoteBatteryStr = update.BatteryPct >= 0 ? $"{update.BatteryPct}%" : "--%";
                     var riderModel = Riders.FirstOrDefault(r => r.Name != null && r.Name.StartsWith(update.RiderId));
                     if (riderModel != null)
                     {
@@ -64,6 +65,7 @@ public partial class LobbyPage
                     if (_riderViewModels.TryGetValue(update.RiderId, out var existingVm))
                     {
                         existingVm.Speed = status.SpeedStr;
+                        existingVm.BatteryLevel = remoteBatteryStr;
                         if (_currentNavMode == MapNavigationMode.Immersive)
                         {
                             AnimatePinMovement(existingVm, status.InterpolatedLocation, update.Heading, 1000);
@@ -85,6 +87,7 @@ public partial class LobbyPage
                             Location = status.InterpolatedLocation,
                             Heading = update.Heading,
                             PinColor = colorProfile.PinColor,
+                            BatteryLevel = remoteBatteryStr,
                             ZIndex = 50F
                         };
                         _riderViewModels.TryAdd(update.RiderId, newVm);
@@ -99,6 +102,9 @@ public partial class LobbyPage
     private async Task ProcessSingleLocalLocationAsync(LocalLocationUpdate e)
     {
         double currentSpeedKmh = e.SpeedMph * 1.60934;
+
+        int batteryPct = Battery.Default.ChargeLevel >= 0 ? (int)(Battery.Default.ChargeLevel * 100) : -1;
+        string batteryStr = batteryPct >= 0 ? $"{batteryPct}%" : "--%";
 
         if (!_rideCache.RunningInBackground)
         {
@@ -127,6 +133,7 @@ public partial class LobbyPage
                     }
                     AnimatePinMovement(_myPinVm, e.Location, e.Heading, 1000);
                     _myPinVm.Speed = newSpeedStr;
+                    _myPinVm.BatteryLevel = batteryStr;
 
                     var myModel = Riders.FirstOrDefault(r => r.GoogleId == CurrentGoogleId);
                     if (myModel != null)
@@ -182,7 +189,7 @@ public partial class LobbyPage
             lock (_rideCache.UsersWhoMutedMe) { excludedPeers = _rideCache.UsersWhoMutedMe.ToList(); }
 
             // Explicitly tell the server NOT to route this payload to these users
-            await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading, excludedPeers);
+            await _signalRService.UpdateLocation(groupDetails.GroupName, _myName, e.Location.Latitude, e.Location.Longitude, e.Heading, batteryPct, excludedPeers);
         }
 
         if (groupDetails?.CurrentState == GroupState.Navigating)

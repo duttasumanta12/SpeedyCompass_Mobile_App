@@ -96,6 +96,7 @@ public interface IRoutingEngine
     RouteUIData BuildRouteVisuals(RouteCalculationResult routeData, Color routeColor, bool generateOverlays, bool isReroute = false);
     Task<Location> CalculateDynamicMeetupPointAsync();
     Task<RouteTelemetryResult> ProcessRouteTelemetryAsync(Location currentLocation, RideStateService rideCache, RouteDeviationEngine deviationEngine, List<RouteStep> activeRouteSteps, bool currentHasAnnouncedArrival, Location currentLastAnnouncedTurn, bool voiceNavEnabled, CancellationToken cancellationToken);
+    Task<RouteTelemetryResult> ProcessRouteTelemetryFreeAsync(Location currentLocation, RideStateService rideCache, double currentSpeedKmh, CancellationToken cancellationToken);
     Task<RouteCalculationResult> GetRouteDataAsync(Location origin, Location dest, Location meetup = null, bool includeVoiceSteps = false, bool isReroute = false);
     Location GetLocationAheadOnRoute(List<Location> routePoints, int currentIndex, double targetDistanceKm);
     Task RefreshTrafficWindowIfNeededAsync(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default);
@@ -609,14 +610,14 @@ public class RoutingEngine : IRoutingEngine
                 DistLeftKm = distLeft,
                 TrafficAlertMessage = trafficAlert,
                 SpeakTrafficAlert = speakTraffic
-             };
+            };
             result.ProgressPercentStr = $"{(int)(result.ProgressVal * 100)}%";
 
             // --- Arrival Prompt ---
             if (distLeft < 0.05 && !currentHasAnnouncedArrival)
             {
                 result.UpdatedHasAnnouncedArrival = true;
-                result.SpeakDestinationReached = voiceNavEnabled;
+                result.SpeakDestinationReached = true;
             }
 
             // --- Next Turn Math ---
@@ -662,6 +663,89 @@ public class RoutingEngine : IRoutingEngine
             return result;
         }, cancellationToken);
     }
+    // =====================================================================
+    // 2A. FREE TIER TELEMETRY MATH (ROUTE-AWARE, NO REROUTE/TRAFFIC/TURN MUTATION)
+    // =====================================================================
+    public async Task<RouteTelemetryResult> ProcessRouteTelemetryFreeAsync(
+        Location currentLocation,
+         RideStateService rideCache,
+        double currentSpeedKmh,
+         CancellationToken cancellationToken = default)
+    {
+        return await Task.Run(() =>
+         {
+             cancellationToken.ThrowIfCancellationRequested();
+
+             var currentRouteSnapshot = rideCache.CurrentRoutePoints?.ToList() ?? new List<Location>();
+             int closestActualIndex = Math.Max(0, rideCache.CurrentRouteIndex);
+             double distLeft = 0;
+
+             if (currentRouteSnapshot.Count > 1)
+             {
+                 int startIndex = Math.Max(0, rideCache.CurrentRouteIndex - 5);
+                 int searchRange = Math.Min(currentRouteSnapshot.Count - startIndex, 50);
+
+                 if (searchRange <= 0)
+                 {
+                     startIndex = 0;
+                     searchRange = currentRouteSnapshot.Count;
+                 }
+
+                 double minDistance = double.MaxValue;
+                 closestActualIndex = startIndex;
+
+                 for (int i = 0; i < searchRange; i++)
+                 {
+                     int checkIndex = startIndex + i;
+                     double d = Location.CalculateDistance(currentLocation, currentRouteSnapshot[checkIndex], DistanceUnits.Kilometers);
+                     if (d < minDistance)
+                     {
+                         minDistance = d;
+                         closestActualIndex = checkIndex;
+                     }
+                 }
+
+                 distLeft += Location.CalculateDistance(currentLocation, currentRouteSnapshot[closestActualIndex], DistanceUnits.Kilometers);
+                 for (int j = closestActualIndex; j < currentRouteSnapshot.Count - 1; j++)
+                 {
+                     distLeft += Location.CalculateDistance(currentRouteSnapshot[j], currentRouteSnapshot[j + 1], DistanceUnits.Kilometers);
+                 }
+             }
+             else if (rideCache.ActiveDestination != null)
+             {
+                 // Fallback only when route points are unavailable
+                 distLeft = Location.CalculateDistance(currentLocation, rideCache.ActiveDestination, DistanceUnits.Kilometers);
+             }
+
+             double movingAvg = Math.Max(currentSpeedKmh, 40);
+             DateTime eta = DateTime.Now.AddHours(distLeft / movingAvg);
+
+             double totalTravel = rideCache.CumulativeDistanceKm;
+             double totalRoute = totalTravel + distLeft;
+             double progressVal = totalRoute <= 0 ? 0 : totalTravel / totalRoute;
+             progressVal = Math.Clamp(progressVal, 0, 1);
+
+             return new RouteTelemetryResult
+             {
+                 IsOffRoute = false,
+                 ShouldReroute = false,
+                 UserMessage = string.Empty,
+                 AlertColor = Colors.DodgerBlue,
+                 NewRouteIndex = closestActualIndex,
+                 DistLeftStr = $"{Math.Round(distLeft, 1)} km",
+                 TotalTravelStr = $"{Math.Round(totalTravel, 1)}",
+                 TotalRouteStr = $"{Math.Round(totalRoute, 1)} km",
+                 ProgressVal = progressVal,
+                 ProgressPercentStr = $"{(int)(progressVal * 100)}%",
+                 EtaStr = eta.ToString("h:mm tt"),
+                 DistLeftKm = distLeft,
+                 UpdatedHasAnnouncedArrival = rideCache.HasAnnouncedArrival,
+                 UpdatedLastAnnouncedTurn = rideCache.LastAnnouncedTurn
+             }
+;
+         }, cancellationToken);
+    }
+
     public async Task<Location> CalculateDynamicMeetupPointAsync()
     {
         // Pull everything directly from the injected cache

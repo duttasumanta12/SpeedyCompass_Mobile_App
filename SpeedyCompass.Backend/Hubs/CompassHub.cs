@@ -267,6 +267,26 @@ public class CompassHub : Hub
 
         var roster = await GetGroupRoster(groupName);
         await Clients.Group(groupName).SendAsync("RosterUpdated", roster);
+
+        var session = await _state.GetGroupCachedAsync(groupName);
+        if (session != null)
+        {
+            if (session.CurrentState == GroupState.Navigating)
+            {
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
+            }
+            else if (session.CurrentState == GroupState.DestinationSet)
+            {
+                await Clients.Caller.SendAsync("DestinationSet", session.DestLat, session.DestLng, session.DestName);
+            }
+            else if (session.CurrentState >= GroupState.PausedBreak && session.CurrentState <= GroupState.PausedMechanical)
+            {
+                await Clients.Caller.SendAsync("NavigationStarted", session.DestLat, session.DestLng, session.DestName, true);
+            }
+
+            // Push the latest group settings so their UI matches the Admin
+            await Clients.Caller.SendAsync("ReceiveGroupSettings", session.Settings);
+        }
     }
 
     public async Task LeaveLobby()
@@ -401,7 +421,13 @@ public class CompassHub : Hub
 
         if (caller != null && session != null && session.AdminGoogleId == caller.GoogleId)
         {
-            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, Builders<GroupSession>.Update.Set(g => g.CurrentState, GroupState.NotNavigating));
+            var update = Builders<GroupSession>.Update
+                .Set(g => g.CurrentState, GroupState.NotNavigating)
+                .Set(g => g.DestLat, 0)
+                .Set(g => g.DestLng, 0)
+                .Set(g => g.DestName, string.Empty);
+
+            await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
 
             var ridersInGroup = await _state.GroupMembers.Find(m => m.GroupName == groupName).ToListAsync();
             foreach (var r in ridersInGroup)
@@ -435,7 +461,7 @@ public class CompassHub : Hub
     // =====================================================================
     // THE FIX: STATELESS VISIBILITY ROUTER
     // =====================================================================
-    public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading, List<string> excludedUserNames)
+    public async Task UpdateMyLocation(string groupName, string userName, double lat, double lng, double heading, int batteryPct, List<string> excludedUserNames)
     {
         string activeNavGroup = $"{groupName}_ActiveNav";
 
@@ -455,20 +481,20 @@ public class CompassHub : Hub
         }
 
         // 1. Instantly broadcast, explicitly cutting off network bandwidth to users who requested a mute
-        await Clients.GroupExcept(activeNavGroup, excludedIds).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading);
+        await Clients.GroupExcept(activeNavGroup, excludedIds).SendAsync("ReceiveRiderLocation", userName, lat, lng, heading, batteryPct);
 
         // 2. Fire-and-forget DB Update
-        var currentRider = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
-        if (currentRider != null)
-        {
-            var updateCoords = Builders<GroupMember>.Update
-                .Set(m => m.LastLat, lat)
-                .Set(m => m.LastLng, lng)
-                .Set(m => m.Heading, heading)
-                .Set(m => m.LastUpdate, DateTime.UtcNow);
+        //var currentRider = await _state.GroupMembers.Find(m => m.ConnectionId == Context.ConnectionId).FirstOrDefaultAsync();
+        //if (currentRider != null)
+        //{
+        //    var updateCoords = Builders<GroupMember>.Update
+        //        .Set(m => m.LastLat, lat)
+        //        .Set(m => m.LastLng, lng)
+        //        .Set(m => m.Heading, heading)
+        //        .Set(m => m.LastUpdate, DateTime.UtcNow);
 
-            await _state.GroupMembers.UpdateOneAsync(m => m.Id == currentRider.Id, updateCoords);
-        }
+        //    await _state.GroupMembers.UpdateOneAsync(m => m.Id == currentRider.Id, updateCoords);
+        //}
     }
 
     public async Task SendVisibilityToggleToRider(string groupName, string targetUserName, bool hide)
@@ -682,6 +708,7 @@ public class CompassHub : Hub
                 {
                     var update = Builders<GroupSession>.Update.Set(g => g.Settings.LeadRiderGoogleId, targetGoogleId);
                     await _state.ActiveGroups.UpdateOneAsync(g => g.GroupName == groupName, update);
+                    await Clients.Groups(groupName).SendAsync("ReceiveGroupSettings", GetGroupSettings(groupName));
                 }
 
                 if (!string.IsNullOrEmpty(targetRider.ConnectionId) && targetRider.GoogleId != caller.GoogleId)

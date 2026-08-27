@@ -51,7 +51,7 @@ public class SignalRService
     public event Action<double, double, string, bool> NavigationStarted;
     public event Action NavigationCancelled; // NEW: Event for when navigation is stopped
     public event Action<string, Color> ConnectionStatusChanged;
-    public event Action<string, double, double, double> RiderLocationUpdated;
+    public event Action<string, double, double, double, int> RiderLocationUpdated;
     public event Action<string, string> AlertReceived;
     // 1. Add this new event near the top of your class
     public event Action<double, double, string> DestinationSet;
@@ -282,9 +282,9 @@ public class SignalRService
             NavigationCancelled?.Invoke();
         });
 
-        _hubConnection.On<string, double, double, double>("ReceiveRiderLocation", (riderId, lat, lng, heading) =>
+        _hubConnection.On<string, double, double, double, int>("ReceiveRiderLocation", (riderId, lat, lng, heading, batteryPct) =>
         {
-            RiderLocationUpdated?.Invoke(riderId, lat, lng, heading);
+            RiderLocationUpdated?.Invoke(riderId, lat, lng, heading, batteryPct);
         });
 
         _hubConnection.On<string, string>("ReceiveAlert", (alertType, senderName) =>
@@ -356,7 +356,7 @@ public class SignalRService
         _hubConnection.On<string>("ReceiveRouteDeviation", (user) => RouteDeviationAlert?.Invoke(user));
         _hubConnection.On<double, double>("ReceiveMeetupPoint", (lat, lng) => MeetupPointSet?.Invoke(lat, lng));
         _hubConnection.On<GroupSettingsDto>("ReceiveGroupSettings", (settings) => GroupSettingsUpdated?.Invoke(settings));
-        _hubConnection.On<string, double, double, double>("UpdateRiderLocation", (riderId, lat, lng, heading) =>
+        _hubConnection.On<string, double, double, double, int>("UpdateRiderLocation", (riderId, lat, lng, heading, battery) =>
         {
             // =====================================================================
             // THE CPU SHIELD: If Perspective #2 (Gmaps mode) is active, silently drop 
@@ -364,7 +364,7 @@ public class SignalRService
             // =====================================================================
             if (_isBackgroundListenerMode) return;
 
-            RiderLocationUpdated?.Invoke(riderId, lat, lng, heading);
+            RiderLocationUpdated?.Invoke(riderId, lat, lng, heading, battery);
         });
         _hubConnection.On<string, bool>("ReceiveVisibilityToggle", (callerName, hide) =>
         {
@@ -526,11 +526,11 @@ public class SignalRService
         }
     }
 
-    public async Task UpdateLocation(string groupName, string userName, double lat, double lng, double heading, List<string> excludedUsers)
+    public async Task UpdateLocation(string groupName, string userName, double lat, double lng, double heading, int batteryPct, List<string> excludedUsers)
     {
         // DEDUPE KEY: "LocationUpdate". 
         // If offline for 20 mins, we only queue the LATEST coordinate!
-        await SendOrQueueAsync("UpdateMyLocation", "LocationUpdate", groupName, userName, lat, lng, heading, excludedUsers);
+        await SendOrQueueAsync("UpdateMyLocation", "LocationUpdate", groupName, userName, lat, lng, heading, batteryPct, excludedUsers);
     }
     // ==========================================================
     // --- NEW: PEER-TO-PEER VISIBILITY TOGGLE ---

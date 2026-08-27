@@ -10,7 +10,7 @@ public sealed class LobbySignalRBinding : IDisposable
     private readonly Action<string, Color> _onConnectionStatusChanged;
     private readonly Action<List<Rider>> _onRosterUpdated;
     private readonly Action<double, double, string, bool> _onNavigationStarted;
-    private readonly Action<string, double, double, double> _onRiderLocationUpdated;
+    private readonly Action<string, double, double, double, int> _onRiderLocationUpdated;
     private readonly Action _onNavigationCancelled;
     private readonly Action<string, string> _onAlertReceived;
     private readonly Action<double, double, string> _onDestinationSet;
@@ -37,7 +37,7 @@ public sealed class LobbySignalRBinding : IDisposable
         Action<string, Color> onConnectionStatusChanged,
         Action<List<Rider>> onRosterUpdated,
         Action<double, double, string, bool> onNavigationStarted,
-        Action<string, double, double, double> onRiderLocationUpdated,
+        Action<string, double, double, double, int> onRiderLocationUpdated,
         Action onNavigationCancelled,
         Action<string, string> onAlertReceived,
         Action<double, double, string> onDestinationSet,

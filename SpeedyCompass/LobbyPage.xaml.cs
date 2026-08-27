@@ -89,7 +89,7 @@ public partial class LobbyPage : ContentPage
     private bool? _isCurrentlyNight = null;
     private DateTime _lastSolarCheckTime = DateTime.MinValue;
     private readonly Channel<LocalLocationUpdate> _localLocationChannel;
-    private readonly Channel<(string RiderId, double Lat, double Lng, double Heading)> _networkLocationChannel;
+    private readonly Channel<(string RiderId, double Lat, double Lng, double Heading, int BatteryPct)> _networkLocationChannel;
     private readonly SemaphoreSlim _rerouteGate = new(1, 1);
     private CancellationTokenSource _lifecycleCts;
     private readonly object _routeStateLock = new();
@@ -172,7 +172,7 @@ public partial class LobbyPage : ContentPage
             FullMode = BoundedChannelFullMode.DropOldest
         });
 
-        _networkLocationChannel = Channel.CreateBounded<(string, double, double, double)>(new BoundedChannelOptions(50)
+        _networkLocationChannel = Channel.CreateBounded<(string, double, double, double, int)>(new BoundedChannelOptions(50)
         {
             FullMode = BoundedChannelFullMode.DropOldest
         });
@@ -197,6 +197,28 @@ public partial class LobbyPage : ContentPage
             _tierService = new AppTierService(); // safe fallback
         }
 
+        _pttMesh = IPlatformApplication.Current.Services.GetRequiredService<IPttMeshService>();
+        _isPttEnabled = _tierService.UsePttVoice;
+
+        if (_isPttEnabled)
+        {
+            _pttMesh.InitializeSession(groupDetails.GroupName, CurrentGoogleId);
+            DrawerActionsTab.SetPttVisible(_isPttEnabled);
+            _pttMesh.AudioLevelsUpdated += OnPttAudioLevelsUpdated;
+
+            PttOverlay.CloseRequested += OnPttOverlayCloseRequested;
+            DrawerActionsTab.PttClicked += OnHardwarePttPressed;
+
+            _signalRService.PttDenied += OnPttDenied;
+            _signalRService.PttReleased += OnPttReleased;
+
+            _hwButtonService = IPlatformApplication.Current?.Services.GetService<HardwareButtonService>();
+            if (_hwButtonService != null)
+            {
+                _hwButtonService.PttPressed += OnHardwarePttPressed;
+                _hwButtonService.PttReleased += OnHardwarePttReleased;
+            }
+        }
         if (!_tierService.IsProTierEnabled) _currentNavMode = MapNavigationMode.BackgroundSharing;
 
         ConfigureAlertPipelines();
@@ -229,7 +251,7 @@ public partial class LobbyPage : ContentPage
         }
 
         this.groupDetails = groupDetails;
-        _stateMachine.Initialize(this.groupDetails.CurrentState);
+        _stateMachine.Initialize(GroupState.NotNavigating);
         _stateMachine.StateChanged += OnStateTransitioned;
 
 #if ANDROID
@@ -266,7 +288,6 @@ public partial class LobbyPage : ContentPage
     {
         base.OnAppearing();
 
-        // Start the sequential consumer loops
         if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested)
         {
             _lifecycleCts = new CancellationTokenSource();
@@ -277,69 +298,73 @@ public partial class LobbyPage : ContentPage
 
         try
         {
-            OnConnectionStatusChanged("Connected", Colors.MediumSeaGreen);
+            GlobalLoadingOverlay.Show("Syncing Convoy State...");
 
-            if (groupDetails?.Settings != null)
+            // 1. THE FIX: Force a fresh, synchronous fetch of the Group Details from the server RIGHT NOW.
+            // This eliminates the stale constructor `groupDetails` race condition!
+            var freshDetails = await _signalRService.GetGroupDetails(GroupNameLabel.Text);
+            if (freshDetails != null)
             {
-                if(_rideCache.CurrentSettings?.GroupName != groupDetails.Settings.GroupName)
+                this.groupDetails = freshDetails;
+
+                if (_rideCache.CurrentSettings?.GroupName != freshDetails.Settings?.GroupName)
                 {
                     _rideCache.HardResetAll();
                 }
-                _rideCache.CurrentSettings = groupDetails.Settings;
+                _rideCache.CurrentSettings = freshDetails.Settings;
             }
+
+            // 2. Safely load our local DB (Odometer, Settings, Cached Polyline)
+            await _rideCache.LoadSnapshotAsync();
 
             var roster = await _signalRService.GetGroupRoster(GroupNameLabel.Text);
-            if (roster != null)
-            {
-                OnRosterUpdated(roster);
-            }
+            if (roster != null) OnRosterUpdated(roster);
 
             _hasJoined = true;
-            //AdminSettingsBtn.IsVisible = _amIAdmin;
             await InitializeLocalTrackingAsync();
 
-            // Open the Convoy (Roster) tab by default when the user enters the map!
             OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
 
-            if (groupDetails != null)
+            if (this.groupDetails != null)
             {
-                ConvoyPin = groupDetails.JoinCode ?? "------";
+                ConvoyPin = this.groupDetails.JoinCode ?? "------";
                 RosterControl.SetConvoyPin(ConvoyPin);
                 RosterControl.SetAdminPinCardVisible(_amIAdmin);
 
-                // =====================================================================
-                // THE FIX: Cache the server state BEFORE OnNavigationStarted mutates it!
-                // =====================================================================
-                GroupState serverState = groupDetails.CurrentState;
+                GroupState serverState = this.groupDetails.CurrentState;
 
-                if (serverState >= GroupState.Navigating)
+                // THE FIX: Prevent passing 0,0 if the server state is Navigating
+                if (serverState == GroupState.Navigating && this.groupDetails.DestLat != 0)
                 {
-                    // 1. Force the map to draw the route
-                    OnNavigationStarted(groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName, true);
-
-                    // 2. Safely check the cached state, not the object property
-                    if (serverState != GroupState.Navigating)
-                    {
-                        // Delay slightly so the 3D map camera finishes its initial swoop 
-                        // before we freeze the UI into the Paused state.
-                        MainThread.BeginInvokeOnMainThread(async () =>
-                        {
-                            await Task.Delay(500);
-                            await ChangeGroupState(serverState, forceSync: true);
-                        });
-                    }
+                    OnNavigationStarted(this.groupDetails.DestLat, this.groupDetails.DestLng, this.groupDetails.DestName, isSyncRequired: true);
+                }
+                else if (serverState >= GroupState.PausedBreak && serverState <= GroupState.PausedMechanical && this.groupDetails.DestLat != 0)
+                {
+                    await RestorePausedStateSilentlyAsync(serverState);
+                }
+                else if (serverState == GroupState.DestinationSet && this.groupDetails.DestLat != 0)
+                {
+                    OnDestinationSet(this.groupDetails.DestLat, this.groupDetails.DestLng, this.groupDetails.DestName);
+                    await ChangeGroupState(serverState, forceSync: true);
                 }
                 else
                 {
                     await ChangeGroupState(serverState, forceSync: true);
                 }
             }
-            await _rideCache.LoadSnapshotAsync();
+
+            // ONLY fire the UI connection status AFTER we've settled the state, 
+            // so we don't trigger a secondary race condition in OnConnectionStatusChanged.
+            OnConnectionStatusChanged("Connected", Colors.MediumSeaGreen);
         }
         catch (Exception ex)
         {
             await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
             await ClosePageAsync();
+        }
+        finally
+        {
+            GlobalLoadingOverlay.Hide();
         }
     }
     private void OnNavigationModeChanged(object sender, MapNavigationMode mode)
@@ -521,23 +546,21 @@ public partial class LobbyPage : ContentPage
 
                 if (r.GoogleId != CurrentGoogleId)
                 {
-                    // Promoted to an essential role: Show them
-                    if (isEssential && _rideCache.HiddenRiders.Contains(r.Name))
-                    {
-                        _rideCache.HiddenRiders.Remove(r.Name);
-                        _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, false).SafeFireAndForget();
-                    }
-                    // First time seeing them: Apply default rules
-                    else if (!_rideCache.VisibilityInitialized.Contains(r.Name))
+                    // First time seeing them: default to visible
+                    if (!_rideCache.VisibilityInitialized.Contains(r.Name))
                     {
                         _rideCache.VisibilityInitialized.Add(r.Name);
 
-                        // Hide standard riders by default
-                        if (!isEssential)
+                        if (_rideCache.HiddenRiders.Remove(r.Name))
                         {
-                            _rideCache.HiddenRiders.Add(r.Name);
-                            _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, true).SafeFireAndForget();
+                            _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, false).SafeFireAndForget();
                         }
+                    }
+                    // Promoted to an essential role: force them visible
+                    else if (isEssential && _rideCache.HiddenRiders.Contains(r.Name))
+                    {
+                        _rideCache.HiddenRiders.Remove(r.Name);
+                        _signalRService.SendVisibilityToggle(GroupNameLabel.Text, r.Name, false).SafeFireAndForget();
                     }
                 }
 
@@ -1029,41 +1052,35 @@ public partial class LobbyPage : ContentPage
     // --- STATE MACHINE --
     private Task ChangeGroupState(GroupState newState, string triggerUser = "", string reason = "", bool forceSync = false)
     {
-        // THE CATCH-UP PROTOCOL SHIELD
-        // If the Admin pauses or completes, but we are > 500m away, we reject 
-        // the state change locally so the map keeps guiding us to them!
-        // =====================================================================
         if (!_amIAdmin && groupDetails != null && groupDetails.CurrentState == GroupState.Navigating)
         {
             bool isPausingOrCompleting = newState >= GroupState.PausedBreak && newState <= GroupState.Completed;
 
-            if (isPausingOrCompleting && !forceSync) // forceSync allows manual overrides
+            if (isPausingOrCompleting && !forceSync)
             {
-                var adminLoc = GetAdminLocation();
-                if (adminLoc != null && _lastKnownLocation != null)
-                {
-                    double distToAdminKm = Location.CalculateDistance(_lastKnownLocation, adminLoc, DistanceUnits.Kilometers);
+                // THE FIX: If we don't know where the admin is, fall back to the Destination Pin!
+                var targetLoc = GetAdminLocation() ?? _rideCache.ActiveDestination;
 
-                    // If we are more than 500 meters behind the Admin
-                    if (distToAdminKm > 0.5)
+                if (targetLoc != null && _lastKnownLocation != null)
+                {
+                    double distToTargetKm = Location.CalculateDistance(_lastKnownLocation, targetLoc, DistanceUnits.Kilometers);
+
+                    if (distToTargetKm > 0.5)
                     {
-                        AppLogger.Info("CatchUp", $"Intercepted {newState}. Rider is {Math.Round(distToAdminKm, 1)}km behind Admin.");
+                        AppLogger.Info("CatchUp", $"Intercepted {newState}. Rider is {Math.Round(distToTargetKm, 1)}km away.");
 
                         _rideCache.PendingCatchUpState = newState;
 
                         string action = newState == GroupState.Completed ? "completed the route" : "paused the ride";
                         _voiceEngine.Speak($"The admin has {action} ahead of you. Keep riding to catch up.");
 
-                        // Abort the state transition! The UI and GPS stay in full Navigating mode!
                         return Task.CompletedTask;
                     }
                 }
             }
         }
 
-        // If we make it here, clear the pending state (we are actively syncing)
         _rideCache.PendingCatchUpState = null;
-        // We offload the logic to the pure C# engine. It handles all validation!
         _stateMachine.TryTransition(newState, triggerUser, reason, forceSync);
         return Task.CompletedTask;
     }
@@ -1102,8 +1119,8 @@ public partial class LobbyPage : ContentPage
             switch (e.NewState)
             {
                 case GroupState.DestinationSet: RenderDestinationSetState(); break;
-                case GroupState.NotNavigating:
-                case GroupState.Completed: RenderIdleState(e); break;
+                case GroupState.NotNavigating: RenderIdleState(e); break;
+                case GroupState.Completed: RenderCompletedState(e); break;
                 case GroupState.Navigating: RenderNavigatingState(e); break;
                 case GroupState.PausedBreak:
                 case GroupState.PausedHazard:
@@ -1115,6 +1132,31 @@ public partial class LobbyPage : ContentPage
 
         // 3. Snapshot the new state to the SQLite/Disk Outbox
         _rideCache.SaveSnapshotAsync().SafeFireAndForget();
+    }
+    private async void RenderCompletedState(StateTransitionEventArgs e)
+    {
+        // 1. Process Telemetry FIRST (before we clear the local cache)
+        string currentGroupName = GroupNameLabel.Text;
+        var finalSummary = await _telemetryEngine.ProcessAndSaveRideTelemetryAsync(currentGroupName);
+
+        // 2. Perform the standard map wipe (Idle teardown)
+        RenderIdleState(e);
+
+        // 3. Pop the Ride Summary Overlay!
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            if (finalSummary != null)
+            {
+                RideSummaryOverlay.Show(
+                    destination: finalSummary.DestinationName,
+                    distance: $"{finalSummary.TotalDistanceKm} km",
+                    movingTime: finalSummary.MovingTime.ToString(@"hh\:mm\:ss"),
+                    avgSpeed: $"{finalSummary.AverageMovingSpeedKmh} km/h",
+                    topSpeed: $"{finalSummary.TopSpeedKmh} km/h",
+                    totalTime: finalSummary.TotalElapsedTime.ToString(@"hh\:mm\:ss")
+                );
+            }
+        });
     }
 
     private void RenderDestinationSetState()
@@ -1281,23 +1323,24 @@ public partial class LobbyPage : ContentPage
         if (alreadyNavigating && sameDestination)
         {
             AppLogger.Info("Navigation", "Ignored redundant Start command to protect active telemetry.");
-
-            // sync-only visual recovery: rebuild line only if it is missing
-            if (isSyncRequired && _activeRouteLine == null)
-            {
-                var loc = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
-                if (loc != null)
-                {
-                    await CalculateAndDrawRoute(loc, _rideCache.ActiveDestination);
-                }
-            }
-
             return;
         }
 
-        AppLogger.ResetRideCorrelationId();
-        _rideCts?.Cancel();
-        _rideCts = new CancellationTokenSource();
+        // Only wipe the telemetry odometer if this is a BRAND NEW ride
+        if (!isSyncRequired)
+        {
+            AppLogger.ResetRideCorrelationId();
+            _rideCts?.Cancel();
+            _rideCts = new CancellationTokenSource();
+
+            _rideCache.ResetTelemetryState();
+            _rideCache.HasAnnouncedArrival = false;
+        }
+        else if (_rideCts == null || _rideCts.IsCancellationRequested)
+        {
+            // Ensure the cancellation token is alive for background tracking
+            _rideCts = new CancellationTokenSource();
+        }
 
         AppLogger.Info("Navigation", $"Starting route to {destName}...");
 
@@ -1308,7 +1351,7 @@ public partial class LobbyPage : ContentPage
         _rideCache.ResetTelemetryState();
         _rideCache.HasAnnouncedArrival = false;
 
-        await ChangeGroupState(GroupState.Navigating, _myName, forceSync: isSyncRequired);
+        await ChangeGroupState(GroupState.Navigating, _myName, forceSync: true);
 
         Location loc2;
 #if DEBUG
@@ -1324,7 +1367,7 @@ public partial class LobbyPage : ContentPage
                 TelemetryHeaderControl.SetOriginCoordinates(loc2.Latitude, loc2.Longitude);
             });
 
-            await _signalRService.UpdateLocation(groupName: GroupNameLabel.Text, userName: _myName, lat: loc2.Latitude, lng: loc2.Longitude, 0, new List<string>());
+            await _signalRService.UpdateLocation(groupName: GroupNameLabel.Text, userName: _myName, lat: loc2.Latitude, lng: loc2.Longitude, 0, -1, new List<string>());
 
             bool canReusePreviewRoute =
                 sameDestination &&
@@ -1397,32 +1440,6 @@ public partial class LobbyPage : ContentPage
 
     private async void OnNavigationCompleted(string adminName)
     {
-        string currentGroupName = GroupNameLabel.Text;
-
-        // Call the Telemetry Engine to process the final stats
-        var finalSummary = await _telemetryEngine.ProcessAndSaveRideTelemetryAsync(currentGroupName);
-
-        // 2. SAFELY UPDATE THE MAP AND THE NEW SUMMARY UI ON THE MAIN THREAD
-        MainThread.BeginInvokeOnMainThread(() =>
-        {
-            ClearOtherRiderRoutes();
-            LiveMap.MapElements.Clear();
-            _activeRouteLine = null;
-
-            if (finalSummary != null)
-            {
-                // THE FIX: Pass data cleanly to the component!
-                RideSummaryOverlay.Show(
-                    destination: finalSummary.DestinationName,
-                    distance: $"{finalSummary.TotalDistanceKm} km",
-                    movingTime: finalSummary.MovingTime.ToString(@"hh\:mm\:ss"),
-                    avgSpeed: $"{finalSummary.AverageMovingSpeedKmh} km/h",
-                    topSpeed: $"{finalSummary.TopSpeedKmh} km/h",
-                    totalTime: finalSummary.TotalElapsedTime.ToString(@"hh\:mm\:ss")
-                );
-            }
-        });
-
         await ChangeGroupState(GroupState.Completed, adminName);
     }
 
@@ -1469,7 +1486,7 @@ public partial class LobbyPage : ContentPage
 
             _rideCache.HardResetAll();
             _riderViewModels.Clear();
-            var otherRiderPins = MapPins.Where(x => x.Username != "You");
+            var otherRiderPins = MapPins.ToList().Where(x => x.Username != "You");
             foreach (var p in otherRiderPins) MapPins.Remove(p);
         }
 
@@ -1560,16 +1577,13 @@ public partial class LobbyPage : ContentPage
                 {
                     var previousState = this.groupDetails?.CurrentState ?? GroupState.NotNavigating;
 
-                    // =====================================================================
                     // 1. RIDER INERTIA & SERVER HEALING 
-                    // =====================================================================
                     if (previousState >= GroupState.Navigating && fetchedDetails.CurrentState < GroupState.Navigating)
                     {
                         AppLogger.Info("Network", $"Server lost active ride state. Admin is enforcing {previousState} state.");
 
                         if (_amIAdmin)
                         {
-                            // THE FIX: Heal the server to the EXACT state, not just 'Navigating'
                             if (previousState == GroupState.Navigating)
                             {
                                 await _signalRService.StartGroupNavigation(groupName, groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
@@ -1580,7 +1594,6 @@ public partial class LobbyPage : ContentPage
                             }
                             else
                             {
-                                // It's a Pause state. We must re-start it first to pass the destination, then immediately pause it.
                                 await _signalRService.StartGroupNavigation(groupName, groupDetails.DestLat, groupDetails.DestLng, groupDetails.DestName);
                                 await _signalRService.PauseGroupNavigation(groupName, "Restoring Pause State", _myName);
                             }
@@ -1592,27 +1605,18 @@ public partial class LobbyPage : ContentPage
 
                     if (previousState != fetchedDetails.CurrentState)
                     {
-                        // =====================================================================
-                        // THE FIX: Cache the server state BEFORE OnNavigationStarted mutates it!
-                        // =====================================================================
                         GroupState serverState = fetchedDetails.CurrentState;
 
-                        if (previousState < GroupState.Navigating && serverState >= GroupState.Navigating)
+                        if (previousState < GroupState.Navigating && serverState == GroupState.Navigating)
                         {
                             AppLogger.Info("Network", "Catching up: Ride started while offline.");
-
-                            // 1. Force the map to draw the route
                             OnNavigationStarted(fetchedDetails.DestLat, fetchedDetails.DestLng, fetchedDetails.DestName, isSyncRequired: true);
-
-                            // 2. Safely check the cached state
-                            if (serverState != GroupState.Navigating)
-                            {
-                                MainThread.BeginInvokeOnMainThread(async () =>
-                                {
-                                    await Task.Delay(500);
-                                    await ChangeGroupState(serverState, forceSync: true);
-                                });
-                            }
+                        }
+                        else if (previousState < GroupState.Navigating && serverState >= GroupState.PausedBreak && serverState <= GroupState.PausedMechanical)
+                        {
+                            // THE FIX: Silently catch up to a paused ride!
+                            AppLogger.Info("Network", "Catching up: Ride paused while offline.");
+                            await RestorePausedStateSilentlyAsync(serverState);
                         }
                         else if (previousState < GroupState.DestinationSet && serverState == GroupState.DestinationSet)
                         {
@@ -1628,6 +1632,54 @@ public partial class LobbyPage : ContentPage
                 });
             }
         }
+    }
+    private async Task RestorePausedStateSilentlyAsync(GroupState pausedState)
+    {
+        // 1. Ensure internal destination state is set properly
+        _rideCache.ActiveDestination = new Location(groupDetails.DestLat, groupDetails.DestLng);
+        _rideCache.ActiveDestinationName = groupDetails.DestName;
+        DestinationSearchControl.SetDestinationText(groupDetails.DestName);
+
+        MainThread.BeginInvokeOnMainThread(() =>
+        {
+            TelemetryHeaderControl.SetDestinationName(groupDetails.DestName);
+            UpdateDestinationPin(_rideCache.ActiveDestination, groupDetails.DestName);
+            UpdateWaypointPins(_rideCache.ActiveWaypoints, _rideCache.ActiveDestination);
+        });
+
+        // 2. Draw the route if we have it in cache, otherwise fetch it quietly
+        var currentLoc = _lastKnownLocation ?? await Geolocation.Default.GetLastKnownLocationAsync();
+
+        bool canReuseCache = _rideCache.CachedMainRouteData != null &&
+                             _rideCache.CachedMainRouteData.DecodedPoints != null &&
+                             _rideCache.CachedMainRouteData.DecodedPoints.Any();
+
+        if (canReuseCache)
+        {
+            // We have it! Just redraw it instantly without hitting Mapbox or running active nav logic.
+            MainThread.BeginInvokeOnMainThread(() =>
+            {
+                if (_activeRouteLine != null) LiveMap.MapElements.Remove(_activeRouteLine);
+                _activeRouteLine = new Polyline { StrokeColor = Colors.DodgerBlue, StrokeWidth = 22f };
+
+                foreach (var coord in _rideCache.CachedMainRouteData.DecodedPoints)
+                {
+                    _activeRouteLine.Geopath.Add(coord);
+                }
+
+                LiveMap.MapElements.Add(_activeRouteLine);
+                FitMapToBounds();
+            });
+        }
+        else if (currentLoc != null && _rideCache.ActiveDestination != null)
+        {
+            // Cache was empty (e.g. app was wiped), fetch the route quietly in the background
+            await CalculateAndDrawRoute(currentLoc, _rideCache.ActiveDestination, isMainRoute: true, isReroute: false, allowNetworkFetch: true);
+            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds());
+        }
+
+        // 3. Immediately snap to the paused drawer UI
+        await ChangeGroupState(pausedState, forceSync: true);
     }
     private async void OnMapClicked(object sender, MapClickedEventArgs e)
     {
@@ -1724,12 +1776,6 @@ public partial class LobbyPage : ContentPage
             // THE FIX: Return to default 0.5km zoom and gently rotate North
             LiveMap.MoveToRegion(MapSpan.FromCenterAndRadius(_lastKnownLocation, Distance.FromKilometers(0.5)));
 
-            if (sender is null)
-            {
-                //LiveMap.RotateTo(0, 500, Easing.SinInOut);
-                ToggleNavigationPerspective(true);
-            }
-
             if (_myPinVm != null) _myPinVm.IsAutoCentering = true;
 
             OverviewButton.IsVisible = true;
@@ -1745,14 +1791,8 @@ public partial class LobbyPage : ContentPage
 
         _myPinVm.IsAutoCentering = false;
 
-        await LiveMap.RotateTo(0, 500, Microsoft.Maui.Easing.SinInOut);
+        await LiveMap.RotateToAsync(0, 500, Microsoft.Maui.Easing.SinInOut);
         LiveMap.Scale = 1.0;
-
-        if (sender is null)
-        {
-            // 2. THE FIX: Reset the pin to the absolute center of the map!
-            ToggleNavigationPerspective(false);
-        }
 
         await Task.Delay(50);
         FitMapToBounds();
@@ -2030,11 +2070,6 @@ public partial class LobbyPage : ContentPage
         // As soon as this is true, the very next GPS tick will automatically 
         // swoop the camera back down into the 3D navigation view.
         _myPinVm.IsAutoCentering = true;
-
-        if (sender is null)
-        {
-            ToggleNavigationPerspective(true);
-        }
     }
     private void OnAdminSettingsClicked(object sender, EventArgs e)
     {
@@ -2199,6 +2234,7 @@ public partial class LobbyPage : ContentPage
         {
             _rideCache.HardResetAll();
             ChangeGroupState(GroupState.NotNavigating, _myName).SafeFireAndForget();
+            _signalRService.CancelGroupNavigation(GroupNameLabel.Text).SafeFireAndForget();
         }
     }
     private async Task InitializeLocalTrackingAsync()
@@ -2490,38 +2526,48 @@ public partial class LobbyPage : ContentPage
 
         _lastBroadcastPrefsRefreshUtc = DateTime.UtcNow;
     }
-    private void UpdateFreeTierTelemetry(Location currentLocation, double currentSpeedKmh)
+    private async Task UpdateFreeTierTelemetry(Location currentLocation, double currentSpeedKmh, CancellationToken cancellationToken = default)
     {
         if (_rideCache.ActiveDestination == null) return;
 
-        // 1. Calculate straight-line distance to destination (Crow flies)
-        double distLeft = Location.CalculateDistance(currentLocation, _rideCache.ActiveDestination, DistanceUnits.Kilometers);
 
-        // 2. ETA Math
-        double movingAvg = Math.Max(currentSpeedKmh, 40.0); // Assume 40kmh minimum average if moving slow
-        DateTime eta = DateTime.Now.AddHours(distLeft / movingAvg);
+        RouteTelemetryResult telemetry;
+        try
+        {
+            telemetry = await _routingEngine.ProcessRouteTelemetryFreeAsync(
+            currentLocation,
+            _rideCache,
+            currentSpeedKmh,
+            cancellationToken);
 
-        // 3. Progress percentage
-        double totalTravel = _rideCache.CumulativeDistanceKm;
-        double totalRoute = totalTravel + distLeft;
-        double progressVal = distLeft == 0 ? 1.0 : totalTravel / totalRoute;
-        string progressPercent = $"{(int)(progressVal * 100)}%";
+            await _telemetryEngine.EvaluateEdgeTelemetryAsync(
+                currentLocation,
+                currentSpeedKmh,
+                _myName,
+                GroupNameLabel.Text,
+                _amIAdmin,
+                telemetry.DistLeftKm);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
 
         // 4. Update the UI
         MainThread.BeginInvokeOnMainThread(() =>
         {
             TelemetryHeaderControl.UpdateTelemetryStats(
-                distText: $"{Math.Round(distLeft, 1)} km",
-                distColor: Colors.DodgerBlue,
-                totalTravel: $"{Math.Round(totalTravel, 1)}",
-                totalRoute: $"{Math.Round(totalRoute, 1)} km",
-                progressVal: progressVal,
-                progressPercent: progressPercent,
-                eta: eta.ToString("h:mm tt"),
-                isOffRoute: false
+                    distText: telemetry.DistLeftStr,
+                    distColor: Colors.DodgerBlue,
+                    totalTravel: telemetry.TotalTravelStr,
+                    totalRoute: telemetry.TotalRouteStr,
+                    progressVal: telemetry.ProgressVal,
+                    progressPercent: telemetry.ProgressPercentStr,
+                    eta: telemetry.EtaStr,
+                    isOffRoute: false
             );
         });
-    }  
+    }   
     private void ConfigureAlertPipelines()
     {
         _announceReroute = () =>

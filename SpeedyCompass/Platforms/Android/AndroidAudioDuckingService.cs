@@ -2,6 +2,7 @@
 using Android.Media;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared;
+using Stream = Android.Media.Stream;
 
 [assembly: Microsoft.Maui.Controls.Dependency(typeof(SpeedyCompass.Platforms.Android.AndroidAudioDuckingService))]
 namespace SpeedyCompass.Platforms.Android
@@ -21,13 +22,17 @@ namespace SpeedyCompass.Platforms.Android
             // "TransientMayDuck" tells Android: "Lower Spotify's volume, but don't pause it."
             if (global::Android.OS.Build.VERSION.SdkInt >= global::Android.OS.BuildVersionCodes.O)
             {
-                var focusRequest = new AudioFocusRequestClass.Builder(AudioFocus.GainTransientMayDuck)
+                _focusRequest = new AudioFocusRequestClass.Builder(AudioFocus.GainTransientMayDuck)
                     .SetAudioAttributes(new AudioAttributes.Builder()
                         .SetUsage(AudioUsageKind.AssistanceNavigationGuidance)
                         .SetContentType(AudioContentType.Speech)
                         .Build())
                     .Build();
-                _audioManager.RequestAudioFocus(focusRequest);
+                _audioManager.RequestAudioFocus(_focusRequest);
+            }
+            else
+            {
+                _audioManager.RequestAudioFocus(null, Stream.Music, AudioFocus.GainTransientMayDuck);
             }
         }
 
@@ -36,6 +41,11 @@ namespace SpeedyCompass.Platforms.Android
             if (global::Android.OS.Build.VERSION.SdkInt >= global::Android.OS.BuildVersionCodes.O && _focusRequest != null)
             {
                 _audioManager.AbandonAudioFocusRequest(_focusRequest);
+                _focusRequest = null;
+            }
+            else
+            {
+                _audioManager.AbandonAudioFocus(null);
             }
         }
     }

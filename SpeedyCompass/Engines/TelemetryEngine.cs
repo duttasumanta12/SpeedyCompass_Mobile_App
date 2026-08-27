@@ -161,7 +161,16 @@ public class TelemetryEngine : ITelemetryEngine
                     if (distToLead > settings.MaxLagDistanceMeters)
                     {
                         _rideCache.LastLagAlert = DateTime.Now;
-                        await _signalRService.SendLagWarning(groupName, myName, distToLead, false);
+
+                        bool amIAheadOfLead = IsAheadOfLeadOnRoute(leadLoc);
+                        if (amIAheadOfLead)
+                        {
+                            _voiceEngine.Speak("You are ahead of the Lead. Fall back and rejoin the formation.");
+                        }
+                        else
+                        {
+                            await _signalRService.SendLagWarning(groupName, myName, distToLead, false);
+                        }
                     }
                 }
             }
@@ -292,5 +301,33 @@ public class TelemetryEngine : ITelemetryEngine
             StatusColor = gapColor,
             InterpolatedLocation = newLoc
         };
+    }
+    private bool IsAheadOfLeadOnRoute(Location leadLoc)
+    {
+        if (leadLoc == null || _rideCache.CurrentRoutePoints == null || _rideCache.CurrentRoutePoints.Count == 0)
+            return false;
+
+        int myRouteIndex = Math.Max(0, _rideCache.CurrentRouteIndex);
+        int leadRouteIndex = FindNearestRouteIndex(leadLoc, _rideCache.CurrentRoutePoints);
+
+        return myRouteIndex > leadRouteIndex + 5;
+    }
+
+    private static int FindNearestRouteIndex(Location location, List<Location> routePoints)
+    {
+        int nearestIndex = 0;
+        double minDistanceKm = double.MaxValue;
+
+        for (int i = 0; i < routePoints.Count; i += 5)
+        {
+            double distanceKm = Location.CalculateDistance(location, routePoints[i], DistanceUnits.Kilometers);
+            if (distanceKm < minDistanceKm)
+            {
+                minDistanceKm = distanceKm;
+                nearestIndex = i;
+            }
+        }
+
+        return nearestIndex;
     }
 }

@@ -1,6 +1,8 @@
-﻿using SIPSorcery.Media;
+﻿using Microsoft.Extensions.DependencyInjection;
+using SIPSorcery.Media;
 using SIPSorcery.Net;
 using SIPSorceryMedia.Abstractions;
+using SpeedyCompass.Shared;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
@@ -13,9 +15,11 @@ public class PttMeshService : IPttMeshService
     private static readonly TimeSpan AudioLevelPublishInterval = TimeSpan.FromMilliseconds(60);
     private static readonly TimeSpan AudioLevelStaleAfter = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan OfferRetryInterval = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan IncomingDuckHold = TimeSpan.FromMilliseconds(450);
 
     private readonly SignalRService _signalR;
     private readonly IRealTimeAudio _audioEngine;
+    private readonly IAudioDuckingService? _audioDucking;
 
     // We use GoogleId as the key instead of ConnectionId so it survives reconnects!
     private readonly ConcurrentDictionary<string, RTCPeerConnection> _peers = new();
@@ -40,11 +44,15 @@ public class PttMeshService : IPttMeshService
     private bool _isMyMicOpen = false;
     private int _sentFrameCount = 0;
     private int _receivedFrameCount = 0;
+    private readonly object _duckingLock = new();
+    private CancellationTokenSource? _incomingDuckReleaseCts;
+    private bool _isIncomingDuckActive = false;
 
     public PttMeshService(SignalRService signalR, IRealTimeAudio audioEngine)
     {
         _signalR = signalR;
         _audioEngine = audioEngine;
+        _audioDucking = IPlatformApplication.Current?.Services.GetService<IAudioDuckingService>();
 
         // Wire up the microphone pipeline
         _audioEngine.OnAudioCaptured += HandleLiveMicrophoneData;
@@ -402,7 +410,11 @@ public class PttMeshService : IPttMeshService
         Log($"PttLocked received. Speaker='{speakerName}', LocalUser='{myName}', MicOpen={_isMyMicOpen}.");
         PublishAudioLevels(0f, 0f, force: true);
 
-        if (_isMyMicOpen) _audioEngine.StartRecording();
+        if (_isMyMicOpen)
+        {
+            try { _audioDucking?.RequestFocus(); } catch { /* no-op */ }
+            _audioEngine.StartRecording();
+        }
     }
 
     private void OnPttReleased()
@@ -413,6 +425,7 @@ public class PttMeshService : IPttMeshService
         {
             _audioEngine.StopRecording();
             _isMyMicOpen = false;
+            try { _audioDucking?.ReleaseFocus(); } catch { /* no-op */ }
             Log("Microphone stopped after PttReleased.");
         }
 
@@ -463,6 +476,7 @@ public class PttMeshService : IPttMeshService
         {
             try
             {
+                TouchIncomingAudioDucking();
                 byte[] pcmuData = rtpPacket.Payload;
                 byte[] pcmData = new byte[pcmuData.Length * 2];
 
@@ -560,4 +574,47 @@ public class PttMeshService : IPttMeshService
         _lastOfferAttemptUtcByPeer[peerGoogleId] = now;
         return true;
     }
+    
+   private void TouchIncomingAudioDucking()
+   {
+        if (_audioDucking == null) return;
+        if (_isMyMicOpen) return; // local speaker path already requests focus
+
+       CancellationToken token;
+
+        lock (_duckingLock)
+        {
+           if (!_isIncomingDuckActive)
+            {
+               try { _audioDucking.RequestFocus(); } catch { /* no-op */ }
+_isIncomingDuckActive = true;
+            }
+
+_incomingDuckReleaseCts?.Cancel();
+_incomingDuckReleaseCts?.Dispose();
+_incomingDuckReleaseCts = new CancellationTokenSource();
+token = _incomingDuckReleaseCts.Token;
+        }
+
+_ = Task.Run(async () =>
+        {
+                try
+            {
+        await Task.Delay(IncomingDuckHold, token);
+                    }
+                catch (TaskCanceledException)
+            {
+                        return;
+                   }
+    
+               lock (_duckingLock)
+                   {
+                        if (_isMyMicOpen) return;
+                        if (!_isIncomingDuckActive) return;
+        
+                        try { _audioDucking.ReleaseFocus(); } catch { /* no-op */ }
+        _isIncomingDuckActive = false;
+                    }
+            }, token);
+       }
 }

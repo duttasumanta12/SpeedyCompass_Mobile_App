@@ -3,7 +3,7 @@
 public class AppTierService
 {
     // Toggle this to TRUE in the future to turn on the paid Google features
-    public bool IsProTierEnabled { get; set; } = false;
+    public bool IsProTierEnabled { get; set; } = true;
 
     // Feature Flags - Easy to mix and match later!
     public bool UseImmersiveTbt => IsProTierEnabled;

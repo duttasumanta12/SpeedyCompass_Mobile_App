@@ -13,7 +13,17 @@ public partial class MapPinView : ContentView
     public static readonly BindableProperty PinColorProperty =
         BindableProperty.Create(nameof(PinColor), typeof(Color), typeof(MapPinView), Colors.DodgerBlue);
 
-    // --- Properties ---
+    public static readonly BindableProperty BatteryLevelProperty = BindableProperty.Create(
+        propertyName: nameof(BatteryLevel),
+        returnType: typeof(string),
+        declaringType: typeof(MapPinView),
+        defaultValue: "--%");
+
+    public string BatteryLevel
+    {
+        get => (string)GetValue(BatteryLevelProperty);
+        set => SetValue(BatteryLevelProperty, value);
+    }
 
     public string Username
     {

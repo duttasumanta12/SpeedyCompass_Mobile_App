@@ -49,6 +49,7 @@
                                  TranslationY="{Binding ScreenY}"
                                  Username="{Binding Username}"
                                  Speed="{Binding Speed}"
+                                 BatteryLevel="{Binding BatteryLevel}"
                                  PinColor="{Binding PinColor}" />
                     </DataTemplate>
                 </BindableLayout.ItemTemplate>
