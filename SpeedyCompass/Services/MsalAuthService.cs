@@ -14,7 +14,7 @@ public class MsalAuthService
     private const string TenantId = $"{TenantName}.onmicrosoft.com";
     private const string PolicySignUpSignIn = "B2C_1_SpeedyCompassSigninSignup";
 
-    private readonly string[] Scopes = { "openid", "offline_access" };
+    private readonly string[] Scopes = { "openid", "offline_access", "https://speedycompass.onmicrosoft.com/40124502-4f8e-4e9b-b75e-1f56881f04a2/speedycompass_useraccess" };
 
     public MsalAuthService()
     {

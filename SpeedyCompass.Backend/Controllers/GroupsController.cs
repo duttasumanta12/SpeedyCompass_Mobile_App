@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using MongoDB.Driver;
 using SpeedyCompass.Backend.Hubs;
 using System.Collections.Generic;
@@ -6,6 +7,7 @@ using System.Threading.Tasks;
 
 namespace SpeedyCompass.Backend.Controllers
 {
+    [Authorize]
     [Route("api/[controller]")]
     [ApiController]
     public class GroupsController : ControllerBase

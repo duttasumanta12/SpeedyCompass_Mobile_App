@@ -13,10 +13,7 @@ using static Android.Provider.Settings;
 #endif
 
 namespace SpeedyCompass.Services;
-// --- 1. THE OUTBOX COMMAND MODEL ---
 
-
-// --- 1. THE SQLITE OUTBOX MODEL ---
 public class OutboxCommandEntity
 {
     [PrimaryKey]
@@ -34,6 +31,7 @@ public class OutboxCommandEntity
 public class SignalRService
 {
     private readonly HubConnection _hubConnection;
+    private readonly MsalAuthService _authService;
     private SQLiteAsyncConnection _db;
     private bool _isFlushing = false;
 
@@ -81,8 +79,9 @@ public class SignalRService
     public event Action<string, string> WebRtcAnswerReceived; // SenderGoogleId, SDP
     public event Action<string, string> IceCandidateReceived; // SenderGoogleId, CandidateJSON
 
-    public SignalRService()
+    public SignalRService(MsalAuthService authService)
     {
+        _authService = authService;
         try
         {
             // Switch to HTTPS and standard ASP.NET Core HTTPS ports (e.g., 5001 or 7001)
@@ -97,15 +96,35 @@ public class SignalRService
             // baseUrl = "https://192.168.1.X:5001"; 
 
             _hubConnection = new HubConnectionBuilder()
-                .WithUrl($"{baseUrl}/compasshub", options =>
-                {
-                    // Explicitly allow WebSockets with a fallback to Long Polling
-                    options.Transports = HttpTransportType.WebSockets | HttpTransportType.LongPolling;
-
-                    // Configure custom HttpClientHandler to bypass SSL certificate validation 
-                    // for local development across ALL MAUI native platforms
-                    options.HttpMessageHandlerFactory = handler =>
+                    .WithUrl($"{baseUrl}/compasshub", options =>
                     {
+                        options.AccessTokenProvider = async () =>
+                        {
+                            var accounts = await _authService.GetAccounts();
+                            var account = accounts.FirstOrDefault();
+
+                            if (account != null)
+                            {
+                                try
+                                {
+                                    var result = await _authService.AcquireTokenSilentAsync(account);
+                                    return result.AccessToken;
+                                }
+                                catch (Exception ex)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[SignalR Auth Error] Could not get token: {ex.Message}");
+                                }
+                            }
+                            return null;
+                        };
+                        // ==========================================================
+                        // Explicitly allow WebSockets with a fallback to Long Polling
+                        options.Transports = HttpTransportType.WebSockets | HttpTransportType.LongPolling;
+#if DEBUG
+                        // Configure custom HttpClientHandler to bypass SSL certificate validation 
+                        // for local development across ALL MAUI native platforms
+                        options.HttpMessageHandlerFactory = handler =>
+                        {
                         if (handler is HttpClientHandler clientHandler)
                         {
                             clientHandler.ServerCertificateCustomValidationCallback =
@@ -118,7 +137,7 @@ public class SignalRService
                                 RemoteCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) => true
                             };
                         }
-#if ANDROID
+#if ANDROID && DEBUG
                         else if (handler is Xamarin.Android.Net.AndroidMessageHandler androidHandler)
                         {
                             androidHandler.ServerCertificateCustomValidationCallback =
@@ -132,24 +151,25 @@ public class SignalRService
                         //        (sender, url, trust) => { return true; };
                         //}
 #endif
-                        return handler;
-                    };
-                })
-                .WithAutomaticReconnect(new[]
-                { 
-                    // Attempt to reconnect immediately, then after 2s, 5s, and 10s
-                    TimeSpan.Zero,
-                    TimeSpan.FromSeconds(2),
-                    TimeSpan.FromSeconds(5),
-                    TimeSpan.FromSeconds(10)
-                })
-                .ConfigureLogging(logging =>
-                {
-                    // Output internal SignalR logs to the VS Debug Console
-                    logging.SetMinimumLevel(LogLevel.Debug);
-                    logging.AddDebug();
-                })
-                .Build();
+                            return handler;
+                        };
+#endif
+                    })
+                    .WithAutomaticReconnect(new[]
+                    { 
+                        // Attempt to reconnect immediately, then after 2s, 5s, and 10s
+                        TimeSpan.Zero,
+                        TimeSpan.FromSeconds(2),
+                        TimeSpan.FromSeconds(5),
+                        TimeSpan.FromSeconds(10)
+                    })
+                    .ConfigureLogging(logging =>
+                    {
+                        // Output internal SignalR logs to the VS Debug Console
+                        logging.SetMinimumLevel(LogLevel.Debug);
+                        logging.AddDebug();
+                    })
+                    .Build();
 
             RegisterHubListeners();
         }

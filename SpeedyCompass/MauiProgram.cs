@@ -22,24 +22,18 @@ namespace SpeedyCompass
                 {
                     fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
                     fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
-                    // YOUR FONT HERE:
                     fonts.AddFont("MaterialSymbols.ttf", "MaterialSymbols");
                 })
                 .ConfigureMauiHandlers(handlers =>
                 {
 #if ANDROID
-                    //handlers.AddHandler<RiderPin, MapPinHandler>();
                     handlers.AddHandler<CustomMap, SpeedyCompass.Platforms.Android.CustomMapHandler>();
 #endif
                 });
 
-            // 1. Register Global Exception Handlers
             SetupGlobalExceptionHandling();
-
             builder.Configuration.AddUserSecrets<App>();
 
-            // 1. Register the Services (Singletons live forever)
-            // Added per your suggestion
             builder.Services.AddSingleton<ILocationBroadcastPolicy, LocationBroadcastPolicy>();
             builder.Services.AddSingleton<AppTierService>();
             builder.Services.AddSingleton<WeatherService>();
@@ -69,33 +63,28 @@ namespace SpeedyCompass
                     : sp.GetRequiredKeyedService<IPttMeshService>("free");
             });
 
+            builder.Services.AddTransient<AuthorizationMessageHandler>();
+
             builder.Services.AddHttpClient("CompassBackend", client =>
             {
-                client.BaseAddress = new Uri("https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/"); // Centralized URL config
-                client.Timeout = TimeSpan.FromSeconds(30);
-            }).ConfigurePrimaryHttpMessageHandler(() =>
-            {
-                return new HttpClientHandler
-                {
-                    ServerCertificateCustomValidationCallback =
-                                (message, cert, chain, errors) => { return true; }
-                };
-            });
+#if DEBUG
+                client.BaseAddress = new Uri("https://10.0.2.2:7219/");
+#else
+                client.BaseAddress = new Uri("https://speedycompassbe-dme4f2hncnb0e4ad.southcentralus-01.azurewebsites.net/");
+#endif
+                client.Timeout = TimeSpan.FromSeconds(100);
+            }).AddHttpMessageHandler<AuthorizationMessageHandler>()
+#if DEBUG
+.ConfigurePrimaryHttpMessageHandler(() =>
+{
+    return new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+    };
+})
+#endif
+;
 
-            //builder.Services.AddHttpClient("weatherapi", client =>
-            //{
-            //    client.BaseAddress = new Uri("https://api.open-meteo.com/");
-            //    client.Timeout = TimeSpan.FromSeconds(30);
-            //}).ConfigurePrimaryHttpMessageHandler(() =>
-            //{
-            //    return new HttpClientHandler
-            //    {
-            //        ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
-            //    };
-            //});
-
-            // Register OS-Specific Location Tracker
-            // NEW: Register the Hardware Button bridge
             builder.Services.AddSingleton<HardwareButtonService>();
 #if ANDROID
             builder.Services.AddSingleton<ILocationTracker, SpeedyCompass.Platforms.Android.AndroidLocationTracker>();
@@ -103,29 +92,24 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<IRealTimeAudio, AndroidRealTimeAudio>();
 #endif
 
-            // Added per your suggestion
 #if DEBUG
             builder.Logging.AddDebug();
 #endif
 
             return builder.Build();
         }
+
         private static void SetupGlobalExceptionHandling()
         {
-            // Catch exceptions that happen on standard application threads
             AppDomain.CurrentDomain.UnhandledException += (sender, error) =>
             {
                 var ex = (Exception)error.ExceptionObject;
                 LogUnhandledException(ex, "AppDomain.UnhandledException");
             };
 
-            // Catch exceptions that happen inside un-awaited async Tasks
             TaskScheduler.UnobservedTaskException += (sender, error) =>
             {
                 LogUnhandledException(error.Exception, "TaskScheduler.UnobservedTaskException");
-
-                // Setting the exception as observed prevents the application from terminating 
-                // when the garbage collector cleans up the failed task.
                 error.SetObserved();
             };
         }
@@ -140,10 +124,7 @@ namespace SpeedyCompass
                           $"Stack Trace:\n{ex.StackTrace}\n" +
                           $"=======================================================\n";
 
-            // Output to standard console
             Console.WriteLine(message);
-
-            // Output specifically to Visual Studio / Rider Debug Window
             System.Diagnostics.Debug.WriteLine(message);
         }
     }

@@ -26,7 +26,11 @@ public class CompassStateManager
         {
             var connectionString = config.GetConnectionString("CosmosMongoDb") ?? "mongodb://localhost:27017";
             var client = new MongoClient(connectionString);
-            var database = client.GetDatabase("SpeedyCompassDB_dev");
+#if DEBUG
+            var database = client.GetDatabase("SpeedyCompassDB_Debug");
+#else
+            var database = client.GetDatabase("SpeedyCompassDB_Test");
+#endif
 
             UserAccounts = database.GetCollection<UserAccount>("Users");
             ActiveGroups = database.GetCollection<GroupSession>("Groups");

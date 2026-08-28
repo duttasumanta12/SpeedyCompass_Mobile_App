@@ -5,7 +5,7 @@ using SpeedyCompass.Shared.Models;
 
 namespace SpeedyCompass.Backend.Controllers;
 
-//[Authorize]
+[Authorize]
 [ApiController]
 [Route("api/[controller]")]
 public class LocationEngineController : ControllerBase

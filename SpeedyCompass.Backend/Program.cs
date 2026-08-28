@@ -1,7 +1,9 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Azure.SignalR;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Identity.Web;
 using MongoDB.Driver;
 using SpeedyCompass.Backend;
 using SpeedyCompass.Backend.Hubs;
@@ -35,7 +37,7 @@ builder.Services.AddControllers();
 builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
 {
     options.EnableDetailedErrors = true;
-}).AddAzureSignalR();
+});//.AddAzureSignalR();
 
 builder.Services.AddMemoryCache();
 
@@ -51,7 +53,28 @@ builder.Services.AddHttpClient("weatherapi", client =>
     };
 });
 
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddMicrosoftIdentityWebApi(builder.Configuration.GetSection("AzureAdB2C"));
 
+builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
+{
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            var accessToken = context.Request.Headers.Authorization.First()?.Replace("bearer ", string.Empty, StringComparison.OrdinalIgnoreCase);
+            var path = context.HttpContext.Request.Path;
+
+            // If the request is for our hub and contains a token, attach it
+            if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/compasshub"))
+            {
+                // Read the token out of the query string
+                context.Token = accessToken;
+            }
+            return Task.CompletedTask;
+        }
+    };
+});
 
 // Optional: Add CORS if you plan to test this with a web client later.
 // For MAUI mobile apps, CORS isn't strictly necessary, but good practice for mixed platforms.
@@ -72,6 +95,9 @@ app.UseCors();
 app.UseDefaultFiles();
 app.UseRouting();
 app.UseStaticFiles();
+app.UseHttpsRedirection();
+app.UseAuthentication();
+app.UseAuthorization();
 
 //// ====================================================================
 //// --- NEW: AUTO-MIGRATION EXECUTION ON STARTUP ---

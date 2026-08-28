@@ -1,4 +1,5 @@
-﻿using Microsoft.AspNetCore.SignalR;
+﻿using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.SignalR;
 using MongoDB.Driver;
 using SpeedyCompass.Backend.Models;
 using SpeedyCompass.Backend.Services.Alerts;
@@ -19,7 +20,7 @@ public class RiderTelemetry
     public double CurrentSpeedKmh { get; set; }
     public double TotalDistanceMeters { get; set; }
 }
-
+[Authorize]
 public class CompassHub : Hub
 {
     private readonly CompassStateManager _state;
