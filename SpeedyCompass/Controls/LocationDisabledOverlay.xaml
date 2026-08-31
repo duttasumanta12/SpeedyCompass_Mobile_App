@@ -5,18 +5,82 @@
              IsVisible="False"
              InputTransparent="False">
 
-    <Grid BackgroundColor="#F2000000">
+    <!-- Deep dark background to block out the app behind it -->
+    <Grid Padding="24">
+        <Grid.Background>
+            <SolidColorBrush Color="#E6121212" />
+        </Grid.Background>
+
         <!-- Black hole to swallow background clicks -->
         <Grid.GestureRecognizers>
             <TapGestureRecognizer />
         </Grid.GestureRecognizers>
 
-        <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="20" Padding="30">
-            <Label Text="📍" FontSize="80" HorizontalTextAlignment="Center"/>
-            <Label Text="Location Required" TextColor="White" FontSize="24" FontAttributes="Bold" HorizontalTextAlignment="Center"/>
-            <Label Text="SpeedyCompass requires your location to track your ride. Please enable GPS and location permissions to continue." TextColor="LightGray" FontSize="16" HorizontalTextAlignment="Center"/>
-            <Button Text="Open Settings" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="12" HeightRequest="50" FontAttributes="Bold" Clicked="OnOpenSettingsClicked" Margin="0,20,0,0"/>
-            <Button Text="I've Enabled It (Retry)" BackgroundColor="MediumSeaGreen" TextColor="White" CornerRadius="12" HeightRequest="50" FontAttributes="Bold" Clicked="OnRetryClicked"/>
-        </StackLayout>
+        <!-- Constrained width ensures perfect layout on tablets & landscape -->
+        <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="24" MaximumWidthRequest="400">
+
+            <!-- UPGRADE: Material Symbol with a red error glow -->
+            <Label Text="location_off" 
+                   FontFamily="MaterialSymbols" 
+                   FontSize="96" 
+                   TextColor="#E53935" 
+                   HorizontalOptions="Center">
+                <Label.Shadow>
+                    <Shadow Brush="#E53935" Offset="0,0" Radius="24" Opacity="0.5"/>
+                </Label.Shadow>
+            </Label>
+
+            <!-- Typography -->
+            <VerticalStackLayout Spacing="12">
+                <Label Text="LOCATION REQUIRED" 
+                       TextColor="White" 
+                       FontSize="22" 
+                       FontAttributes="Bold" 
+                       HorizontalTextAlignment="Center" 
+                       CharacterSpacing="1.5"/>
+
+                <Label Text="SpeedyCompass requires your location to track your ride. Please enable GPS and location permissions to continue." 
+                       TextColor="#B0BEC5" 
+                       FontSize="15" 
+                       HorizontalTextAlignment="Center" 
+                       LineHeight="1.3"/>
+            </VerticalStackLayout>
+
+            <!-- Action Buttons -->
+            <VerticalStackLayout Spacing="16" Margin="0,16,0,0">
+
+                <!-- Primary Action: Fix the issue -->
+                <Button Text="OPEN SETTINGS" 
+                        BackgroundColor="#1E88E5" 
+                        TextColor="White" 
+                        CornerRadius="28" 
+                        HeightRequest="56" 
+                        FontAttributes="Bold" 
+                        FontSize="15"
+                        CharacterSpacing="1"
+                        Clicked="OnOpenSettingsClicked">
+                    <Button.Shadow>
+                        <Shadow Brush="#1E88E5" Offset="0,4" Radius="8" Opacity="0.3"/>
+                    </Button.Shadow>
+                </Button>
+
+                <!-- Secondary Action: Confirm the fix -->
+                <Button Text="I'VE ENABLED IT (RETRY)" 
+                        BackgroundColor="#00E676" 
+                        TextColor="#1B5E20" 
+                        CornerRadius="28" 
+                        HeightRequest="56" 
+                        FontAttributes="Bold" 
+                        FontSize="15"
+                        CharacterSpacing="1"
+                        Clicked="OnRetryClicked">
+                    <Button.Shadow>
+                        <Shadow Brush="#00E676" Offset="0,4" Radius="8" Opacity="0.3"/>
+                    </Button.Shadow>
+                </Button>
+
+            </VerticalStackLayout>
+
+        </VerticalStackLayout>
     </Grid>
 </ContentView>

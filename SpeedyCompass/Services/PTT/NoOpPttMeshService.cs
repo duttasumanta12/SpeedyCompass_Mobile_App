@@ -12,5 +12,10 @@ public sealed class NoOpPttMeshService : IPttMeshService
 
     public void InitializeSession(string groupName, string myGoogleId) { }
 
+    public void StopSession()
+    {
+        //
+    }
+
     public Task SyncMeshNetworkAsync(List<Rider> currentRoster) => Task.CompletedTask;
 }

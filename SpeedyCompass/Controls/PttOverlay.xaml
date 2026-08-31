@@ -5,37 +5,100 @@
              IsVisible="False"
              InputTransparent="False">
 
-    <Grid BackgroundColor="#E6000000" Padding="20">
-        <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="15">
-            <Label Text="🎤" FontSize="80" HorizontalOptions="Center" />
-            <Label x:Name="PttStatusLabel" Text="Mic Open" TextColor="MediumSeaGreen" FontSize="28" FontAttributes="Bold" HorizontalOptions="Center" CharacterSpacing="1"/>
-            <Label x:Name="PttSpeakerLabel" Text="You can now speak to the group." TextColor="White" FontSize="16" HorizontalOptions="Center"/>
-            <Label x:Name="PttCountdownLabel" Text="Closing in 30s..." TextColor="LightCoral" FontSize="14" FontAttributes="Bold" HorizontalOptions="Center" IsVisible="False"/>
+    <!-- UPGRADE: Deep dark overlay to ensure high contrast for the glowing elements -->
+    <Grid Padding="24">
+        <Grid.Background>
+            <SolidColorBrush Color="#E6121212" />
+        </Grid.Background>
 
-            <Border BackgroundColor="#40000000" StrokeThickness="0" Padding="12" Margin="0,8,0,0">
+        <!-- UPGRADE: MaximumWidthRequest keeps the overlay centered and contained on tablets -->
+        <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="24" MaximumWidthRequest="400">
+
+            <!-- UPGRADE: Material Symbol with a neon glow effect to indicate "Live" status -->
+            <Label x:Name="MicIconLabel"
+                   Text="mic" 
+                   FontFamily="MaterialSymbols" 
+                   FontSize="100" 
+                   TextColor="#00E676" 
+                   HorizontalOptions="Center">
+                <Label.Shadow>
+                    <Shadow Brush="#00E676" Offset="0,0" Radius="24" Opacity="0.6"/>
+                </Label.Shadow>
+            </Label>
+
+            <!-- Status Typography -->
+            <VerticalStackLayout Spacing="4">
+                <Label x:Name="PttStatusLabel" 
+                       Text="MIC OPEN" 
+                       TextColor="#00E676" 
+                       FontSize="28" 
+                       FontAttributes="Bold" 
+                       HorizontalOptions="Center" 
+                       CharacterSpacing="2"/>
+
+                <Label x:Name="PttSpeakerLabel" 
+                       Text="You are live to the group." 
+                       TextColor="#E0E0E0" 
+                       FontSize="16" 
+                       HorizontalOptions="Center"/>
+
+                <Label x:Name="PttCountdownLabel" 
+                       Text="Closing in 30s..." 
+                       TextColor="#FF5252" 
+                       FontSize="15" 
+                       FontAttributes="Bold" 
+                       HorizontalOptions="Center" 
+                       IsVisible="False"/>
+            </VerticalStackLayout>
+
+            <!-- UPGRADE: Glassy card for the audio telemetry meters -->
+            <Border BackgroundColor="#1AFFFFFF" 
+                    StrokeThickness="1" 
+                    Stroke="#33FFFFFF" 
+                    Padding="20" 
+                    Margin="0,8,0,0">
                 <Border.StrokeShape>
-                    <RoundRectangle CornerRadius="12"/>
+                    <RoundRectangle CornerRadius="16"/>
                 </Border.StrokeShape>
 
-                <VerticalStackLayout Spacing="8">
-                    <Label x:Name="LocalLevelLabel" Text="Mic Level" TextColor="White" FontSize="13" />
-                    <ProgressBar x:Name="LocalLevelBar" Progress="0" ProgressColor="LimeGreen" BackgroundColor="#275B27" HeightRequest="8" />
+                <VerticalStackLayout Spacing="16">
+                    <!-- Local Level Meter -->
+                    <VerticalStackLayout Spacing="8">
+                        <HorizontalStackLayout Spacing="8">
+                            <Label Text="mic" FontFamily="MaterialSymbols" TextColor="#B0BEC5" FontSize="16" VerticalOptions="Center"/>
+                            <Label x:Name="LocalLevelLabel" Text="YOUR AUDIO" TextColor="#B0BEC5" FontSize="12" FontAttributes="Bold" CharacterSpacing="1" VerticalOptions="Center" />
+                        </HorizontalStackLayout>
+                        <ProgressBar x:Name="LocalLevelBar" Progress="0" ProgressColor="#00E676" BackgroundColor="#1A00E676" HeightRequest="8" />
+                    </VerticalStackLayout>
 
-                    <Label x:Name="RemoteLevelLabel" Text="Incoming Level" TextColor="White" FontSize="13" Margin="0,6,0,0" />
-                    <ProgressBar x:Name="RemoteLevelBar" Progress="0" ProgressColor="DodgerBlue" BackgroundColor="#1F3F66" HeightRequest="8" />
+                    <!-- Remote Level Meter -->
+                    <VerticalStackLayout Spacing="8">
+                        <HorizontalStackLayout Spacing="8">
+                            <Label Text="volume_up" FontFamily="MaterialSymbols" TextColor="#B0BEC5" FontSize="16" VerticalOptions="Center"/>
+                            <Label x:Name="RemoteLevelLabel" Text="INCOMING" TextColor="#B0BEC5" FontSize="12" FontAttributes="Bold" CharacterSpacing="1" VerticalOptions="Center" />
+                        </HorizontalStackLayout>
+                        <ProgressBar x:Name="RemoteLevelBar" Progress="0" ProgressColor="#2196F3" BackgroundColor="#1A2196F3" HeightRequest="8" />
+                    </VerticalStackLayout>
                 </VerticalStackLayout>
             </Border>
 
+            <!-- UPGRADE: Replaced small fixed dimensions with Fill and taller touch target -->
             <Button x:Name="ClosePttButton"
-                    Text="Close PTT"
+                    Text="END TRANSMISSION"
                     Clicked="OnCloseClicked"
                     BackgroundColor="#D32F2F"
                     TextColor="White"
                     FontAttributes="Bold"
-                    CornerRadius="12"
-                    HeightRequest="42"
-                    HorizontalOptions="Center"
-                    WidthRequest="180" />
-        </StackLayout>
+                    FontSize="16"
+                    CornerRadius="28"
+                    HeightRequest="56"
+                    HorizontalOptions="Fill"
+                    Margin="0,16,0,0">
+                <Button.Shadow>
+                    <Shadow Brush="Red" Offset="0,4" Radius="8" Opacity="0.3"/>
+                </Button.Shadow>
+            </Button>
+
+        </VerticalStackLayout>
     </Grid>
 </ContentView>

@@ -65,7 +65,7 @@ public sealed class PttCoordinator : IDisposable
                 _pttCts = new CancellationTokenSource();
                 _ = RunTimeoutAsync(_pttCts.Token);
                 Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(200));
-                _voice.Speak("You can now speak.");
+                //_voice.Speak("You can now speak.");
             }
             else
             {

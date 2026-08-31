@@ -5,6 +5,12 @@ namespace SpeedyCompass.Services.Coordinators;
 
 public sealed class SafetyCoordinator : IDisposable
 {
+    // --- CRASH CONSTANTS ---
+    // 1G is standard gravity. Handlebar potholes often hit 4-5G. 
+    // 6.0G+ usually indicates a severe vehicular impact or dropping the bike.
+    private const double CrashThresholdGForce = 6.0;
+    private const int CrashCooldownMinutes = 5;
+
     private readonly SignalRService _signalR;
     private readonly IVoiceCopilotEngine _voice;
     private readonly Func<string> _groupName;
@@ -16,6 +22,9 @@ public sealed class SafetyCoordinator : IDisposable
 
     private CancellationTokenSource? _crashCts;
     private DateTime _lastCrashEvent = DateTime.MinValue;
+
+    // NEW: Thread safety lock to prevent multi-firing during a chaotic tumble
+    private readonly object _crashLock = new();
 
     public SafetyCoordinator(
         SignalRService signalR,
@@ -44,7 +53,9 @@ public sealed class SafetyCoordinator : IDisposable
             if (enable && Accelerometer.Default.IsSupported && !Accelerometer.Default.IsMonitoring)
             {
                 Accelerometer.Default.ReadingChanged += OnAccelerometerReadingChanged;
-                Accelerometer.Default.Start(SensorSpeed.UI);
+
+                // THE FIX: Upgrade from UI (~60ms) to Game (~20ms) to catch microsecond impacts
+                Accelerometer.Default.Start(SensorSpeed.Game);
             }
             else if (!enable && Accelerometer.Default.IsMonitoring)
             {
@@ -99,15 +110,25 @@ public sealed class SafetyCoordinator : IDisposable
 
     private void OnAccelerometerReadingChanged(object? sender, AccelerometerChangedEventArgs e)
     {
+        // THE FIX: Math.Pow is too heavy for a 50Hz hardware loop. Direct multiplication is vastly faster.
         double gForce = Math.Sqrt(
-            Math.Pow(e.Reading.Acceleration.X, 2) +
-            Math.Pow(e.Reading.Acceleration.Y, 2) +
-            Math.Pow(e.Reading.Acceleration.Z, 2));
+            (e.Reading.Acceleration.X * e.Reading.Acceleration.X) +
+            (e.Reading.Acceleration.Y * e.Reading.Acceleration.Y) +
+            (e.Reading.Acceleration.Z * e.Reading.Acceleration.Z));
 
-        if (gForce > 4.5 && (DateTime.Now - _lastCrashEvent).TotalMinutes > 5)
+        if (gForce > CrashThresholdGForce)
         {
-            _lastCrashEvent = DateTime.Now;
-            TriggerCrashProtocol();
+            // THE FIX: Lock the thread so a multi-tumble crash doesn't trigger 5 alarms at once
+            lock (_crashLock)
+            {
+                if ((DateTime.Now - _lastCrashEvent).TotalMinutes > CrashCooldownMinutes)
+                {
+                    _lastCrashEvent = DateTime.Now;
+
+                    // Push execution to the background to instantly free up the OS hardware sensor thread
+                    Task.Run(() => TriggerCrashProtocol()).SafeFireAndForget();
+                }
+            }
         }
     }
 

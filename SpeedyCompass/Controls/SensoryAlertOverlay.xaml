@@ -6,19 +6,93 @@
              InputTransparent="True"
              Opacity="0">
 
-    <Grid x:Name="AlertBackgroundGrid" BackgroundColor="Red" Padding="20">
-        <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10">
-            <Label x:Name="AlertIconLabel" Text="🛑" FontSize="80" HorizontalTextAlignment="Center" />
-            <Label x:Name="AlertTitleLabel" Text="EMERGENCY STOP!" TextColor="White" FontSize="36" FontAttributes="Bold" HorizontalTextAlignment="Center" />
-            <Label x:Name="AlertSenderLabel" Text="Triggered by: Unknown" TextColor="White" FontSize="20" HorizontalTextAlignment="Center" />
+    <!-- UPGRADE: Replaced flat red with a rich, alarming gradient -->
+    <Grid x:Name="AlertBackgroundGrid" Padding="24">
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                <GradientStop Color="#E53935" Offset="0.0" />
+                <GradientStop Color="#B71C1C" Offset="1.0" />
+            </LinearGradientBrush>
+        </Grid.Background>
 
-            <!-- NEW: Hidden Crash Controls -->
-            <VerticalStackLayout x:Name="CrashControlsContainer" IsVisible="False" Spacing="15" Margin="0,30,0,0">
-                <Label x:Name="CrashCountdownLabel" Text="10" FontSize="60" FontAttributes="Bold" TextColor="White" HorizontalOptions="Center" />
-                <Label Text="Sending emergency alert to group automatically..." FontSize="16" TextColor="White" HorizontalOptions="Center" HorizontalTextAlignment="Center" />
+        <!-- UPGRADE: MaximumWidthRequest prevents stretching on tablets/landscape -->
+        <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="16" MaximumWidthRequest="400">
 
-                <Button Text="I AM OKAY (Cancel)" BackgroundColor="White" TextColor="#D32F2F" FontAttributes="Bold" FontSize="18" HeightRequest="60" CornerRadius="30" Margin="0,15,0,5" Clicked="OnCrashCancelledClicked"/>
-                <Button Text="SEND EMERGENCY NOW" BackgroundColor="Black" TextColor="White" FontAttributes="Bold" FontSize="18" HeightRequest="60" CornerRadius="30" Clicked="OnCrashEmergencyClicked"/>
+            <!-- UPGRADE: Replaced emoji with Material Symbol, added drop shadow -->
+            <Label x:Name="AlertIconLabel" 
+                   Text="emergency" 
+                   FontFamily="MaterialSymbols"
+                   TextColor="White"
+                   FontSize="96" 
+                   HorizontalTextAlignment="Center">
+                <Label.Shadow>
+                    <Shadow Brush="Black" Offset="0,4" Radius="8" Opacity="0.3"/>
+                </Label.Shadow>
+            </Label>
+
+            <!-- UPGRADE: Added CharacterSpacing for ALL CAPS legibility -->
+            <Label x:Name="AlertTitleLabel" 
+                   Text="EMERGENCY STOP!" 
+                   TextColor="White" 
+                   FontSize="32" 
+                   FontAttributes="Bold" 
+                   CharacterSpacing="2"
+                   HorizontalTextAlignment="Center" />
+
+            <!-- UPGRADE: Softened text color to establish visual hierarchy -->
+            <Label x:Name="AlertSenderLabel" 
+                   Text="Triggered by: Unknown" 
+                   TextColor="#FFCDD2" 
+                   FontSize="18" 
+                   HorizontalTextAlignment="Center" />
+
+            <VerticalStackLayout x:Name="CrashControlsContainer" 
+                                 IsVisible="False" 
+                                 Spacing="32" 
+                                 Margin="0,32,0,0">
+
+                <!-- Countdown Section -->
+                <VerticalStackLayout Spacing="8">
+                    <Label x:Name="CrashCountdownLabel" 
+                           Text="10" 
+                           FontSize="80" 
+                           FontAttributes="Bold" 
+                           TextColor="White" 
+                           HorizontalOptions="Center" />
+
+                    <Label Text="Sending emergency alert to group automatically..." 
+                           FontSize="15" 
+                           TextColor="#FFCDD2" 
+                           HorizontalOptions="Center" 
+                           HorizontalTextAlignment="Center" 
+                           LineHeight="1.2"/>
+                </VerticalStackLayout>
+
+                <!-- Action Buttons Section -->
+                <VerticalStackLayout Spacing="16">
+                    <!-- UPGRADE: Enlarged touch target, added shadow for primary action -->
+                    <Button Text="I AM OKAY (CANCEL)" 
+                            BackgroundColor="White" 
+                            TextColor="#B71C1C" 
+                            FontAttributes="Bold" 
+                            FontSize="16" 
+                            HeightRequest="64" 
+                            CornerRadius="32" 
+                            Clicked="OnCrashCancelledClicked">
+                        <Button.Shadow>
+                            <Shadow Brush="Black" Offset="0,4" Radius="8" Opacity="0.25"/>
+                        </Button.Shadow>
+                    </Button>
+
+                    <Button Text="SEND EMERGENCY NOW" 
+                            BackgroundColor="#212121" 
+                            TextColor="White" 
+                            FontAttributes="Bold" 
+                            FontSize="16" 
+                            HeightRequest="64" 
+                            CornerRadius="32" 
+                            Clicked="OnCrashEmergencyClicked"/>
+                </VerticalStackLayout>
             </VerticalStackLayout>
         </VerticalStackLayout>
     </Grid>

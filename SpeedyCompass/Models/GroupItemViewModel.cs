@@ -1,15 +1,16 @@
-﻿namespace SpeedyCompass.Models;
+﻿namespace SpeedyCompass;
 
 public class GroupItemViewModel
 {
     public string GroupName { get; set; }
     public int MemberCount { get; set; }
+    public int MaxGroupSize { get; set; }
     public bool IsMyAdmin { get; set; }
-    public string MemberCountDisplay => $"{MemberCount} / 5 Members";
+    public bool IsMember { get; set; }
 
-    // Admin can always attempt to re-enter their own group
-    public bool CanJoin => IsMyAdmin || MemberCount < 5;
+    public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Riders";
+    public bool CanJoin => IsMyAdmin || IsMember || MemberCount < MaxGroupSize;
 
-    // Dynamically change the button text
-    public string JoinButtonText => IsMyAdmin ? "Enter" : "Join";
+    public string JoinButtonText => IsMyAdmin ? "Resume" : (IsMember ? "Enter" : "Join");
+    public Color JoinButtonColor => IsMyAdmin || IsMember ? Colors.DodgerBlue : Colors.MediumSeaGreen;
 }

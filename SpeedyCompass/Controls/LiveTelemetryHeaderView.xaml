@@ -4,73 +4,147 @@
              xmlns:controls="clr-namespace:SpeedyCompass.Controls"
              x:Class="SpeedyCompass.Controls.LiveTelemetryHeaderView">
 
-    <Grid Padding="20,15,20,15" BackgroundColor="Transparent">
-        <!-- We pass these gestures back to the LobbyPage so the drawer still swipes perfectly! -->
+    <Grid Padding="16,12" BackgroundColor="Transparent">
+        <!-- Drawer swipe & tap gestures -->
         <Grid.GestureRecognizers>
             <TapGestureRecognizer Tapped="OnHeaderTapped" />
             <PanGestureRecognizer PanUpdated="OnHeaderPanUpdated" />
         </Grid.GestureRecognizers>
 
-        <Grid ColumnDefinitions="1.2*, 1*, Auto" ColumnSpacing="10">
+        <!-- Main 3-Column Layout -->
+        <Grid ColumnDefinitions="1.2*, Auto, 1.1*" ColumnSpacing="12" VerticalOptions="Center">
 
-            <!-- Left: Speed, Location & Destination -->
-            <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
+            <!-- ========================================= -->
+            <!-- LEFT: Speed, Distance & Route Endpoints   -->
+            <!-- ========================================= -->
+            <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="4">
 
-                <!-- THE FIX: Highly visible Speedometer -->
-                <Label x:Name="MySpeedLabel" Text="0 km/h" FontSize="22" FontAttributes="Bold" TextColor="MediumSeaGreen" Margin="0,0,0,4"/>
+                <!-- Speed Display -->
+                <HorizontalStackLayout Spacing="6" VerticalOptions="Center">
+                    <Label x:Name="MySpeedLabel" 
+                           Text="0 km/h" 
+                           FontSize="24" 
+                           FontAttributes="Bold" 
+                           TextColor="{AppThemeBinding Light=#2E7D32, Dark=#00E676}" 
+                           VerticalOptions="Center"/>
 
-                <StackLayout Orientation="Horizontal" Spacing="4">
-                    <Label Text="Distance" FontSize="12" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" VerticalOptions="Center"/>
-                    <Label x:Name="MyDistanceLabel" Text="-- km" FontSize="12" FontAttributes="Bold" TextColor="DodgerBlue" VerticalOptions="Center"/>
-                </StackLayout>
+                    <Label x:Name="MyDistanceLabel" 
+                           Text="-- km" 
+                           FontSize="12" 
+                           FontAttributes="Bold" 
+                           TextColor="#1E88E5" 
+                           VerticalOptions="Center"
+                           Margin="2,0,0,0"/>
+                </HorizontalStackLayout>
 
-                <Grid ColumnDefinitions="Auto, *" RowDefinitions="Auto, *" RowSpacing="2" ColumnSpacing="5">
-                    <!-- Origin Coordinates -->
-                    <Label Grid.Row="0" Grid.Column="0" Text="🏁" FontSize="10" TextColor="Gray" VerticalOptions="Start" Margin="0,1,0,0"/>
-                    <Label Grid.Row="0" Grid.Column="1" x:Name="TelemetryOriginLabel" Text="Acquiring GPS..." FontSize="11" TextColor="Gray" LineBreakMode="TailTruncation" MaxLines="1" VerticalOptions="Start"/>
+                <!-- Route Waypoints -->
+                <VerticalStackLayout Spacing="3" Margin="0,2,0,0">
+
+                    <!-- Origin -->
+                    <Grid ColumnDefinitions="Auto, *" ColumnSpacing="6" VerticalOptions="Center">
+                        <Label Grid.Column="0" 
+                               Text="flag" 
+                               FontFamily="MaterialSymbols" 
+                               FontSize="14" 
+                               TextColor="#9E9E9E" 
+                               VerticalOptions="Center"/>
+                        <Label Grid.Column="1" 
+                               x:Name="TelemetryOriginLabel" 
+                               Text="Acquiring GPS..." 
+                               FontSize="11" 
+                               TextColor="#9E9E9E" 
+                               LineBreakMode="TailTruncation" 
+                               MaxLines="1" 
+                               VerticalOptions="Center"/>
+                    </Grid>
 
                     <!-- Destination -->
-                    <Label Grid.Row="1" Grid.Column="0" Text="📍" FontSize="10" TextColor="DodgerBlue" VerticalOptions="Start" Margin="0,1,0,0"/>
-                    <Label Grid.Row="1" Grid.Column="1" x:Name="TelemetryDestLabel" Text="Destination" FontSize="11" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" LineBreakMode="WordWrap" MaxLines="3" VerticalOptions="Start"/>
-                </Grid>
-            </VerticalStackLayout>
-
-            <!-- Middle: Progress Bar Layout -->
-            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="4">
-                <Label Text="Route" FontSize="11" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="Center"/>
-
-                <Grid HorizontalOptions="Center" WidthRequest="60" HeightRequest="60">
-                    <controls:CircularProgressBar x:Name="RouteProgressBar" WidthRequest="60" HeightRequest="60" StrokeThickness="5" ProgressColor="MediumSeaGreen" TrackColor="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" />
-                    <Label x:Name="MyProgressPercentLabel" Text="0%" FontSize="14" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" HorizontalOptions="Center" VerticalOptions="Center"/>
-                </Grid>
-
-                <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="2">
-                    <Label x:Name="MyTotalTraveledLabel" Text="0.0" FontSize="10" FontAttributes="Bold" TextColor="Gray"/>
-                    <Label Text="/" FontSize="10" TextColor="Gray" VerticalOptions="Center"/>
-                    <Label x:Name="MyTotalRouteLabel" Text="-- km" FontSize="10" TextColor="Gray" VerticalOptions="Center"/>
-                </StackLayout>
-            </VerticalStackLayout>
-
-            <!-- Right: Arrival Time, Top Speed, & Elevation -->
-            <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="End" Spacing="6">
-
-                <!-- Arrival Time -->
-                <VerticalStackLayout Spacing="0">
-                    <Label Text="Arrival time" FontSize="10" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
-                    <Label x:Name="MyEtaLabel" Text="--:--" FontSize="14" FontAttributes="Bold" TextColor="DarkOrange" HorizontalOptions="End"/>
+                    <Grid ColumnDefinitions="Auto, *" ColumnSpacing="6" VerticalOptions="Center">
+                        <Label Grid.Column="0" 
+                               Text="location_on" 
+                               FontFamily="MaterialSymbols" 
+                               FontSize="14" 
+                               TextColor="#E53935" 
+                               VerticalOptions="Center"/>
+                        <Label Grid.Column="1" 
+                               x:Name="TelemetryDestLabel" 
+                               Text="Destination" 
+                               FontSize="12" 
+                               FontAttributes="Bold" 
+                               TextColor="{AppThemeBinding Light=#212121, Dark=#FFFFFF}" 
+                               LineBreakMode="TailTruncation" 
+                               MaxLines="1" 
+                               VerticalOptions="Center"/>
+                    </Grid>
                 </VerticalStackLayout>
+            </VerticalStackLayout>
+
+            <!-- ========================================= -->
+            <!-- MIDDLE: Circular Route Progress Gauge    -->
+            <!-- ========================================= -->
+            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" HorizontalOptions="Center" Spacing="4">
+                <Label Text="ROUTE" 
+                       FontSize="10" 
+                       TextColor="#9E9E9E" 
+                       FontAttributes="Bold" 
+                       CharacterSpacing="1"
+                       HorizontalOptions="Center"/>
+
+                <Grid HorizontalOptions="Center" WidthRequest="64" HeightRequest="64">
+                    <controls:CircularProgressBar x:Name="RouteProgressBar" 
+                                                  WidthRequest="64" 
+                                                  HeightRequest="64" 
+                                                  StrokeThickness="6" 
+                                                  ProgressColor="{AppThemeBinding Light=#2E7D32, Dark=#00E676}" 
+                                                  TrackColor="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}" />
+
+                    <Label x:Name="MyProgressPercentLabel" 
+                           Text="0%" 
+                           FontSize="14" 
+                           FontAttributes="Bold" 
+                           TextColor="{AppThemeBinding Light=#212121, Dark=#FFFFFF}" 
+                           HorizontalOptions="Center" 
+                           VerticalOptions="Center"/>
+                </Grid>
+
+                <HorizontalStackLayout HorizontalOptions="Center" Spacing="2">
+                    <Label x:Name="MyTotalTraveledLabel" Text="0.0" FontSize="10" FontAttributes="Bold" TextColor="#757575"/>
+                    <Label Text="/" FontSize="10" TextColor="#757575" VerticalOptions="Center"/>
+                    <Label x:Name="MyTotalRouteLabel" Text="-- km" FontSize="10" TextColor="#757575" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+            </VerticalStackLayout>
+
+            <!-- ========================================= -->
+            <!-- RIGHT: Telemetry Metrics (ETA, Top, Elev) -->
+            <!-- ========================================= -->
+            <VerticalStackLayout Grid.Column="2" VerticalOptions="Center" HorizontalOptions="End" Spacing="5">
+
+                <!-- ETA -->
+                <HorizontalStackLayout Spacing="6" HorizontalOptions="End" VerticalOptions="Center">
+                    <Label Text="schedule" FontFamily="MaterialSymbols" FontSize="14" TextColor="#FB8C00" VerticalOptions="Center"/>
+                    <VerticalStackLayout Spacing="0" VerticalOptions="Center">
+                        <Label Text="ETA" FontSize="9" TextColor="#9E9E9E" FontAttributes="Bold" CharacterSpacing="0.5" HorizontalOptions="End"/>
+                        <Label x:Name="MyEtaLabel" Text="--:--" FontSize="13" FontAttributes="Bold" TextColor="#FB8C00" HorizontalOptions="End"/>
+                    </VerticalStackLayout>
+                </HorizontalStackLayout>
 
                 <!-- Top Speed -->
-                <VerticalStackLayout Spacing="0">
-                    <Label Text="Top Speed" FontSize="10" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
-                    <Label x:Name="MyTopSpeedLabel" Text="0 km/h" FontSize="12" FontAttributes="Bold" TextColor="#D32F2F" HorizontalOptions="End"/>
-                </VerticalStackLayout>
+                <HorizontalStackLayout Spacing="6" HorizontalOptions="End" VerticalOptions="Center">
+                    <Label Text="speed" FontFamily="MaterialSymbols" FontSize="14" TextColor="#E53935" VerticalOptions="Center"/>
+                    <VerticalStackLayout Spacing="0" VerticalOptions="Center">
+                        <Label Text="TOP SPEED" FontSize="9" TextColor="#9E9E9E" FontAttributes="Bold" CharacterSpacing="0.5" HorizontalOptions="End"/>
+                        <Label x:Name="MyTopSpeedLabel" Text="0 km/h" FontSize="12" FontAttributes="Bold" TextColor="#E53935" HorizontalOptions="End"/>
+                    </VerticalStackLayout>
+                </HorizontalStackLayout>
 
-                <!-- NEW: Elevation -->
-                <VerticalStackLayout Spacing="0">
-                    <Label Text="Elevation" FontSize="10" TextColor="Gray" FontAttributes="Bold" HorizontalOptions="End"/>
-                    <Label x:Name="MyElevationLabel" Text="-- m" FontSize="12" FontAttributes="Bold" TextColor="MediumPurple" HorizontalOptions="End"/>
-                </VerticalStackLayout>
+                <!-- Elevation -->
+                <HorizontalStackLayout Spacing="6" HorizontalOptions="End" VerticalOptions="Center">
+                    <Label Text="terrain" FontFamily="MaterialSymbols" FontSize="14" TextColor="#8E24AA" VerticalOptions="Center"/>
+                    <VerticalStackLayout Spacing="0" VerticalOptions="Center">
+                        <Label Text="ELEVATION" FontSize="9" TextColor="#9E9E9E" FontAttributes="Bold" CharacterSpacing="0.5" HorizontalOptions="End"/>
+                        <Label x:Name="MyElevationLabel" Text="-- m" FontSize="12" FontAttributes="Bold" TextColor="#8E24AA" HorizontalOptions="End"/>
+                    </VerticalStackLayout>
+                </HorizontalStackLayout>
 
             </VerticalStackLayout>
         </Grid>

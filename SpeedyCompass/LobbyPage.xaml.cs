@@ -18,6 +18,7 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
 #if ANDROID
 using static Android.Provider.Contacts.Intents;
 using BatteryState = Microsoft.Maui.Devices.BatteryState;
@@ -111,6 +112,7 @@ public partial class LobbyPage : ContentPage
     private Action<string> _announceWeather;
     private Action<double> _announceElevation;
     private readonly Queue<int> _turnOverlayElementsPerStep = new();
+    private readonly ILogger<LobbyPage> _logger;
 
     private static readonly (Color PinColor, Color RouteColor)[] RiderColors = new[]
 {
@@ -181,6 +183,7 @@ public partial class LobbyPage : ContentPage
         DeviceDisplay.Current.KeepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
 
         _signalRService = signalRService;
+        _logger = IPlatformApplication.Current?.Services.GetService<ILogger<LobbyPage>>();
         _voiceEngine = IPlatformApplication.Current?.Services.GetService<IVoiceCopilotEngine>();
         _rideCache = IPlatformApplication.Current?.Services.GetService<RideStateService>();
         _routingEngine = IPlatformApplication.Current?.Services.GetService<IRoutingEngine>();
@@ -276,7 +279,6 @@ public partial class LobbyPage : ContentPage
         Preferences.Default.Set("Map_NavigationMode", (int)_currentNavMode); // keep persisted state compliant
 
         DrawerMapSettingsTab.ApplyTierPolicy(_tierService.IsProTierEnabled);
-        DrawerMapSettingsTab.NavigationModeChanged += OnNavigationModeChanged;
 
         SensoryAlertOverlay.CrashCancelled += OnCrashCancelledClicked;
         SensoryAlertOverlay.CrashEmergencyConfirmed += OnCrashEmergencyClicked;
@@ -287,6 +289,9 @@ public partial class LobbyPage : ContentPage
     protected override async void OnAppearing()
     {
         base.OnAppearing();
+
+        string flowId = CorrelationContext.Current ?? CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] LobbyPage OnAppearing triggered for Group: {GroupName}", flowId, GroupNameLabel.Text);
 
         if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested)
         {
@@ -299,6 +304,7 @@ public partial class LobbyPage : ContentPage
         try
         {
             GlobalLoadingOverlay.Show("Syncing Convoy State...");
+            _logger?.LogInformation("[{FlowId}] Fetching fresh group details from backend.", flowId);
 
             // 1. THE FIX: Force a fresh, synchronous fetch of the Group Details from the server RIGHT NOW.
             // This eliminates the stale constructor `groupDetails` race condition!
@@ -358,12 +364,14 @@ public partial class LobbyPage : ContentPage
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Error", $"Could not load lobby: {ex.Message}", "OK");
+            _logger?.LogError(ex, "[{FlowId}] Fatal error loading lobby.", flowId);
+            await DisplayAlertAsync("Error", $"Could not load lobby: {ex.Message}", "OK");
             await ClosePageAsync();
         }
         finally
         {
             GlobalLoadingOverlay.Hide();
+            _logger?.LogInformation("[{FlowId}] LobbyPage OnAppearing complete.", flowId);
         }
     }
     private void OnNavigationModeChanged(object sender, MapNavigationMode mode)
@@ -456,7 +464,10 @@ public partial class LobbyPage : ContentPage
             if (_pttMesh != null)
             {
                 _pttMesh.AudioLevelsUpdated -= OnPttAudioLevelsUpdated;
+                _pttMesh.StopSession();
             }
+            _signalRService.PttDenied -= OnPttDenied;
+            _signalRService.PttReleased -= OnPttReleased;
         }
 
         if (_locationTracker != null)
@@ -484,53 +495,50 @@ public partial class LobbyPage : ContentPage
         {
             //_ = _signalRService.LeaveLobby();
         }
-        await _signalRService.StopAsync();
+        Task.Run(async () => await _signalRService.StopAsync()).SafeFireAndForget();
         BindingContext = null;
     }
     private async void OnNativePoiClicked(object sender, PoiClickedEventArgs e)
     {
-        // Don't let standard riders or active navigating admins mess with the destination
         if (!_amIAdmin || groupDetails?.CurrentState == GroupState.Navigating) return;
 
-        LiveMap.MapElements.Clear();
-        LiveMap.Pins.Clear();
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Admin tapped POI: {PoiName}", flowId, e.Name);
 
-        // 1. Set the pending destination to exactly where they tapped
-        _pendingDestination = e.Location;
-
-        string destName = e.Name;
-
-        // 2. Reverse Geocode to get a readable name for the Search Bar
         try
         {
-            var placemarks = await Geocoding.Default.GetPlacemarksAsync(e.Location.Latitude, e.Location.Longitude);
-            var placemark = placemarks?.FirstOrDefault();
-            if (placemark != null)
+            LiveMap.MapElements.Clear();
+            LiveMap.Pins.Clear();
+
+            _pendingDestination = e.Location;
+            string destName = e.Name;
+
+            try
             {
-                destName = $"{placemark.FeatureName} {placemark.Thoroughfare}, {placemark.Locality}".Trim(' ', ',');
+                var placemarks = await Geocoding.Default.GetPlacemarksAsync(e.Location.Latitude, e.Location.Longitude);
+                var placemark = placemarks?.FirstOrDefault();
+                if (placemark != null)
+                {
+                    destName = $"{placemark.FeatureName} {placemark.Thoroughfare}, {placemark.Locality}".Trim(' ', ',');
+                }
             }
-            else
+            catch (Exception geoEx) { _logger?.LogWarning(geoEx, "[{FlowId}] POI reverse geocoding failed.", flowId); }
+
+            DestinationSearchControl.InjectExternalSelection(destName, e.Location);
+            UpdateDestinationPin(_pendingDestination, destName);
+
+            var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+            if (currentLoc != null)
             {
-                destName = $"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}";
+                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _pendingDestination]));
             }
+
+            Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(50));
         }
-        catch { destName = $"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}"; }
-
-        DestinationSearchControl.InjectExternalSelection(destName, e.Location);
-
-        // 3. Update the visual pin
-        UpdateDestinationPin(_pendingDestination, destName);
-
-        // THE FIX: Do NOT call CalculateAndDrawRoute here!
-        // Just frame the camera so both the user and the pin are on screen.
-        var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
-        if (currentLoc != null)
+        catch (Exception ex)
         {
-            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds([currentLoc, _pendingDestination]));
+            await HandleExceptionAsync(ex, "POI Click Processing", flowId);
         }
-
-        // Optional UX Polish: Vibrate so they know they tapped a valid location
-        Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(50));
     }
 
     // --- SETTINGS SYNC ---
@@ -873,6 +881,9 @@ public partial class LobbyPage : ContentPage
     {
         if (_rideCache.CurrentRoutePoints == null || _rideCache.OtherRiderLocations.Count == 0 || _rideCache.ActiveDestination == null) return;
 
+        string flowId = CorrelationContext.Current ?? CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Initiating Meetup Point calculation. Active riders: {Count}", flowId, _rideCache.OtherRiderLocations.Count);
+
         MainThread.BeginInvokeOnMainThread(() => GlobalLoadingOverlay.Show("Calculating Convergence..."));
         _voiceEngine.Speak("Calculating a safe meetup point for the group. Please wait.");
 
@@ -881,28 +892,29 @@ public partial class LobbyPage : ContentPage
             Location meetupPoint;
             if (_tierService.UseAlgorithmicMeetups)
             {
-                meetupPoint = await _routingEngine.CalculateDynamicMeetupPointAsync(); // Expensive Pro Call
+                _logger?.LogInformation("[{FlowId}] Calling Pro Dynamic Routing Engine...", flowId);
+                meetupPoint = await _routingEngine.CalculateDynamicMeetupPointAsync();
             }
             else
             {
-                // Free Tier Math
+                _logger?.LogInformation("[{FlowId}] Calculating Free Tier Center-of-Mass...", flowId);
                 meetupPoint = _routingEngine.CalculateCenterOfMassMeetup(_rideCache.OtherRiderLocations.Values.ToList());
             }
 
-            // If the Engine returns null, everyone is safe. Clear the pin!
             if (meetupPoint == null)
             {
+                _logger?.LogInformation("[{FlowId}] Engine returned null (Riders are safe). Clearing meetup pin.", flowId);
                 await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, 0, 0);
             }
             else
             {
+                _logger?.LogInformation("[{FlowId}] Meetup point calculated at {Lat}, {Lng}. Broadcasting.", flowId, meetupPoint.Latitude, meetupPoint.Longitude);
                 await _signalRService.SetGroupMeetupPoint(GroupNameLabel.Text, meetupPoint.Latitude, meetupPoint.Longitude);
             }
         }
         catch (Exception ex)
         {
-            System.Diagnostics.Debug.WriteLine($"Meetup Error: {ex.Message}");
-            await DisplayAlert("Convergence Error", "Could not calculate a safe merge point.", "OK");
+            await HandleExceptionAsync(ex, "Generate Meetup Point", flowId);
         }
         finally
         {
@@ -1480,49 +1492,70 @@ public partial class LobbyPage : ContentPage
     }
 
     private async void OnResetDestinationClicked(object sender, EventArgs e)
-    {   
-        // 1. THE FIX: Kill all background loops INSTANTLY so they 
-        // don't run late and overwrite our UI cleanup!
-        _rideCts?.Cancel();
-        _simulatorService?.StopSimulation();
+    {
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Admin resetting destination.", flowId);
 
-        if (groupDetails != null)
+        try
         {
-            DestinationSearchControl.Reset();
+            _rideCts?.Cancel();
+            _simulatorService?.StopSimulation();
 
-            if (_activeRouteLine != null)
+            if (groupDetails != null)
             {
-                LiveMap.MapElements.Remove(_activeRouteLine);
-                _activeRouteLine = null;
-                _activeRouteSteps.Clear();
+                DestinationSearchControl.Reset();
+
+                if (_activeRouteLine != null)
+                {
+                    LiveMap.MapElements.Remove(_activeRouteLine);
+                    _activeRouteLine = null;
+                    _activeRouteSteps.Clear();
+                }
+
+                var oldPins = LiveMap.Pins.Where(p => p.Type == PinType.Place).ToList();
+                foreach (var p in oldPins) LiveMap.Pins.Remove(p);
+
+                _rideCache.HardResetAll();
+                _riderViewModels.Clear();
+                var otherRiderPins = MapPins.ToList().Where(x => x.Username != "You");
+                foreach (var p in otherRiderPins) MapPins.Remove(p);
             }
 
-            var oldPins = LiveMap.Pins.Where(p => p.Type == PinType.Place).ToList();
-            foreach (var p in oldPins) LiveMap.Pins.Remove(p);
+            OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
 
-            _rideCache.HardResetAll();
-            _riderViewModels.Clear();
-            var otherRiderPins = MapPins.ToList().Where(x => x.Username != "You");
-            foreach (var p in otherRiderPins) MapPins.Remove(p);
+            await ChangeGroupState(GroupState.NotNavigating, _myName);
+            await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
+
+            _logger?.LogInformation("[{FlowId}] Destination reset successfully.", flowId);
         }
-
-        // 2. THE FIX: Snap the drawer back to the standard Convoy Roster view
-        OnDrawerTabClicked(TabStatsBtn, EventArgs.Empty);
-
-        await ChangeGroupState(GroupState.NotNavigating, _myName);
-        await _signalRService.CancelGroupNavigation(GroupNameLabel.Text);
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Reset Destination", flowId);
+        }
     }
 
     // --- REMAINING UTILITIES ---
     private async void OnStartJourneyClicked(object sender, EventArgs e)
     {
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Start Journey clicked.", flowId);
         GlobalLoadingOverlay.Show("Starting Navigation...");
+
         try
         {
             StartJourneyButton.IsEnabled = false;
             await _signalRService.StartGroupNavigation(GroupNameLabel.Text, _rideCache.ActiveDestination.Latitude, _rideCache.ActiveDestination.Longitude, groupDetails.DestName);
+            _logger?.LogInformation("[{FlowId}] Start Navigation command sent successfully.", flowId);
         }
-        finally { GlobalLoadingOverlay.Hide(); }
+        catch (Exception ex)
+        {
+            StartJourneyButton.IsEnabled = true;
+            await HandleExceptionAsync(ex, "Start Journey", flowId);
+        }
+        finally
+        {
+            GlobalLoadingOverlay.Hide();
+        }
     }
 
     private async void OnCopyPinClicked(object sender, EventArgs e)
@@ -1699,30 +1732,43 @@ public partial class LobbyPage : ContentPage
     {
         if (!_amIAdmin || groupDetails?.CurrentState == GroupState.Navigating) return;
 
-        LiveMap.MapElements.Clear();
-        LiveMap.Pins.Clear();
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Admin tapped map at {Lat}, {Lng}", flowId, e.Location.Latitude, e.Location.Longitude);
 
-        _pendingDestination = e.Location;
         try
         {
-            var placemarks = await Geocoding.Default.GetPlacemarksAsync(e.Location.Latitude, e.Location.Longitude);
-            var placemark = placemarks?.FirstOrDefault();
-            if (placemark != null)
+            LiveMap.MapElements.Clear();
+            LiveMap.Pins.Clear();
+
+            _pendingDestination = e.Location;
+            string destName = $"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}";
+
+            try
             {
-                DestinationSearchControl.InjectExternalSelection($"{placemark.FeatureName} {placemark.Thoroughfare}, {placemark.Locality}".Trim(' ', ','), e.Location);
+                var placemarks = await Geocoding.Default.GetPlacemarksAsync(e.Location.Latitude, e.Location.Longitude);
+                var placemark = placemarks?.FirstOrDefault();
+                if (placemark != null)
+                {
+                    destName = $"{placemark.FeatureName} {placemark.Thoroughfare}, {placemark.Locality}".Trim(' ', ',');
+                }
             }
-            else
+            catch (Exception geoEx)
             {
-                DestinationSearchControl.InjectExternalSelection($"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}", e.Location);
+                _logger?.LogWarning(geoEx, "[{FlowId}] Reverse geocoding failed for map tap.", flowId);
             }
+
+            DestinationSearchControl.InjectExternalSelection(destName, e.Location);
+            UpdateDestinationPin(_pendingDestination, "Selected Destination");
+
+            var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+            await CalculateAndDrawRoute(currentLoc, _pendingDestination);
+
+            MainThread.BeginInvokeOnMainThread(async () => FitMapToBounds([currentLoc, _pendingDestination]));
         }
-        catch { DestinationSearchControl.InjectExternalSelection($"{e.Location.Latitude:F4}, {e.Location.Longitude:F4}", e.Location); }
-
-        UpdateDestinationPin(_pendingDestination, "Selected Destination");
-        var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
-        await CalculateAndDrawRoute(currentLoc, _pendingDestination);
-        MainThread.BeginInvokeOnMainThread(async () => FitMapToBounds([currentLoc, _pendingDestination]));
-
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Map Click Processing", flowId);
+        }
     }
     private void UpdateDestinationPin(Location location, string label)
     {
@@ -1813,23 +1859,44 @@ public partial class LobbyPage : ContentPage
     }
     private async void OnEmergencyStopClicked(object sender, EventArgs e)
     {
-        DrawerActionsTab.IsEnabled = false;
-        await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Emergency", _myName);
-        DrawerActionsTab.IsEnabled = true;
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Rider triggered Emergency Stop.", flowId);
+
+        try
+        {
+            DrawerActionsTab.IsEnabled = false;
+            await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Emergency", _myName);
+        }
+        catch (Exception ex) { await HandleExceptionAsync(ex, "Emergency Alert", flowId); }
+        finally { DrawerActionsTab.IsEnabled = true; }
     }
 
     private async void OnRefuelStopClicked(object sender, EventArgs e)
     {
-        DrawerActionsTab.IsEnabled = false;
-        await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Refuel", _myName);
-        DrawerActionsTab.IsEnabled = true;
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Rider triggered Refuel Stop.", flowId);
+
+        try
+        {
+            DrawerActionsTab.IsEnabled = false;
+            await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Refuel", _myName);
+        }
+        catch (Exception ex) { await HandleExceptionAsync(ex, "Refuel Alert", flowId); }
+        finally { DrawerActionsTab.IsEnabled = true; }
     }
 
     private async void OnRestStopClicked(object sender, EventArgs e)
     {
-        DrawerActionsTab.IsEnabled = false;
-        await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Rest", _myName);
-        DrawerActionsTab.IsEnabled = true;
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Rider triggered Rest Stop.", flowId);
+
+        try
+        {
+            DrawerActionsTab.IsEnabled = false;
+            await _signalRService.SendGroupAlert(GroupNameLabel.Text, "Rest", _myName);
+        }
+        catch (Exception ex) { await HandleExceptionAsync(ex, "Rest Alert", flowId); }
+        finally { DrawerActionsTab.IsEnabled = true; }
     }
 
     private async void OnAlertReceived(string alertType, string senderName)
@@ -1892,13 +1959,23 @@ public partial class LobbyPage : ContentPage
     }
     private async void OnLeaveGroupClicked(object sender, EventArgs e)
     {
+        string flowId = CorrelationContext.GenerateNew();
+
         bool confirm = await DisplayAlert("Leave Group", "Are you sure you want to permanently leave the group?", "Yes", "Cancel");
         if (confirm)
         {
-            _isLeavingGroupPermanently = true;
-            _rideCache.HardResetAll();
-            _signalRService.LeaveGroup(CurrentGoogleId).SafeFireAndForget();
-            await ClosePageAsync();
+            _logger?.LogInformation("[{FlowId}] User confirmed leaving group permanently.", flowId);
+            try
+            {
+                _isLeavingGroupPermanently = true;
+                _rideCache.HardResetAll();
+                _signalRService.LeaveGroup(CurrentGoogleId).SafeFireAndForget();
+                await ClosePageAsync();
+            }
+            catch (Exception ex)
+            {
+                await HandleExceptionAsync(ex, "Leave Group", flowId);
+            }
         }
     }
     private void OnOpenSettingsClicked(object sender, EventArgs e) => AppInfo.Current.ShowSettingsUI();
@@ -1921,49 +1998,47 @@ public partial class LobbyPage : ContentPage
     {
         if (string.IsNullOrEmpty(action) || action == "Cancel" || _selectedRiderForManagement == null) return;
 
+        string flowId = CorrelationContext.GenerateNew();
         Rider selectedRider = _selectedRiderForManagement;
         string rawName = selectedRider.Name.Replace(" (You)", "").Replace(" (Offline)", "").Replace(" 👻 (Hidden)", "");
-        bool isEssential = IsEssentialRole(selectedRider.Role, selectedRider.IsAdmin);
 
-        // =====================================================================
-        // HANDLE VISIBILITY TOGGLE
-        // =====================================================================
-        if (action == "Show on Map" || action == "Hide from Map")
+        _logger?.LogInformation("[{FlowId}] Executing Rider Management action '{Action}' on user '{TargetUser}'.", flowId, action, rawName);
+
+        try
         {
-            bool hide = action == "Hide from Map";
+            bool isEssential = IsEssentialRole(selectedRider.Role, selectedRider.IsAdmin);
 
-            if (hide && isEssential)
+            if (action == "Show on Map" || action == "Hide from Map")
             {
-                bool confirm = await DisplayAlert("Hide Essential Rider?", $"{rawName} is the {selectedRider.Role}. It is highly recommended to keep them visible. Hide anyway?", "Hide", "Cancel");
-                if (!confirm) return;
+                bool hide = action == "Hide from Map";
+
+                if (hide && isEssential)
+                {
+                    bool confirm = await DisplayAlert("Hide Essential Rider?", $"{rawName} is the {selectedRider.Role}. It is highly recommended to keep them visible. Hide anyway?", "Hide", "Cancel");
+                    if (!confirm) return;
+                }
+
+                if (hide) _rideCache.HiddenRiders.Add(rawName);
+                else _rideCache.HiddenRiders.Remove(rawName);
+
+                if (hide && _riderViewModels.TryGetValue(rawName, out var vm))
+                {
+                    MapPins.Remove(vm);
+                    _riderViewModels.TryRemove(rawName, out _);
+                }
+
+                _signalRService.SendVisibilityToggle(GroupNameLabel.Text, rawName, hide).SafeFireAndForget();
+
+                var roster = await _signalRService.GetGroupRoster(GroupNameLabel.Text);
+                if (roster != null) OnRosterUpdated(roster);
+
+                _logger?.LogInformation("[{FlowId}] Rider visibility toggled to Hidden={Hidden}.", flowId, hide);
+                return;
             }
 
-            if (hide) _rideCache.HiddenRiders.Add(rawName);
-            else _rideCache.HiddenRiders.Remove(rawName);
+            if (!_amIAdmin) return;
 
-            // Instantly remove them from the UI Map
-            if (hide && _riderViewModels.TryGetValue(rawName, out var vm))
-            {
-                MapPins.Remove(vm);
-                _riderViewModels.TryRemove(rawName, out _);
-            }
-
-            _signalRService.SendVisibilityToggle(GroupNameLabel.Text, rawName, hide).SafeFireAndForget();
-
-            var roster = await _signalRService.GetGroupRoster(GroupNameLabel.Text);
-            if (roster != null) OnRosterUpdated(roster);
-
-            return;
-        }
-
-        // =====================================================================
-        // HANDLE ADMIN TOOLS
-        // =====================================================================
-        if (!_amIAdmin) return;
-
-        if (action == "View Emergency Info")
-        {
-            try
+            if (action == "View Emergency Info")
             {
                 var emergencyData = await _signalRService.GetRiderEmergencyInfo(selectedRider.GoogleId);
                 if (emergencyData != null)
@@ -1972,36 +2047,49 @@ public partial class LobbyPage : ContentPage
                     await DisplayAlert($"{rawName}'s Info", info, "Close");
                 }
             }
-            catch (Exception ex) { await DisplayAlert("Access Denied", ex.Message, "OK"); }
-        }
-        else
-        {
-            string backendRole = action == "Standard Rider" ? RiderRole.Rider.ToString() : action;
-            if (selectedRider.IsAdmin && backendRole != RiderRole.Lead.ToString())
+            else
             {
-                bool hasOtherLead = Riders.Any(r => r.GoogleId != selectedRider.GoogleId && RiderRoleParser.ParseOrDefault(r.Role) == RiderRole.Lead);
-                if (!hasOtherLead)
+                string backendRole = action == "Standard Rider" ? RiderRole.Rider.ToString() : action;
+                if (selectedRider.IsAdmin && backendRole != RiderRole.Lead.ToString())
                 {
-                    await DisplayAlert("Action Denied", "At least another rider should be the Lead before you reassign yourself.", "OK");
-                    return;
+                    bool hasOtherLead = Riders.Any(r => r.GoogleId != selectedRider.GoogleId && RiderRoleParser.ParseOrDefault(r.Role) == RiderRole.Lead);
+                    if (!hasOtherLead)
+                    {
+                        await DisplayAlert("Action Denied", "At least another rider should be the Lead before you reassign yourself.", "OK");
+                        return;
+                    }
                 }
+
+                await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
+                _logger?.LogInformation("[{FlowId}] Role assigned successfully.", flowId);
             }
-            await _signalRService.AssignRole(GroupNameLabel.Text, selectedRider.GoogleId, backendRole);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, $"Rider Management: {action}", flowId);
         }
     }
     private async void OnPauseNavClicked(object sender, EventArgs e)
     {
         if (!_amIAdmin) return;
 
+        string flowId = CorrelationContext.GenerateNew();
         string reason = await DisplayActionSheet("Reason for Pause?", "Cancel", null,
             "Fuel Stop", "Food/Rest Break", "Scenic Viewpoint", "Mechanical Issue", "Wait for Stragglers");
 
         if (reason == "Cancel" || string.IsNullOrEmpty(reason)) return;
 
         GlobalLoadingOverlay.Show("Pausing Route...");
+        _logger?.LogInformation("[{FlowId}] Admin pausing navigation. Reason: {Reason}", flowId, reason);
+
         try
         {
             await _signalRService.PauseGroupNavigation(GroupNameLabel.Text, reason, _myName);
+            _logger?.LogInformation("[{FlowId}] Navigation paused successfully.", flowId);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Pause Navigation", flowId);
         }
         finally
         {
@@ -2012,10 +2100,18 @@ public partial class LobbyPage : ContentPage
     {
         if (!_amIAdmin) return;
 
+        string flowId = CorrelationContext.GenerateNew();
         GlobalLoadingOverlay.Show("Resuming...");
+        _logger?.LogInformation("[{FlowId}] Admin resuming navigation.", flowId);
+
         try
         {
             await _signalRService.ResumeGroupNavigation(GroupNameLabel.Text, _myName);
+            _logger?.LogInformation("[{FlowId}] Navigation resumed successfully.", flowId);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Resume Navigation", flowId);
         }
         finally
         {
@@ -2027,14 +2123,22 @@ public partial class LobbyPage : ContentPage
     {
         if (!_amIAdmin) return;
 
+        string flowId = CorrelationContext.GenerateNew();
         bool confirm = await DisplayAlert("Complete Route", "Are you sure you want to end this journey? This will stop navigation for everyone.", "Finish Ride", "Cancel");
         if (!confirm) return;
 
         GlobalLoadingOverlay.Show("Completing Route...");
+        _logger?.LogInformation("[{FlowId}] Admin completing navigation.", flowId);
+
         try
         {
             await _signalRService.CompleteGroupNavigation(GroupNameLabel.Text, _myName);
             _rideCts?.Cancel();
+            _logger?.LogInformation("[{FlowId}] Navigation completed successfully.", flowId);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Complete Navigation", flowId);
         }
         finally
         {
@@ -2109,26 +2213,35 @@ public partial class LobbyPage : ContentPage
 
     private async void OnSettingsSubmitted(object sender, ConvoySettingsSubmittedEventArgs e)
     {
-        // THE FIX: LobbyPage ONLY handles Edit mode. (MainPage handles Creation)
-        if (e.IsCreationMode) return;
+        if (e.IsCreationMode) return; // Handled in MainPage
 
-        AppLogger.Info("Settings", $"Saving lag: {e.MaxLagDistanceMeters}m, Splinter: {e.SplinterWarningDistanceMeters}m");
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Admin updating group settings.", flowId);
 
-        // Send the updated packet to the server
-        await _signalRService.UpdateGroupSettings(GroupNameLabel.Text, new GroupSettingsDto
+        try
         {
-            MaxLagDistanceMeters = e.MaxLagDistanceMeters,
-            SplinterWarningDistanceMeters = e.SplinterWarningDistanceMeters,
-            MaxGroupSize = e.MaxGroupSize,
-            PitstopDistanceMeters = e.PitstopDistanceMeters * 1000, // convert slider km back to meters!
-            MinUpdateDistanceMeters = e.MinBroadcastDistanceMeters,
-            MaxUpdateDistanceMeters = e.MaxBroadcastDistanceMeters,
-            ArrivalGeofenceMeters = 1000,
-            EnableDynamicRouting = e.EnableDynamicRouting,
-            LeadRiderGoogleId = CurrentGoogleId
-        });
+            _logger?.LogInformation("[{FlowId}] Saving lag: {Lag}m, Splinter: {Splinter}m", flowId, e.MaxLagDistanceMeters, e.SplinterWarningDistanceMeters);
 
-        Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
+            await _signalRService.UpdateGroupSettings(GroupNameLabel.Text, new GroupSettingsDto
+            {
+                MaxLagDistanceMeters = e.MaxLagDistanceMeters,
+                SplinterWarningDistanceMeters = e.SplinterWarningDistanceMeters,
+                MaxGroupSize = e.MaxGroupSize,
+                PitstopDistanceMeters = e.PitstopDistanceMeters * 1000,
+                MinUpdateDistanceMeters = e.MinBroadcastDistanceMeters,
+                MaxUpdateDistanceMeters = e.MaxBroadcastDistanceMeters,
+                ArrivalGeofenceMeters = 1000,
+                EnableDynamicRouting = e.EnableDynamicRouting,
+                LeadRiderGoogleId = CurrentGoogleId
+            });
+
+            Vibration.Default.Vibrate(TimeSpan.FromMilliseconds(100));
+            _logger?.LogInformation("[{FlowId}] Group settings updated successfully.", flowId);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Update Group Settings", flowId);
+        }
     }
     private async Task RunPttTimeoutAsync(CancellationToken token)
     {
@@ -2162,6 +2275,9 @@ public partial class LobbyPage : ContentPage
     {
         if (_rideCache.ActiveDestination == null) return;
 
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] User launching native third-party navigation app.", flowId);
+
         try
         {
             if (DeviceInfo.Platform == DevicePlatform.Android)
@@ -2177,7 +2293,11 @@ public partial class LobbyPage : ContentPage
                 }
             }
         }
-        catch (Exception) { await DisplayAlert("Error", "Could not open map.", "OK"); }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[{FlowId}] Failed to open native maps application.", flowId);
+            await DisplayAlertAsync("Error", "Could not open map.", "OK");
+        }
     }
     private void MapPinClicked(RiderPin pin)
     {
@@ -2185,44 +2305,58 @@ public partial class LobbyPage : ContentPage
     }
     private async void OnDestinationPreviewRequested(object sender, PlaceSelectedEventArgs e)
     {
-        _pendingDestination = e.Location;
-        _rideCache.ActiveWaypoints = e.RouteWaypoints ?? new List<Location>();
+        string flowId = CorrelationContext.GenerateNew();
+        _logger?.LogInformation("[{FlowId}] Admin requested preview for destination: {DestName}", flowId, e.Name);
 
-        UpdateDestinationPin(_pendingDestination, e.Name);
-        UpdateWaypointPins(_rideCache.ActiveWaypoints, _pendingDestination);
-
-        // THE FIX: Do NOT call CalculateAndDrawRoute here!
-        // Just center the map so the user can see the pins they selected.
-        var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
-        if (currentLoc != null)
+        try
         {
-            var cameraBoundsPoints = new List<Location> { currentLoc };
-            if (_rideCache.ActiveWaypoints.Any())
-            {
-                cameraBoundsPoints.AddRange(_rideCache.ActiveWaypoints);
-            }
-            else
-            {
-                cameraBoundsPoints.Add(_pendingDestination);
-            }
+            _pendingDestination = e.Location;
+            _rideCache.ActiveWaypoints = e.RouteWaypoints ?? new List<Location>();
 
-            MainThread.BeginInvokeOnMainThread(() => FitMapToBounds(cameraBoundsPoints));
+            UpdateDestinationPin(_pendingDestination, e.Name);
+            UpdateWaypointPins(_rideCache.ActiveWaypoints, _pendingDestination);
+
+            var currentLoc = await Geolocation.Default.GetLastKnownLocationAsync() ?? _lastKnownLocation;
+            if (currentLoc != null)
+            {
+                var cameraBoundsPoints = new List<Location> { currentLoc };
+                if (_rideCache.ActiveWaypoints.Any())
+                    cameraBoundsPoints.AddRange(_rideCache.ActiveWaypoints);
+                else
+                    cameraBoundsPoints.Add(_pendingDestination);
+
+                MainThread.BeginInvokeOnMainThread(() => FitMapToBounds(cameraBoundsPoints));
+            }
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Destination Preview", flowId);
         }
     }
 
     private async void OnDestinationConfirmed(object sender, PlaceSelectedEventArgs e)
     {
-        string destName = e.Name;
-        _rideCache.ActiveDestination = e.Location;
-        _rideCache.ActiveWaypoints = e.RouteWaypoints ?? new List<Location>();
-        groupDetails.DestLng = e.Location.Longitude;
-        groupDetails.DestLat = e.Location.Latitude;
-        groupDetails.DestName = destName;
+        string flowId = CorrelationContext.GenerateNew(); // <-- Start new tracking flow
+        _logger?.LogInformation("[{FlowId}] Admin confirmed destination: {DestName}", flowId, e.Name);
+        try
+        {
+            string destName = e.Name;
+            _rideCache.ActiveDestination = e.Location;
+            _rideCache.ActiveWaypoints = e.RouteWaypoints ?? new List<Location>();
+            groupDetails.DestLng = e.Location.Longitude;
+            groupDetails.DestLat = e.Location.Latitude;
+            groupDetails.DestName = destName;
 
-        await ChangeGroupState(GroupState.DestinationSet, _myName);
-        await _signalRService.SetGroupDestination(GroupNameLabel.Text, e.Location.Latitude, e.Location.Longitude, destName);
+            await ChangeGroupState(GroupState.DestinationSet, _myName);
 
-        //if (_amIAdmin) _ = GenerateMeetupPointAsync();
+            _logger?.LogInformation("[{FlowId}] Sending destination to SignalR.", flowId);
+
+            await _signalRService.SetGroupDestination(GroupNameLabel.Text, e.Location.Latitude, e.Location.Longitude, destName);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Confirm Destination", flowId);
+        }
     }
 
     private void OnDestinationCleared(object sender, EventArgs e)
@@ -2486,7 +2620,7 @@ public partial class LobbyPage : ContentPage
                         totalRoute: $"{routeUi.DistanceKm} km",
                         progressVal: 0.0,
                         progressPercent: "0%",
-                        eta: routeUi.EtaText,
+                        eta: ConvertDurationToArrivalTime(routeUi.EtaText),
                         isOffRoute: false
                     );
                 }
@@ -2745,5 +2879,31 @@ public partial class LobbyPage : ContentPage
             RiderRole.Admin => true,
             _ => false
         };
+    }
+    private async Task HandleExceptionAsync(Exception ex, string operationName, string flowId)
+    {
+        _logger?.LogError(ex, "[{FlowId}] Error during {OperationName}.", flowId, operationName);
+
+        MainThread.BeginInvokeOnMainThread(async () =>
+        {
+            await DisplayAlertAsync("System Error", $"An unexpected error occurred.\n\nError Code: {flowId}", "OK");
+        });
+    }
+    // ==========================================
+    // ETA FORMATTER HELPER
+    // ==========================================
+    private string ConvertDurationToArrivalTime(string durationText)
+    {
+        if (string.IsNullOrWhiteSpace(durationText)) return "--:--";
+
+        int hours = 0, minutes = 0;
+
+        foreach (var part in durationText.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (part.EndsWith("h") && int.TryParse(part.TrimEnd('h'), out int h)) hours = h;
+            if (part.EndsWith("m") && int.TryParse(part.TrimEnd('m'), out int m)) minutes = m;
+        }
+
+        return DateTime.Now.AddHours(hours).AddMinutes(minutes).ToString("h:mm tt");
     }
 }

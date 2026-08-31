@@ -14,8 +14,11 @@
             <!-- List -->
         </Grid.RowDefinitions>
 
-        <!-- 2. Search Bar -->
-        <Border Grid.Row="0" Margin="20,10,20,5" Padding="0" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#1E1E1E}">
+        <!-- ========================================== -->
+        <!-- SEARCH BAR                                 -->
+        <!-- ========================================== -->
+        <!-- UPGRADE: Standardized margins and added subtle border stroke for definition -->
+        <Border Grid.Row="0" Margin="16,16,16,8" Padding="0" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#1E1E1E}">
             <Border.StrokeShape>
                 <RoundRectangle CornerRadius="12"/>
             </Border.StrokeShape>
@@ -23,92 +26,130 @@
                        Placeholder="Search convoys..." 
                        TextChanged="OnSearchTextChanged" 
                        BackgroundColor="Transparent"
-                       CancelButtonColor="Gray"/>
+                       CancelButtonColor="#9E9E9E"/>
         </Border>
 
-        <!-- List Area -->
-        <RefreshView Grid.Row="1" x:Name="GroupsRefreshView" Refreshing="OnRefreshRequested" Margin="0,5,0,0">
+        <!-- ========================================== -->
+        <!-- MAIN LIST AREA                             -->
+        <!-- ========================================== -->
+        <RefreshView Grid.Row="1" x:Name="GroupsRefreshView" Refreshing="OnRefreshRequested" RefreshColor="#00E676" Margin="0,8,0,0">
 
-            <!-- 3. Pagination Setup: RemainingItemsThreshold="2" fires the event when 2 items are left -->
             <CollectionView ItemsSource="{Binding ItemsSource, Source={x:Reference thisControl}}"
                             RemainingItemsThreshold="2"
                             RemainingItemsThresholdReached="OnRemainingItemsThresholdReached">
 
+                <!-- LIST HEADER -->
                 <CollectionView.Header>
-                    <Label Text="Active Convoys" FontSize="18" FontAttributes="Bold" Margin="25,5,0,15" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+                    <HorizontalStackLayout Margin="24,8,24,16" Spacing="8" VerticalOptions="Center">
+                        <Label Text="groups" FontFamily="MaterialSymbols" FontSize="24" TextColor="{AppThemeBinding Light=#1976D2, Dark=#64B5F6}" VerticalOptions="Center"/>
+                        <Label Text="ACTIVE CONVOYS" FontSize="14" FontAttributes="Bold" CharacterSpacing="1.5" TextColor="{AppThemeBinding Light=#757575, Dark=#9E9E9E}" VerticalOptions="Center"/>
+                    </HorizontalStackLayout>
                 </CollectionView.Header>
 
-                <!-- 1. Dynamic Empty List Message -->
+                <!-- EMPTY STATE -->
                 <CollectionView.EmptyView>
-                    <StackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="10" Margin="0,50,0,0">
-                        <Label Text="transportation" FontFamily="MaterialSymbols" FontSize="48" HorizontalOptions="Center" Opacity="0.5"/>
-                        <Label Text="{Binding EmptyMessage, Source={x:Reference thisControl}}" TextColor="Gray" HorizontalOptions="Center"/>
-                    </StackLayout>
+                    <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="16" Margin="0,64,0,0">
+                        <!-- UPGRADE: Replaced non-standard 'transportation' with 'explore' for the compass/map vibe -->
+                        <Label Text="explore" FontFamily="MaterialSymbols" FontSize="56" TextColor="{AppThemeBinding Light=#E0E0E0, Dark=#424242}" HorizontalOptions="Center" />
+                        <Label Text="{Binding EmptyMessage, Source={x:Reference thisControl}}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#757575, Dark=#9E9E9E}" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
+                    </VerticalStackLayout>
                 </CollectionView.EmptyView>
 
-                <!-- Item Template -->
+                <!-- ========================================== -->
+                <!-- CONVOY ITEM TEMPLATE                       -->
+                <!-- ========================================== -->
                 <CollectionView.ItemTemplate>
                     <DataTemplate>
-                        <Border Margin="20,0,20,15" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#252525}">
+                        <!-- UPGRADE: Replaced heavy Shadow with a clean 1px stroke for better scroll performance -->
+                        <Border Margin="16,0,16,12" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=White, Dark=#252525}">
                             <Border.StrokeShape>
                                 <RoundRectangle CornerRadius="16"/>
                             </Border.StrokeShape>
-                            <Border.Shadow>
-                                <Shadow Brush="Black" Offset="0,4" Opacity="0.05" Radius="10"/>
-                            </Border.Shadow>
 
-                            <Grid ColumnDefinitions="Auto, *, Auto" Padding="15">
-                                <!-- Icon -->
-                                <Frame Grid.Column="0" BackgroundColor="#E6F2FF" CornerRadius="12" WidthRequest="50" HeightRequest="50" HasShadow="False" BorderColor="Transparent" Padding="0" Margin="0,0,15,0" VerticalOptions="Center">
-                                    <Label Text="share_location" FontFamily="MaterialSymbols" FontSize="20" HorizontalOptions="Center" VerticalOptions="Center" TextColor="#CC0000" />
-                                </Frame>
+                            <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16" Padding="16">
 
-                                <!-- Info -->
-                                <StackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
-                                    <Label Text="{Binding GroupName}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333333, Dark=White}"/>
-                                    <Label Text="{Binding MemberCountDisplay}" FontSize="13" TextColor="Gray"/>
-                                    <Label Text="You are the Admin" FontSize="11" TextColor="DarkOrange" FontAttributes="Bold" IsVisible="{Binding IsMyAdmin}"/>
-                                </StackLayout>
+                                <!-- ICON CONTAINER -->
+                                <!-- UPGRADE: Replaced deprecated Frame with Border. Fixed red/blue color clashing. -->
+                                <Border Grid.Column="0" WidthRequest="48" HeightRequest="48" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=#FFEBEE, Dark=#4A0000}" VerticalOptions="Center">
+                                    <Border.StrokeShape>
+                                        <RoundRectangle CornerRadius="24"/>
+                                    </Border.StrokeShape>
+                                    <Label Text="share_location" FontFamily="MaterialSymbols" FontSize="24" TextColor="#E53935" HorizontalOptions="Center" VerticalOptions="Center"/>
+                                </Border>
 
-                                <!-- Actions -->
-                                <StackLayout Grid.Column="2" Orientation="Horizontal" Spacing="10" VerticalOptions="Center">
-                                    <Button Text="close_small" 
+                                <!-- CONVOY INFO -->
+                                <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
+                                    <Label Text="{Binding GroupName}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+
+                                    <!-- Added micro-icon for members -->
+                                    <HorizontalStackLayout Spacing="6">
+                                        <Label Text="group" FontFamily="MaterialSymbols" FontSize="14" TextColor="#9E9E9E" VerticalOptions="Center"/>
+                                        <Label Text="{Binding MemberCountDisplay}" FontSize="13" TextColor="#757575" VerticalOptions="Center"/>
+                                    </HorizontalStackLayout>
+
+                                    <!-- Added micro-icon and styling for Admin badge -->
+                                    <HorizontalStackLayout Spacing="4" IsVisible="{Binding IsMyAdmin}" Margin="0,4,0,0">
+                                        <Label Text="admin_panel_settings" FontFamily="MaterialSymbols" FontSize="14" TextColor="#FB8C00" VerticalOptions="Center"/>
+                                        <Label Text="YOU ARE ADMIN" FontSize="10" TextColor="#FB8C00" FontAttributes="Bold" CharacterSpacing="1" VerticalOptions="Center"/>
+                                    </HorizontalStackLayout>
+                                </VerticalStackLayout>
+
+                                <!-- ACTIONS -->
+                                <HorizontalStackLayout Grid.Column="2" Spacing="8" VerticalOptions="Center">
+
+                                    <!-- Delete Button: Replaced close_small with standard 'delete' icon for destructive semantics -->
+                                    <Button Text="delete" 
                                             FontFamily="MaterialSymbols" 
-                                            FontSize="24"
-                                            BackgroundColor="#FFF0F0" 
-                                            TextColor="#CC0000" 
-                                            CornerRadius="10" 
-                                            WidthRequest="40" 
-                                            HeightRequest="40" 
+                                            FontSize="20"
+                                            BackgroundColor="{AppThemeBinding Light=#FFF0F0, Dark=#331111}" 
+                                            TextColor="#E53935" 
+                                            CornerRadius="12" 
+                                            WidthRequest="44" 
+                                            HeightRequest="44" 
                                             Padding="0" 
                                             IsVisible="{Binding IsMyAdmin}" 
                                             Clicked="OnDeleteGroupClicked" 
                                             CommandParameter="{Binding GroupName}"/>
 
-                                    <Button Text="{Binding JoinButtonText}" BackgroundColor="{Binding JoinButtonColor}" TextColor="White" CornerRadius="10" WidthRequest="80" HeightRequest="40" FontAttributes="Bold" Clicked="OnJoinGroupClicked" CommandParameter="{Binding .}" IsEnabled="{Binding CanJoin}">
+                                    <!-- Join Button -->
+                                    <Button Text="{Binding JoinButtonText}" 
+                                            BackgroundColor="{Binding JoinButtonColor}" 
+                                            TextColor="White" 
+                                            FontSize="14"
+                                            FontAttributes="Bold" 
+                                            CornerRadius="12" 
+                                            HeightRequest="44" 
+                                            MinimumWidthRequest="80"
+                                            Padding="16,0"
+                                            Clicked="OnJoinGroupClicked" 
+                                            CommandParameter="{Binding .}" 
+                                            IsEnabled="{Binding CanJoin}">
                                         <Button.Shadow>
                                             <Shadow Brush="{Binding JoinButtonColor}" Offset="0,4" Opacity="0.3" Radius="8"/>
                                         </Button.Shadow>
                                     </Button>
-                                </StackLayout>
+                                </HorizontalStackLayout>
                             </Grid>
                         </Border>
                     </DataTemplate>
                 </CollectionView.ItemTemplate>
 
-                <!-- 3. Pagination Footer Loader -->
+                <!-- ========================================== -->
+                <!-- PAGINATION FOOTER                          -->
+                <!-- ========================================== -->
                 <CollectionView.Footer>
-                    <Grid Padding="20" IsVisible="{Binding IsLoadingMore, Source={x:Reference thisControl}}">
-                        <ActivityIndicator IsRunning="True" Color="MediumSeaGreen" HorizontalOptions="Center" />
+                    <Grid Padding="24" IsVisible="{Binding IsLoadingMore, Source={x:Reference thisControl}}">
+                        <ActivityIndicator IsRunning="True" Color="#00E676" HorizontalOptions="Center" />
                     </Grid>
                 </CollectionView.Footer>
 
             </CollectionView>
         </RefreshView>
 
-        <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" Grid.RowSpan="100" 
-                      Grid.ColumnSpan="100" 
-                      ZIndex="9999" />
+        <!-- GLOBAL LOADING OVERLAY -->
+        <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" 
+                                 Grid.RowSpan="2" 
+                                 ZIndex="9999" />
 
     </Grid>
 </ContentView>

@@ -3,158 +3,204 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="SpeedyCompass.Controls.MapSettingsTabView">
 
-    <VerticalStackLayout Spacing="15" Padding="0,0,10,0">
-        <Label Text="Map &amp; Navigation" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
+    <!-- ScrollView ensures settings are always reachable on smaller screens -->
+    <ScrollView VerticalScrollBarVisibility="Never">
+        <VerticalStackLayout Spacing="24" Padding="16,16,16,32">
 
-        <!-- Architectural standard standard Master Switch: Navigation Perspective -->
-        <!-- Choosing Perspective #2 architectural standard automatically architectural standard architectural architectural shuts down standard loops for battery standard savings standard standard. -->
-        <Border BackgroundColor="{AppThemeBinding Light=#FFEBEB, Dark=#331111}" Stroke="Red" StrokeThickness="1" Padding="15">
-            <Border.StrokeShape>
-                <RoundRectangle CornerRadius="12"/>
-            </Border.StrokeShape>
-            <Grid ColumnDefinitions="*, Auto">
-                <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
-                    <Label Text="Immersive Nav Mode" FontAttributes="Bold" FontSize="14" TextColor="Red"/>
-                    <Label Text="Runs active route and voice copilot. Turn off for passive background sharing (Saves Battery)." FontSize="11" TextColor="Gray"/>
-                </VerticalStackLayout>
-                <Switch x:Name="NavModeMasterSwitch" Grid.Column="1" OnColor="Red" Toggled="OnNavModeMasterToggled" VerticalOptions="Center"/>
-            </Grid>
-        </Border>
+            <HorizontalStackLayout Spacing="12" VerticalOptions="Center">
+                <Label Text="tune" FontFamily="MaterialSymbols" FontSize="26" TextColor="{AppThemeBinding Light=#1976D2, Dark=#64B5F6}" VerticalOptions="Center"/>
+                <Label Text="MAP &amp; NAVIGATION" FontAttributes="Bold" FontSize="16" CharacterSpacing="1.5" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+            </HorizontalStackLayout>
 
-        <!-- Divider -->
-        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#E0E0E0, Dark=#333}" Margin="0,5"/>
-
-        <!-- Map Style Selector -->
-        <StackLayout Spacing="5">
-            <Label Text="Map Style" FontAttributes="Bold" FontSize="14"/>
-            <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1E1E1E}" HeightRequest="45">
+            <!-- ========================================== -->
+            <!-- MASTER SWITCH: Immersive Nav Mode          -->
+            <!-- ========================================== -->
+            <Border BackgroundColor="{AppThemeBinding Light=#FFF0F0, Dark=#331111}" Stroke="#E53935" StrokeThickness="1" Padding="16">
                 <Border.StrokeShape>
-                    <RoundRectangle CornerRadius="22.5" />
+                    <RoundRectangle CornerRadius="16"/>
                 </Border.StrokeShape>
-                <Grid ColumnDefinitions="*,*,*">
-                    <Button x:Name="MapStyleStreetBtn" Grid.Column="0" Text="Street" Clicked="OnMapStyleClicked" CornerRadius="20" BackgroundColor="DodgerBlue" TextColor="White" FontSize="12" FontAttributes="Bold" Margin="2"/>
-                    <Button x:Name="MapStyleSatBtn" Grid.Column="1" Text="Satellite" Clicked="OnMapStyleClicked" CornerRadius="20" BackgroundColor="Transparent" TextColor="Gray" FontSize="12" FontAttributes="Bold" Margin="2"/>
-                    <Button x:Name="MapStyleTerBtn" Grid.Column="2" Text="Hybrid" Clicked="OnMapStyleClicked" CornerRadius="20" BackgroundColor="Transparent" TextColor="Gray" FontSize="12" FontAttributes="Bold" Margin="2"/>
+                <Grid ColumnDefinitions="*, Auto" ColumnSpacing="16">
+                    <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="4">
+                        <HorizontalStackLayout Spacing="8">
+                            <Label Text="explore" FontFamily="MaterialSymbols" FontSize="20" TextColor="#E53935" VerticalOptions="Center"/>
+                            <Label Text="Immersive Nav Mode" FontAttributes="Bold" FontSize="16" TextColor="#E53935" VerticalOptions="Center"/>
+                        </HorizontalStackLayout>
+                        <Label Text="Runs active route calculations and voice copilot. Turn off for passive background sharing to conserve maximum battery." FontSize="13" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" LineHeight="1.2"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="NavModeMasterSwitch" Grid.Column="1" OnColor="#E53935" Toggled="OnNavModeMasterToggled" VerticalOptions="Center"/>
                 </Grid>
             </Border>
-        </StackLayout>
 
-        <!-- Layers & Context -->
-        <StackLayout Spacing="10" Margin="0,10,0,0">
-            <Label Text="Layers &amp; Context" FontAttributes="Bold" FontSize="14"/>
-            <Grid ColumnDefinitions="*, Auto">
-                <Label Text="Live Traffic Layer" VerticalOptions="Center"/>
-                <Switch x:Name="TrafficSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnTrafficToggled" />
-            </Grid>
-            <Grid ColumnDefinitions="*, Auto">
-                <Label Text="Speed Limit Alerts" VerticalOptions="Center"/>
-                <Switch x:Name="SpeedLimitSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnPreferenceToggled" />
-            </Grid>
-        </StackLayout>
+            <!-- ========================================== -->
+            <!-- MAP VISUALS                                -->
+            <!-- ========================================== -->
+            <VerticalStackLayout Spacing="16">
+                <Label Text="MAP VISUALS" FontAttributes="Bold" FontSize="12" TextColor="#9E9E9E" CharacterSpacing="1"/>
 
-        <!-- Camera Physics (Visually standard standard disabled architectural in standard standard Background Sharing mode standard standard) -->
-        <StackLayout x:Name="CameraPhysicsContainer" Spacing="10" Margin="0,10,0,0">
-            <Label Text="Camera Physics" FontAttributes="Bold" FontSize="14"/>
-            <Grid ColumnDefinitions="*, Auto">
-                <StackLayout Grid.Column="0" VerticalOptions="Center">
-                    <Label Text="Speed-Based Auto-Zoom" />
-                    <Label Text="Zooms out on highways, in on streets." FontSize="11" TextColor="Gray"/>
-                </StackLayout>
-                <Switch x:Name="AutoZoomSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnPreferenceToggled" />
-            </Grid>
-            <Grid ColumnDefinitions="*, Auto">
-                <StackLayout Grid.Column="0" VerticalOptions="Center">
-                    <Label Text="Auto-Tilt (3D Horizon)" />
-                    <Label Text="Tilts map at high speeds for visibility." FontSize="11" TextColor="Gray"/>
-                </StackLayout>
-                <Switch x:Name="AutoTiltSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnPreferenceToggled" />
-            </Grid>
-            <Grid ColumnDefinitions="*, Auto">
-                <StackLayout Grid.Column="0" VerticalOptions="Center">
-                    <Label Text="Voice Navigation Copilot" />
-                    <Label Text="Enables map navigation vocal instructions." FontSize="11" TextColor="Gray"/>
-                </StackLayout>
-                <Switch x:Name="VoiceNavSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnPreferenceToggled" />
-            </Grid>
-        </StackLayout>
-        <!-- NEW: Weather Radar (Only active in Immersive Mode) -->
-        <StackLayout x:Name="WeatherRadarContainer" Spacing="10" Margin="0,10,0,0">
-            <Label Text="Weather Radar" FontAttributes="Bold" FontSize="14"/>
-            <Grid ColumnDefinitions="*, Auto">
-                <StackLayout Grid.Column="0" VerticalOptions="Center">
-                    <Label Text="Predictive Weather Alerts" />
-                    <Label Text="Warns about rain or hazards ahead on the route." FontSize="11" TextColor="Gray"/>
-                </StackLayout>
-                <Switch x:Name="WeatherRadarSwitch" Grid.Column="1" OnColor="MediumSeaGreen" Toggled="OnWeatherRadarToggled" />
-            </Grid>
+                <!-- Map Style Selector -->
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="Base Layer Style" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                    <Label Text="Choose the visual terrain for your map." FontSize="13" TextColor="#757575"/>
 
-            <!-- Look-Ahead Slider (Visible only if Switch is ON) -->
-            <StackLayout x:Name="WeatherDistanceContainer" Spacing="5" IsVisible="False" Margin="0,5,0,0">
-                <Grid ColumnDefinitions="*,Auto">
-                    <Label Text="Look-Ahead Distance" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
-                    <Label x:Name="WeatherDistanceLabel" Grid.Column="1" Text="15 km" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                    <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#1E1E1E}" HeightRequest="48" Margin="0,8,0,0">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="24" />
+                        </Border.StrokeShape>
+                        <Grid ColumnDefinitions="*,*,*">
+                            <Button x:Name="MapStyleStreetBtn" Grid.Column="0" Text="Street" Clicked="OnMapStyleClicked" CornerRadius="24" BackgroundColor="#1976D2" TextColor="White" FontSize="13" FontAttributes="Bold" Margin="2"/>
+                            <Button x:Name="MapStyleSatBtn" Grid.Column="1" Text="Satellite" Clicked="OnMapStyleClicked" CornerRadius="24" BackgroundColor="Transparent" TextColor="#757575" FontSize="13" FontAttributes="Bold" Margin="2"/>
+                            <Button x:Name="MapStyleTerBtn" Grid.Column="2" Text="Hybrid" Clicked="OnMapStyleClicked" CornerRadius="24" BackgroundColor="Transparent" TextColor="#757575" FontSize="13" FontAttributes="Bold" Margin="2"/>
+                        </Grid>
+                    </Border>
+                </VerticalStackLayout>
+
+                <!-- Live Traffic -->
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16" Margin="0,8,0,0">
+                    <Label Grid.Column="0" Text="traffic" FontFamily="MaterialSymbols" FontSize="24" TextColor="#757575" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Live Traffic Layer" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Overlays real-time congestion lines and road closure alerts onto the map." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="TrafficSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnTrafficToggled" VerticalOptions="Center" />
                 </Grid>
-                <Slider x:Name="WeatherDistanceSlider" Minimum="5" Maximum="50" Value="15" ValueChanged="OnWeatherDistanceChanged" MinimumTrackColor="DodgerBlue"/>
-            </StackLayout>
-        </StackLayout>
 
-        <!-- NEW: Battery & Background Optimizations -->
-        <StackLayout x:Name="BackgroundOptContainer" Spacing="10" Margin="0,10,0,0">
-            <Label Text="Background Optimizations" FontAttributes="Bold" FontSize="14"/>
+                <!-- Speed Limits -->
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16" Margin="0,8,0,0">
+                    <Label Grid.Column="0" Text="speed" FontFamily="MaterialSymbols" FontSize="24" TextColor="#757575" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Speed Limit Alerts" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Displays the local speed limit and highlights your speed gauge when exceeding it." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="SpeedLimitSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnPreferenceToggled" VerticalOptions="Center" />
+                </Grid>
+            </VerticalStackLayout>
 
-            <StackLayout Spacing="5">
-                <Label Text="GPS Aggressiveness" FontAttributes="Bold" FontSize="12"/>
-                <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1E1E1E}" HeightRequest="40">
-                    <Border.StrokeShape>
-                        <RoundRectangle CornerRadius="8"/>
-                    </Border.StrokeShape>
-                    <Picker x:Name="GpsAggroPicker" SelectedIndexChanged="OnGpsAggroChanged" FontSize="13" SelectedIndex="0">
-                        <Picker.Items>
-                            <x:String>Real-Time (Follows Group Protocol)</x:String>
-                            <x:String>Eco-Tracker (15s Heartbeat)</x:String>
-                            <x:String>Custom Configuration</x:String>
-                        </Picker.Items>
-                    </Picker>
-                </Border>
-            </StackLayout>
+            <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}" />
 
-            <StackLayout x:Name="CustomGpsContainer" IsVisible="False" Spacing="5" Margin="0,5,0,5">
-                <Border Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333}" StrokeThickness="1" BackgroundColor="{AppThemeBinding Light=#F0F8FF, Dark=#1A2633}" Padding="15">
+            <!-- ========================================== -->
+            <!-- CAMERA PHYSICS                             -->
+            <!-- ========================================== -->
+            <VerticalStackLayout x:Name="CameraPhysicsContainer" Spacing="16">
+                <Label Text="CAMERA BEHAVIOR" FontAttributes="Bold" FontSize="12" TextColor="#9E9E9E" CharacterSpacing="1"/>
+
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16">
+                    <Label Grid.Column="0" Text="zoom_out_map" FontFamily="MaterialSymbols" FontSize="24" TextColor="#757575" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Speed-Based Auto-Zoom" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Dynamically scales the map. Zooms out on fast highways for context, and zooms in on city streets for precise turns." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="AutoZoomSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnPreferenceToggled" VerticalOptions="Center" />
+                </Grid>
+
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16">
+                    <Label Grid.Column="0" Text="3d_rotation" FontFamily="MaterialSymbols" FontSize="24" TextColor="#757575" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Auto-Tilt (3D Horizon)" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Transitions the camera to a 3D forward-facing angle at high speeds to show upcoming curves." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="AutoTiltSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnPreferenceToggled" VerticalOptions="Center" />
+                </Grid>
+
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16">
+                    <Label Grid.Column="0" Text="record_voice_over" FontFamily="MaterialSymbols" FontSize="24" TextColor="#757575" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Voice Navigation Copilot" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Provides turn-by-turn spoken directions and hazard alerts directly through your helmet comms." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="VoiceNavSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnPreferenceToggled" VerticalOptions="Center" />
+                </Grid>
+            </VerticalStackLayout>
+
+            <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}" />
+
+            <!-- ========================================== -->
+            <!-- WEATHER RADAR                              -->
+            <!-- ========================================== -->
+            <VerticalStackLayout x:Name="WeatherRadarContainer" Spacing="16">
+                <Label Text="WEATHER RADAR" FontAttributes="Bold" FontSize="12" TextColor="#9E9E9E" CharacterSpacing="1"/>
+
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16">
+                    <Label Grid.Column="0" Text="thunderstorm" FontFamily="MaterialSymbols" FontSize="24" TextColor="#29B6F6" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Predictive Route Alerts" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Scans your active route and warns you in advance if you are heading into rain, snow, or severe winds." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="WeatherRadarSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnWeatherRadarToggled" VerticalOptions="Center" />
+                </Grid>
+
+                <!-- Look-Ahead Slider -->
+                <VerticalStackLayout x:Name="WeatherDistanceContainer" IsVisible="False" Spacing="8" Margin="40,8,0,0">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <Label Text="Scan Distance Ahead" FontAttributes="Bold" FontSize="13" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" VerticalOptions="Center"/>
+                        <Label x:Name="WeatherDistanceLabel" Grid.Column="1" Text="15 km" FontAttributes="Bold" TextColor="#29B6F6"/>
+                    </Grid>
+                    <Slider x:Name="WeatherDistanceSlider" Minimum="5" Maximum="50" Value="15" ValueChanged="OnWeatherDistanceChanged" MinimumTrackColor="#29B6F6"/>
+                </VerticalStackLayout>
+            </VerticalStackLayout>
+
+            <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}" />
+
+            <!-- ========================================== -->
+            <!-- BACKGROUND & BATTERY                       -->
+            <!-- ========================================== -->
+            <VerticalStackLayout x:Name="BackgroundOptContainer" Spacing="16">
+                <Label Text="BATTERY &amp; GPS" FontAttributes="Bold" FontSize="12" TextColor="#9E9E9E" CharacterSpacing="1"/>
+
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="GPS Polling Aggressiveness" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                    <Label Text="Controls how often your location is sent to the convoy. Lower settings save battery but delay map updates for others." FontSize="13" TextColor="#757575"/>
+
+                    <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#1E1E1E}" HeightRequest="48" Margin="0,8,0,0">
+                        <Border.StrokeShape>
+                            <RoundRectangle CornerRadius="12"/>
+                        </Border.StrokeShape>
+                        <Picker x:Name="GpsAggroPicker" SelectedIndexChanged="OnGpsAggroChanged" FontSize="14" TextColor="{AppThemeBinding Light=#212121, Dark=White}" SelectedIndex="0" Margin="8,0">
+                            <Picker.Items>
+                                <x:String>Real-Time (Follows Group Protocol)</x:String>
+                                <x:String>Eco-Tracker (15s Heartbeat)</x:String>
+                                <x:String>Custom Configuration</x:String>
+                            </Picker.Items>
+                        </Picker>
+                    </Border>
+                </VerticalStackLayout>
+
+                <!-- Custom GPS Settings -->
+                <Border x:Name="CustomGpsContainer" IsVisible="False" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" StrokeThickness="1" BackgroundColor="{AppThemeBinding Light=#FAFAFA, Dark=#1A1A1A}" Padding="16" Margin="0,8,0,0">
                     <Border.StrokeShape>
                         <RoundRectangle CornerRadius="12"/>
                     </Border.StrokeShape>
-                    <VerticalStackLayout Spacing="10">
-                        <StackLayout Spacing="5">
+                    <VerticalStackLayout Spacing="16">
+                        <VerticalStackLayout Spacing="4">
                             <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Custom Min Distance" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
-                                <Label x:Name="LocalMinUpdateLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                                <Label Text="Min Distance Threshold" FontAttributes="Bold" FontSize="13" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}"/>
+                                <Label x:Name="LocalMinUpdateLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="#1976D2"/>
                             </Grid>
-                            <Slider x:Name="LocalMinUpdateSlider" Minimum="5" Maximum="50" Value="10" ValueChanged="OnLocalMinUpdateChanged" MinimumTrackColor="DodgerBlue"/>
-                        </StackLayout>
+                            <Label Text="Only update GPS if you move further than this distance." FontSize="11" TextColor="#757575"/>
+                            <Slider x:Name="LocalMinUpdateSlider" Minimum="5" Maximum="50" Value="10" ValueChanged="OnLocalMinUpdateChanged" MinimumTrackColor="#1976D2" Margin="0,8,0,0"/>
+                        </VerticalStackLayout>
 
-                        <StackLayout Spacing="5">
+                        <VerticalStackLayout Spacing="4">
                             <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Custom Max Distance" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
-                                <Label x:Name="LocalMaxUpdateLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="DodgerBlue"/>
+                                <Label Text="Max Distance Threshold" FontAttributes="Bold" FontSize="13" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}"/>
+                                <Label x:Name="LocalMaxUpdateLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="#1976D2"/>
                             </Grid>
-                            <Slider x:Name="LocalMaxUpdateSlider" Minimum="50" Maximum="500" Value="100" ValueChanged="OnLocalMaxUpdateChanged" MinimumTrackColor="DodgerBlue"/>
-                        </StackLayout>
+                            <Label Text="Force a GPS update if you move this far, regardless of time." FontSize="11" TextColor="#757575"/>
+                            <Slider x:Name="LocalMaxUpdateSlider" Minimum="50" Maximum="500" Value="100" ValueChanged="OnLocalMaxUpdateChanged" MinimumTrackColor="#1976D2" Margin="0,8,0,0"/>
+                        </VerticalStackLayout>
                     </VerticalStackLayout>
                 </Border>
-            </StackLayout>
 
-            <StackLayout Spacing="5">
-                <Grid ColumnDefinitions="*,Auto">
-                    <Label Text="Auto-Throttle Battery Threshold" FontAttributes="Bold" FontSize="12" VerticalOptions="Center"/>
-                    <Label x:Name="BatteryThrottleLabel" Grid.Column="1" Text="20%" TextColor="Red" FontAttributes="Bold"/>
-                </Grid>
-                <Label Text="Forces Eco-Tracker if battery drops below this % while in Background Sharing mode." FontSize="11" TextColor="Gray"/>
-                <Slider x:Name="BatteryThrottleSlider" Minimum="5" Maximum="50" Value="20" ValueChanged="OnBatteryThrottleChanged" MinimumTrackColor="Red"/>
-            </StackLayout>
-        </StackLayout>
+                <!-- Battery Auto-Throttle -->
+                <VerticalStackLayout Spacing="4" Margin="0,8,0,0">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <Label Text="Auto-Throttle Battery Protection" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                        <Label x:Name="BatteryThrottleLabel" Grid.Column="1" Text="20%" TextColor="#E53935" FontAttributes="Bold"/>
+                    </Grid>
+                    <Label Text="Automatically forces Eco-Tracker mode if your phone battery drops below this percentage to prevent your phone from dying during a ride." FontSize="13" TextColor="#757575"/>
+                    <Slider x:Name="BatteryThrottleSlider" Minimum="5" Maximum="50" Value="20" ValueChanged="OnBatteryThrottleChanged" MinimumTrackColor="#E53935" Margin="0,8,0,0"/>
+                </VerticalStackLayout>
+            </VerticalStackLayout>
 
-        <!-- Bottom padding for scrollability architectural -->
-        <BoxView HeightRequest="20" Color="Transparent"/>
-
-    </VerticalStackLayout>
+        </VerticalStackLayout>
+    </ScrollView>
 </ContentView>

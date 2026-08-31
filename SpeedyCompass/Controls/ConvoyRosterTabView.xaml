@@ -5,72 +5,160 @@
              xmlns:models="clr-namespace:SpeedyCompass.Models"
              x:Class="SpeedyCompass.Controls.ConvoyRosterTabView">
 
-    <VerticalStackLayout Spacing="15">
-        <!-- Status & PIN -->
+    <ContentView.Resources>
+        <Style TargetType="Border" x:Key="RiderCardStyle">
+            <Setter Property="VisualStateManager.VisualStateGroups">
+                <VisualStateGroupList>
+                    <VisualStateGroup x:Name="CommonStates">
+                        <VisualState x:Name="Normal">
+                            <VisualState.Setters>
+                                <Setter Property="Scale" Value="1.0" />
+                                <Setter Property="Opacity" Value="1.0" />
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState x:Name="Pressed">
+                            <VisualState.Setters>
+                                <Setter Property="Scale" Value="0.96" />
+                                <Setter Property="Opacity" Value="0.6" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateGroupList>
+            </Setter>
+        </Style>
+    </ContentView.Resources>
+
+    <VerticalStackLayout Spacing="16" Padding="16,8">
+
+        <!-- REVERTED: Status & PIN back to original implementation -->
         <StackLayout Orientation="Horizontal" HorizontalOptions="Center" Spacing="8" Margin="0,0,0,5">
             <BoxView x:Name="StatusDot" WidthRequest="10" HeightRequest="10" CornerRadius="5" BackgroundColor="Orange" VerticalOptions="Center"/>
             <Label x:Name="StatusLabel" Text="Connecting..." VerticalOptions="Center" FontSize="13" FontAttributes="Bold" TextColor="Gray"/>
         </StackLayout>
 
-        <Border x:Name="AdminPinCard" IsVisible="False" StrokeThickness="0" Margin="0,0,0,10">
+        <!-- Admin PIN Card -->
+        <Border x:Name="AdminPinCard" IsVisible="False" StrokeThickness="0" Margin="0,0,0,16">
             <Border.Background>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                    <GradientStop Color="#0066CC" Offset="0.0" />
-                    <GradientStop Color="#003399" Offset="1.0" />
+                    <GradientStop Color="#1565C0" Offset="0.0" />
+                    <GradientStop Color="#0D47A1" Offset="1.0" />
                 </LinearGradientBrush>
             </Border.Background>
             <Border.StrokeShape>
                 <RoundRectangle CornerRadius="16" />
             </Border.StrokeShape>
+            <Border.Shadow>
+                <Shadow Brush="#0D47A1" Offset="0,6" Radius="12" Opacity="0.3"/>
+            </Border.Shadow>
+
             <Grid ColumnDefinitions="*, Auto" Padding="20">
-                <StackLayout Grid.Column="0" VerticalOptions="Center" Spacing="0">
-                    <Label Text="CONVOY PIN" FontSize="11" FontAttributes="Bold" TextColor="#AADDFF" CharacterSpacing="1"/>
-                    <!-- THE FIX: Explicit Name instead of {Binding} -->
-                    <Label x:Name="ConvoyPinLabel" Text="------" FontSize="32" FontAttributes="Bold" TextColor="White" CharacterSpacing="4"/>
-                    <Label Text="Share this with riders to join" FontSize="12" TextColor="#AADDFF" Margin="0,2,0,0"/>
-                </StackLayout>
-                <Button Grid.Column="1" Text="📋 Copy" BackgroundColor="#33FFFFFF" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="45" Padding="15,0" Clicked="OnCopyPinClicked" VerticalOptions="Center"/>
+                <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
+                    <Label Text="CONVOY PIN" FontSize="11" FontAttributes="Bold" TextColor="#90CAF9" CharacterSpacing="1.5"/>
+                    <Label x:Name="ConvoyPinLabel" Text="------" FontSize="36" FontAttributes="Bold" TextColor="White" CharacterSpacing="6"/>
+                    <Label Text="Share this with riders to join" FontSize="12" TextColor="#BBDEFB" Margin="0,4,0,0"/>
+                </VerticalStackLayout>
+
+                <Border Grid.Column="1" BackgroundColor="#33FFFFFF" StrokeThickness="0" VerticalOptions="Center">
+                    <Border.StrokeShape>
+                        <RoundRectangle CornerRadius="12"/>
+                    </Border.StrokeShape>
+                    <Border.GestureRecognizers>
+                        <TapGestureRecognizer Tapped="OnCopyPinClicked" />
+                    </Border.GestureRecognizers>
+                    <HorizontalStackLayout Padding="16,12" Spacing="8" VerticalOptions="Center">
+                        <Label Text="content_copy" FontFamily="MaterialSymbols" TextColor="White" FontSize="18" VerticalOptions="Center"/>
+                        <Label Text="COPY" TextColor="White" FontAttributes="Bold" FontSize="14" VerticalOptions="Center" CharacterSpacing="1"/>
+                    </HorizontalStackLayout>
+                </Border>
             </Grid>
         </Border>
 
+        <!-- List Header -->
+        <HorizontalStackLayout Spacing="8" Margin="0,8,0,8" VerticalOptions="Center">
+            <Label Text="two_wheeler" FontFamily="MaterialSymbols" FontSize="18" TextColor="#757575" VerticalOptions="Center"/>
+            <Label Text="LIVE CONVOY SPREAD" FontSize="12" FontAttributes="Bold" TextColor="#757575" CharacterSpacing="1" VerticalOptions="Center"/>
+        </HorizontalStackLayout>
+
         <!-- UNIFIED RIDERS & TELEMETRY LIST -->
-        <Label Text="LIVE CONVOY SPREAD" FontSize="12" FontAttributes="Bold" TextColor="Gray" CharacterSpacing="1"/>
-        <CollectionView x:Name="RidersCollectionView" SelectionMode="None" MaximumHeightRequest="300">
+        <CollectionView x:Name="RidersCollectionView" SelectionMode="None">
+            <!-- NEW: Premium Empty State -->
+            <CollectionView.EmptyView>
+                <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="12" Margin="0,48,0,0">
+                    <!-- Faded radar/search icon -->
+                    <Label Text="radar" 
+                           FontFamily="MaterialSymbols" 
+                           FontSize="64" 
+                           TextColor="{AppThemeBinding Light=#E0E0E0, Dark=#424242}" 
+                           HorizontalOptions="Center" />
+
+                    <Label Text="No Riders Yet" 
+                           FontSize="18" 
+                           FontAttributes="Bold" 
+                           TextColor="{AppThemeBinding Light=#757575, Dark=#9E9E9E}" 
+                           HorizontalOptions="Center" />
+
+                    <Label Text="Waiting for riders to join using the convoy PIN..." 
+                           FontSize="14" 
+                           TextColor="{AppThemeBinding Light=#9E9E9E, Dark=#757575}" 
+                           HorizontalOptions="Center" 
+                           HorizontalTextAlignment="Center" 
+                           MaximumWidthRequest="250"/>
+                </VerticalStackLayout>
+            </CollectionView.EmptyView>
             <CollectionView.ItemTemplate>
                 <DataTemplate x:DataType="models:Rider">
-                    <Border StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" Margin="0,0,0,10">
+
+                    <Border Style="{StaticResource RiderCardStyle}" 
+                            StrokeThickness="1" 
+                            Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" 
+                            BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" 
+                            Margin="0,0,0,12">
                         <Border.StrokeShape>
-                            <RoundRectangle CornerRadius="14"/>
+                            <RoundRectangle CornerRadius="16"/>
                         </Border.StrokeShape>
                         <Border.GestureRecognizers>
-                            <!-- The CommandParameter passes the tapped Rider back to code-behind! -->
                             <TapGestureRecognizer Tapped="OnRiderTapped" CommandParameter="{Binding .}" />
                         </Border.GestureRecognizers>
-                        <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="15" Padding="15">
+
+                        <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16" Padding="16">
+
+                            <!-- Online/Offline Indicator -->
                             <Ellipse Grid.Column="0" WidthRequest="12" HeightRequest="12" VerticalOptions="Center" StrokeThickness="0">
                                 <Ellipse.Triggers>
                                     <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="True">
-                                        <Setter Property="Fill" Value="MediumSeaGreen" />
+                                        <Setter Property="Fill" Value="#00E676" />
                                     </DataTrigger>
                                     <DataTrigger TargetType="Ellipse" Binding="{Binding IsOnline}" Value="False">
-                                        <Setter Property="Fill" Value="Red" />
+                                        <Setter Property="Fill" Value="#E53935" />
                                     </DataTrigger>
                                 </Ellipse.Triggers>
                             </Ellipse>
-                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="2">
-                                <Label Text="{Binding Name}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#222, Dark=White}"/>
 
-                                <StackLayout Orientation="Horizontal" Spacing="8">
-                                    <Label Text="{Binding SpeedStr}" FontSize="12" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                                    <Label Text="{Binding StatusStr}" FontSize="12" TextColor="{Binding StatusColor}" FontAttributes="Bold"/>
-                                </StackLayout>
+                            <!-- Rider Info & Telemetry -->
+                            <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="4">
+                                <Label Text="{Binding Name}" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+
+                                <HorizontalStackLayout Spacing="12">
+                                    <HorizontalStackLayout Spacing="4">
+                                        <Label Text="speed" FontFamily="MaterialSymbols" FontSize="14" TextColor="#1E88E5" VerticalOptions="Center"/>
+                                        <Label Text="{Binding SpeedStr}" FontSize="12" TextColor="#1E88E5" FontAttributes="Bold" VerticalOptions="Center"/>
+                                    </HorizontalStackLayout>
+
+                                    <HorizontalStackLayout Spacing="4">
+                                        <Label Text="info" FontFamily="MaterialSymbols" FontSize="14" TextColor="{Binding StatusColor}" VerticalOptions="Center"/>
+                                        <Label Text="{Binding StatusStr}" FontSize="12" TextColor="{Binding StatusColor}" FontAttributes="Bold" VerticalOptions="Center"/>
+                                    </HorizontalStackLayout>
+                                </HorizontalStackLayout>
                             </VerticalStackLayout>
-                            <Border Grid.Column="2" BackgroundColor="{Binding RoleColor}" StrokeThickness="0" Padding="10,5" VerticalOptions="Center">
+
+                            <!-- Role Badge -->
+                            <Border Grid.Column="2" BackgroundColor="{Binding RoleColor}" StrokeThickness="0" Padding="12,6" VerticalOptions="Center">
                                 <Border.StrokeShape>
-                                    <RoundRectangle CornerRadius="8"/>
+                                    <RoundRectangle CornerRadius="12"/>
                                 </Border.StrokeShape>
-                                <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="11" FontAttributes="Bold" CharacterSpacing="1"/>
+                                <Label Text="{Binding RoleDisplay}" TextColor="White" FontSize="11" FontAttributes="Bold" CharacterSpacing="1.5"/>
                             </Border>
+
                         </Grid>
                     </Border>
                 </DataTemplate>

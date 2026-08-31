@@ -5,33 +5,18 @@ using SpeedyCompass.Shared.Models;
 using SpeedyCompass.Controls;
 using System.Collections.ObjectModel;
 using System.Net.Http.Json;
+using Microsoft.Extensions.Logging;
+using SpeedyCompass.Shared;
 
 namespace SpeedyCompass;
-
-public class GroupItemViewModel
-{
-    public string GroupName { get; set; }
-    public int MemberCount { get; set; }
-    public int MaxGroupSize { get; set; }
-    public bool IsMyAdmin { get; set; }
-    public bool IsMember { get; set; }
-
-    public string MemberCountDisplay => $"{MemberCount} / {MaxGroupSize} Riders";
-    public bool CanJoin => IsMyAdmin || IsMember || MemberCount < MaxGroupSize;
-
-    public string JoinButtonText => IsMyAdmin ? "Resume" : (IsMember ? "Enter" : "Join");
-    public Color JoinButtonColor => IsMyAdmin || IsMember ? Colors.DodgerBlue : Colors.MediumSeaGreen;
-}
 
 public partial class MainPage : ContentPage
 {
     private readonly SignalRService _signalRService;
     private readonly MsalAuthService _authService;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<MainPage> _logger;
 
-    // ==========================================
-    // 1. DATA BINDINGS FOR THE LIST UI
-    // ==========================================
     public ObservableCollection<GroupItemViewModel> Groups { get; set; } = new();
 
     private bool _isFetchingData;
@@ -55,7 +40,6 @@ public partial class MainPage : ContentPage
         set { _dynamicEmptyText = value; OnPropertyChanged(); }
     }
 
-    // --- Pagination State ---
     private int _currentPage = 1;
     private const int PageSize = 10;
     private string _currentSearchQuery = string.Empty;
@@ -64,14 +48,14 @@ public partial class MainPage : ContentPage
     private string CurrentGoogleId => Preferences.Default.Get("GoogleId", string.Empty);
     private string CurrentUsername => Preferences.Default.Get("username", "Rider");
 
-    public MainPage(SignalRService signalRService, MsalAuthService authService, IHttpClientFactory httpClientFactory)
+    public MainPage(SignalRService signalRService, MsalAuthService authService, IHttpClientFactory httpClientFactory, ILogger<MainPage> logger)
     {
         InitializeComponent();
         _signalRService = signalRService;
         _authService = authService;
         _httpClientFactory = httpClientFactory;
+        _logger = logger;
 
-        // THE FIX: Set the BindingContext so the XAML bindings work!
         BindingContext = this;
     }
 
@@ -79,58 +63,68 @@ public partial class MainPage : ContentPage
     {
         base.OnAppearing();
 
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] MainPage OnAppearing triggered.", flowId);
+
         if (DashboardView.IsVisible)
         {
+            _logger.LogInformation("[{FlowId}] Dashboard visible, stopping SignalR and reloading groups.", flowId);
             await _signalRService.StopAsync();
-            await LoadGroupsAsync(isLoadMore: false);
+            await LoadGroupsAsync(isLoadMore: false, flowId);
             return;
         }
 
-        await AttemptSilentLoginAsync();
+        await AttemptSilentLoginAsync(flowId);
     }
 
     // ==========================================
-    // 2. LIST EVENT HANDLERS (From the Component)
+    // LOGGING UTILITIES
     // ==========================================
-    private async void OnListRefreshed(object sender, EventArgs e)
+    private string GenerateFlowId() => CorrelationContext.GenerateNew();
+
+    private async Task HandleExceptionAsync(Exception ex, string operationName, string flowId)
     {
-        await LoadGroupsAsync(isLoadMore: false);
+        _logger.LogError(ex, "[{FlowId}] Error during {OperationName}.", flowId, operationName);
+
+        MainThread.BeginInvokeOnMainThread(async () =>
+        {
+            await DisplayAlert(
+                "System Error",
+                $"An unexpected error occurred. Please try again or contact support.\n\nError Code: {flowId}",
+                "OK");
+        });
     }
+
+    // ==========================================
+    // LIST EVENT HANDLERS
+    // ==========================================
+    private async void OnListRefreshed(object sender, EventArgs e) => await LoadGroupsAsync(isLoadMore: false, GenerateFlowId());
 
     private async void OnListSearched(object sender, string query)
     {
         _currentSearchQuery = query;
-        await LoadGroupsAsync(isLoadMore: false);
+        await LoadGroupsAsync(isLoadMore: false, GenerateFlowId());
     }
 
-    private async void OnListLoadMore(object sender, EventArgs e)
-    {
-        await LoadGroupsAsync(isLoadMore: true);
-    }
+    private async void OnListLoadMore(object sender, EventArgs e) => await LoadGroupsAsync(isLoadMore: true, GenerateFlowId());
 
-    private void OnListJoin(object sender, GroupItemViewModel groupData)
-    {
-        OnJoinGroupClicked(this, groupData);
-    }
+    private void OnListJoin(object sender, GroupItemViewModel groupData) => OnJoinGroupClicked(this, groupData);
 
-    private void OnListDelete(object sender, string groupName)
-    {
-        OnDeleteGroupClicked(this, groupName);
-    }
-
+    private void OnListDelete(object sender, string groupName) => OnDeleteGroupClicked(this, groupName);
 
     // ==========================================
-    // 3. PAGINATED DATA LOADER
+    // PAGINATED DATA LOADER
     // ==========================================
-    private async Task LoadGroupsAsync(bool isLoadMore = false)
+    private async Task LoadGroupsAsync(bool isLoadMore, string flowId)
     {
+        _logger.LogInformation("[{FlowId}] Starting LoadGroupsAsync. IsLoadMore: {IsLoadMore}, CurrentPage: {Page}", flowId, isLoadMore, _currentPage);
+
         if (!isLoadMore)
         {
             _currentPage = 1;
             _hasMoreData = true;
-            IsFetchingData = true; // Shows the full-screen overlay
+            IsFetchingData = true;
 
-            // Update the empty message depending on if they are searching
             DynamicEmptyText = string.IsNullOrWhiteSpace(_currentSearchQuery)
                 ? "No active convoys right now."
                 : $"No convoys found matching '{_currentSearchQuery}'.";
@@ -138,7 +132,7 @@ public partial class MainPage : ContentPage
         else
         {
             if (!_hasMoreData) return;
-            IsFetchingNextPage = true; // Shows the footer spinner
+            IsFetchingNextPage = true;
             _currentPage++;
         }
 
@@ -149,21 +143,18 @@ public partial class MainPage : ContentPage
 
             if (string.IsNullOrEmpty(googleId)) throw new NullReferenceException("GoogleId cannot be null/empty.");
 
-            // -------------------------------------------------------------------------
-            // THE FIX: Pass Search & Pagination info to your ASP.NET Backend
-            // You will need to update your Backend Controller to accept these variables!
-            // -------------------------------------------------------------------------
             string url = $"api/groups?googleId={googleId}&searchTerm={Uri.EscapeDataString(_currentSearchQuery)}&page={_currentPage}&pageSize={PageSize}";
+
+            _logger.LogInformation("[{FlowId}] Fetching groups from API: {Url}", flowId, url);
             var fetchedGroups = await client.GetFromJsonAsync<List<ActiveGroupDto>>(url) ?? new List<ActiveGroupDto>();
 
-            if (!isLoadMore)
-            {
-                Groups.Clear();
-            }
+            _logger.LogInformation("[{FlowId}] Successfully fetched {Count} groups.", flowId, fetchedGroups.Count);
 
-            // If the backend returned fewer items than the page size, we hit the end of the list
+            if (!isLoadMore) Groups.Clear();
+
             if (fetchedGroups.Count < PageSize)
             {
+                _logger.LogInformation("[{FlowId}] Reached end of group list data.", flowId);
                 _hasMoreData = false;
             }
 
@@ -181,23 +172,24 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error fetching groups: {ex.Message}");
-            if (isLoadMore) _currentPage--; // Roll back the page count if it failed to load
+            if (isLoadMore) _currentPage--;
+            _logger.LogError(ex, "[{FlowId}] Failed to load groups.", flowId);
         }
         finally
         {
             IsFetchingData = false;
             IsFetchingNextPage = false;
             GroupsListControl.EndRefresh();
+            _logger.LogInformation("[{FlowId}] Finished LoadGroupsAsync.", flowId);
         }
     }
 
-
     // ==========================================
-    // 4. AUTHENTICATION & LOGIN FLOW
+    // AUTHENTICATION & LOGIN FLOW
     // ==========================================
-    private async Task AttemptSilentLoginAsync()
+    private async Task AttemptSilentLoginAsync(string flowId)
     {
+        _logger.LogInformation("[{FlowId}] Attempting Silent Auth.", flowId);
         try
         {
             var accounts = await _authService.GetAccounts();
@@ -205,40 +197,56 @@ public partial class MainPage : ContentPage
 
             if (firstAccount != null)
             {
+                _logger.LogInformation("[{FlowId}] Account found in cache. Acquiring token silently.", flowId);
                 GlobalLoadingOverlay.Show("Validating session...");
                 var authResult = await _authService.AcquireTokenSilentAsync(firstAccount);
 
                 Preferences.Default.Set("username", authResult.Account.Username);
                 Preferences.Default.Set("GoogleId", authResult.UniqueId);
 
-                bool isConnected = await ConnectSignalR(3);
+                bool isConnected = await ConnectSignalR(3, flowId);
                 if (!isConnected)
                 {
                     GlobalLoadingOverlay.Hide();
                     return;
                 }
 
-                await ProcessLoginFlow(authResult.UniqueId);
+                await ProcessLoginFlow(authResult.UniqueId, flowId);
+            }
+            else
+            {
+                _logger.LogInformation("[{FlowId}] No account found in cache. User needs to login manually.", flowId);
             }
         }
-        catch (MsalUiRequiredException) { /* Do nothing, show login UI */ }
-        catch (Exception ex) { Console.WriteLine($"Silent Auth failed: {ex.Message}"); }
+        catch (MsalUiRequiredException)
+        {
+            _logger.LogInformation("[{FlowId}] Silent auth failed, interactive login required.", flowId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[{FlowId}] Silent Auth encountered an unexpected error.", flowId);
+        }
         finally { GlobalLoadingOverlay.Hide(); }
     }
 
     private async void OnAzureLoginClicked(object sender, EventArgs e)
     {
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] User clicked Azure Login.", flowId);
+
         GlobalLoadingOverlay.Show("Authenticating...");
         try
         {
             var authResult = await _authService.LoginAsync();
             if (authResult == null)
             {
-                GlobalLoadingOverlay.Hide();
+                _logger.LogInformation("[{FlowId}] Interactive login cancelled or failed.", flowId);
                 return;
             }
 
-            await ConnectSignalR(3);
+            _logger.LogInformation("[{FlowId}] Interactive login successful for {User}.", flowId, authResult.Account.Username);
+
+            await ConnectSignalR(3, flowId);
             await _signalRService.RegisterOrUpdateUser(authResult.UniqueId, authResult.Account.Username);
             await _signalRService.StopAsync();
 
@@ -246,15 +254,15 @@ public partial class MainPage : ContentPage
             Preferences.Default.Set("GoogleId", authResult.UniqueId);
 
             GlobalLoadingOverlay.Show("Connecting to Server...");
-            bool flowControl = await ConnectSignalR(3);
+            bool flowControl = await ConnectSignalR(3, flowId);
             if (!flowControl) return;
 
             GlobalLoadingOverlay.Show("Fetching Groups...");
-            await ProcessLoginFlow(authResult.UniqueId);
+            await ProcessLoginFlow(authResult.UniqueId, flowId);
         }
         catch (Exception ex)
         {
-            await DisplayAlertAsync("Error", $"Login Failed: {ex.Message}", "OK");
+            await HandleExceptionAsync(ex, "Azure Interactive Login", flowId);
         }
         finally
         {
@@ -262,14 +270,18 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task ProcessLoginFlow(string googleId)
+    private async Task ProcessLoginFlow(string googleId, string flowId)
     {
-        await ConnectSignalR(3);
+        _logger.LogInformation("[{FlowId}] Processing login data for backend sync.", flowId);
+
+        await ConnectSignalR(3, flowId);
         var profile = await _signalRService.AuthenticateUser(googleId);
         await _signalRService.StopAsync();
 
         if (profile != null)
         {
+            _logger.LogInformation("[{FlowId}] Profile authenticated successfully.", flowId);
+
             Preferences.Default.Set("username", profile.Username);
             WelcomeNameLabel.Text = profile.Username;
 
@@ -278,6 +290,7 @@ public partial class MainPage : ContentPage
 
             if (!profile.HasConsented || string.IsNullOrEmpty(profile.EmergencyContact))
             {
+                _logger.LogInformation("[{FlowId}] Profile incomplete. Prompting mandatory setup.", flowId);
                 ProfileOverlay.LoadData(profile.Username, profile.BloodGroup, profile.EmergencyContact, profile.VehicleNumber, false, profile.HasConsented);
                 ProfileOverlay.Show(isMandatorySetup: true);
             }
@@ -288,11 +301,12 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Set("BloodGroup", profile.BloodGroup);
                 Preferences.Default.Set("HasConsented", profile.HasConsented);
 
-                await LoadGroupsAsync();
+                await LoadGroupsAsync(isLoadMore: false, flowId);
             }
         }
         else
         {
+            _logger.LogWarning("[{FlowId}] Backend returned null profile. Reverting to login view.", flowId);
             Preferences.Default.Remove("GoogleId");
             Preferences.Default.Remove("username");
             LoginView.IsVisible = true;
@@ -300,18 +314,23 @@ public partial class MainPage : ContentPage
         }
     }
 
-    private async Task<bool> ConnectSignalR(int maxRetries)
+    private async Task<bool> ConnectSignalR(int maxRetries, string flowId)
     {
+        _logger.LogInformation("[{FlowId}] Starting SignalR Connection...", flowId);
+
         for (int i = 1; i <= maxRetries; i++)
         {
             try
             {
                 if (i > 1) GlobalLoadingOverlay.Show($"Connecting... (Attempt {i}/{maxRetries})");
                 await _signalRService.StartAsync();
+
+                _logger.LogInformation("[{FlowId}] SignalR Connected successfully.", flowId);
                 return true;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                _logger.LogWarning(ex, "[{FlowId}] SignalR Connection Attempt {Attempt} Failed.", flowId, i);
                 if (i == maxRetries)
                 {
                     GlobalLoadingOverlay.Hide();
@@ -325,10 +344,12 @@ public partial class MainPage : ContentPage
     }
 
     // ==========================================
-    // 5. PROFILE & SETTINGS
+    // PROFILE & SETTINGS
     // ==========================================
     private void OnOpenProfileClicked(object sender, EventArgs e)
     {
+        _logger.LogInformation("[{FlowId}] User opened Profile UI.", GenerateFlowId());
+
         ProfileOverlay.LoadData(
             username: Preferences.Default.Get("username", "Rider"),
             bloodGroup: Preferences.Default.Get("BloodGroup", "Unknown"),
@@ -343,6 +364,9 @@ public partial class MainPage : ContentPage
 
     private async void OnProfileSaved(object sender, ProfileSavedEventArgs e)
     {
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] Saving user profile.", flowId);
+
         GlobalLoadingOverlay.Show("Saving profile...");
 
         var updatedProfile = new UserProfileDto
@@ -356,12 +380,14 @@ public partial class MainPage : ContentPage
 
         try
         {
-            await ConnectSignalR(3);
+            await ConnectSignalR(3, flowId);
             bool success = await _signalRService.SaveUserProfile(CurrentGoogleId, updatedProfile);
             await _signalRService.StopAsync();
 
             if (success)
             {
+                _logger.LogInformation("[{FlowId}] Profile saved successfully.", flowId);
+
                 Preferences.Default.Set("username", updatedProfile.Username);
                 Preferences.Default.Set("EmergencyContact", updatedProfile.EmergencyContact);
                 Preferences.Default.Set("VehicleNumber", updatedProfile.VehicleNumber);
@@ -372,12 +398,12 @@ public partial class MainPage : ContentPage
                 DeviceDisplay.Current.KeepScreenOn = e.KeepScreenOn;
                 WelcomeNameLabel.Text = updatedProfile.Username;
 
-                await LoadGroupsAsync();
+                await LoadGroupsAsync(isLoadMore: false, flowId);
             }
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Error", ex.Message, "OK");
+            await HandleExceptionAsync(ex, "Profile Saving", flowId);
         }
         finally
         {
@@ -387,13 +413,17 @@ public partial class MainPage : ContentPage
 
     private async void OnLogoutRequested(object sender, EventArgs e)
     {
-        bool confirm = await DisplayAlert("Sign Out", "Are you sure you want to log out?", "Yes", "Cancel");
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] User requested logout.", flowId);
+
+        bool confirm = await DisplayAlertAsync("Sign Out", "Are you sure you want to log out?", "Yes", "Cancel");
         if (!confirm) return;
 
         GlobalLoadingOverlay.Show("Signing out...");
         try
         {
             await _authService.LogoutAsync();
+            _logger.LogInformation("[{FlowId}] MSAL Logout successful.", flowId);
 
             Preferences.Default.Remove("GoogleId");
             Preferences.Default.Remove("username");
@@ -405,10 +435,12 @@ public partial class MainPage : ContentPage
             Groups.Clear();
             DashboardView.IsVisible = false;
             LoginView.IsVisible = true;
+
+            _logger.LogInformation("[{FlowId}] Local preferences cleared. Returned to login view.", flowId);
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Error", $"Logout Failed: {ex.Message}", "OK");
+            await HandleExceptionAsync(ex, "Logout Flow", flowId);
         }
         finally
         {
@@ -417,28 +449,44 @@ public partial class MainPage : ContentPage
     }
 
     // ==========================================
-    // 6. ADMIN & CONVOY ACTIONS
+    // ADMIN & CONVOY ACTIONS
     // ==========================================
     private async void OnDeleteGroupClicked(object sender, string groupName)
     {
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] User requested to delete group {GroupName}.", flowId, groupName);
+
         bool confirm = await DisplayAlert("Delete Group", $"Are you sure you want to delete {groupName}?", "Yes", "No");
         if (confirm)
         {
-            await ConnectSignalR(3);
-            await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
-            await _signalRService.StopAsync();
-            await LoadGroupsAsync();
+            try
+            {
+                await ConnectSignalR(3, flowId);
+                await _signalRService.DeleteGroup(groupName, CurrentGoogleId);
+                await _signalRService.StopAsync();
+
+                _logger.LogInformation("[{FlowId}] Group {GroupName} deleted successfully.", flowId, groupName);
+                await LoadGroupsAsync(isLoadMore: false, flowId);
+            }
+            catch (Exception ex)
+            {
+                await HandleExceptionAsync(ex, "Delete Group", flowId);
+            }
         }
     }
 
     private void OnOpenCreateGroupModalClicked(object sender, EventArgs e)
     {
+        _logger.LogInformation("[{FlowId}] User opened Create Group modal.", GenerateFlowId());
         ConvoySettingsOverlay.ShowForCreate();
     }
 
     private async void OnSettingsSubmitted(object sender, ConvoySettingsSubmittedEventArgs e)
     {
         if (!e.IsCreationMode) return;
+
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] Processing new group creation request for {GroupName}.", flowId, e.GroupName);
 
         GlobalLoadingOverlay.Show("Generating Convoy PIN...");
 
@@ -456,9 +504,13 @@ public partial class MainPage : ContentPage
 
         try
         {
-            await ConnectSignalR(3);
+            await ConnectSignalR(3, flowId);
+
+            _logger.LogInformation("[{FlowId}] Submitting creation payload to backend.", flowId);
             await _signalRService.CreateGroup(e.GroupName, CurrentUsername, CurrentGoogleId, generatedPin, initialSettings);
+
             var groupDetails = await _signalRService.GetGroupDetails(e.GroupName);
+            _logger.LogInformation("[{FlowId}] Group created successfully. Routing to LobbyPage.", flowId);
 
             await DisplayAlertAsync("Convoy Created! 🏍️", $"Your secure PIN is:\n\n{generatedPin}\n\nShare this with your riders so they can join.", "Let's Ride!");
 
@@ -467,7 +519,7 @@ public partial class MainPage : ContentPage
         }
         catch (Exception ex)
         {
-            await DisplayAlertAsync("Error", ex.Message, "OK");
+            await HandleExceptionAsync(ex, "Create Group", flowId);
         }
         finally
         {
@@ -477,9 +529,12 @@ public partial class MainPage : ContentPage
 
     private async void OnJoinGroupClicked(object sender, GroupItemViewModel groupData)
     {
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] User requested to join/enter group {GroupName}.", flowId, groupData.GroupName);
+
         if (groupData.IsMyAdmin || groupData.IsMember)
         {
-            await ExecuteJoinFlow(groupData.GroupName, null);
+            await ExecuteJoinFlow(groupData.GroupName, null, flowId);
         }
         else
         {
@@ -489,22 +544,39 @@ public partial class MainPage : ContentPage
 
     private async void OnJoinConfirmed(object sender, JoinGroupEventArgs e)
     {
-        await ExecuteJoinFlow(e.GroupName, e.PinCode);
+        string flowId = GenerateFlowId();
+        _logger.LogInformation("[{FlowId}] User confirmed PIN entry for {GroupName}.", flowId, e.GroupName);
+        await ExecuteJoinFlow(e.GroupName, e.PinCode, flowId);
     }
 
-    private async Task ExecuteJoinFlow(string groupName, string pinCode)
+    private async Task ExecuteJoinFlow(string groupName, string pinCode, string flowId)
     {
         GlobalLoadingOverlay.Show("Joining Convoy...");
         try
         {
-            await ConnectSignalR(3);
+            await ConnectSignalR(3, flowId);
+
+            _logger.LogInformation("[{FlowId}] Executing JoinGroup on SignalR.", flowId);
             await _signalRService.JoinGroup(groupName, CurrentUsername, CurrentGoogleId, pinCode);
+
             var groupDetails = await _signalRService.GetGroupDetails(groupName);
+
+            _logger.LogInformation("[{FlowId}] Join successful, navigating to LobbyPage.", flowId);
             await Navigation.PushAsync(new LobbyPage(_signalRService, groupDetails));
         }
         catch (Exception ex)
         {
-            await DisplayAlert("Access Denied", ex.Message, "OK");
+            // Note: If they enter the wrong PIN, we still want to show them the real error message.
+            // We only use Correlation IDs for actual system crashes.
+            if (ex.Message.Contains("PIN") || ex.Message.Contains("full"))
+            {
+                _logger.LogInformation("[{FlowId}] Access denied: {Message}", flowId, ex.Message);
+                await DisplayAlertAsync("Access Denied", ex.Message, "OK");
+            }
+            else
+            {
+                await HandleExceptionAsync(ex, "Join Group Flow", flowId);
+            }
             await _signalRService.StopAsync();
         }
         finally

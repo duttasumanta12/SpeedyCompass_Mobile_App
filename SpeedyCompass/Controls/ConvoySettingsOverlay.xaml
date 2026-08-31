@@ -5,141 +5,225 @@
              IsVisible="False"
              ZIndex="2500">
 
-    <Grid BackgroundColor="#CC000000" Padding="20">
-        <Border Margin="10,40" VerticalOptions="Center" MaximumHeightRequest="700" StrokeThickness="0" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" Padding="25">
-            <Border.StrokeShape>
-                <RoundRectangle CornerRadius="25"/>
-            </Border.StrokeShape>
-            <Grid RowDefinitions="Auto, *, Auto" RowSpacing="15">
+    <!-- Deep dark background to focus attention on the modal -->
+    <Grid BackgroundColor="#CC121212" Padding="16">
 
-                <!-- Dynamic Header -->
-                <VerticalStackLayout Grid.Row="0" Spacing="5">
-                    <Label x:Name="HeaderTitleLabel" Text="Convoy Settings" FontSize="22" FontAttributes="Bold" HorizontalOptions="Center"/>
-                    <Label x:Name="HeaderSubtitleLabel" Text="Adjust live telemetry rules." FontSize="13" TextColor="Gray" HorizontalOptions="Center" Margin="0,-5,0,5"/>
+        <Border Margin="0,40" 
+                VerticalOptions="Center" 
+                MaximumHeightRequest="750" 
+                StrokeThickness="1" 
+                Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" 
+                BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" 
+                Padding="0">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="24"/>
+            </Border.StrokeShape>
+            <Border.Shadow>
+                <Shadow Brush="Black" Offset="0,10" Opacity="0.3" Radius="20"/>
+            </Border.Shadow>
+
+            <Grid RowDefinitions="Auto, *, Auto">
+
+                <!-- ========================================== -->
+                <!-- HEADER                                     -->
+                <!-- ========================================== -->
+                <VerticalStackLayout Grid.Row="0" Spacing="4" Padding="24,24,24,16" BackgroundColor="{AppThemeBinding Light=#FAFAFA, Dark=#1A1A1A}">
+                    <HorizontalStackLayout HorizontalOptions="Center" Spacing="8">
+                        <Label Text="admin_panel_settings" FontFamily="MaterialSymbols" FontSize="26" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                        <Label x:Name="HeaderTitleLabel" Text="Convoy Settings" FontSize="20" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                    </HorizontalStackLayout>
+                    <Label x:Name="HeaderSubtitleLabel" Text="Adjust live telemetry rules and group limits." FontSize="13" TextColor="#757575" HorizontalOptions="Center" />
                 </VerticalStackLayout>
 
-                <ScrollView Grid.Row="1" VerticalScrollBarVisibility="Always">
-                    <VerticalStackLayout Spacing="15" Padding="0,5,15,5">
+                <!-- Divider -->
+                <BoxView Grid.Row="0" VerticalOptions="End" HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}"/>
 
-                        <!-- Group Name (Hidden during Edit Mode) -->
-                        <StackLayout x:Name="GroupNameContainer" Spacing="5">
-                            <Label Text="Convoy Name" FontAttributes="Bold" FontSize="14"/>
-                            <Border Stroke="#E0E0E0" StrokeThickness="1" BackgroundColor="{AppThemeBinding Light=#F9F9F9, Dark=#2A2A2A}" Padding="15,0" HeightRequest="50">
+                <!-- ========================================== -->
+                <!-- SCROLLABLE SETTINGS CONTENT                -->
+                <!-- ========================================== -->
+                <ScrollView Grid.Row="1" VerticalScrollBarVisibility="Never">
+                    <VerticalStackLayout Spacing="24" Padding="24">
+
+                        <!-- GROUP NAME -->
+                        <VerticalStackLayout x:Name="GroupNameContainer" Spacing="8">
+                            <Label Text="Convoy Name" FontAttributes="Bold" FontSize="14" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                            <Border Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" StrokeThickness="1" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#252525}" Padding="16,0" HeightRequest="52">
                                 <Border.StrokeShape>
                                     <RoundRectangle CornerRadius="12"/>
                                 </Border.StrokeShape>
-                                <Entry x:Name="GroupNameEntry" Placeholder="e.g. Sunday Morning Canyon" BackgroundColor="Transparent" VerticalOptions="Center"/>
+                                <Entry x:Name="GroupNameEntry" Placeholder="e.g. Sunday Morning Canyon" TextColor="{AppThemeBinding Light=#212121, Dark=White}" BackgroundColor="Transparent" VerticalOptions="Center"/>
                             </Border>
-                        </StackLayout>
+                        </VerticalStackLayout>
 
-                        <!-- Group Size -->
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Max Group Size" FontAttributes="Bold" VerticalOptions="Center"/>
-                                <Label x:Name="SizeValueLabel" Grid.Column="1" Text="15 Riders" TextColor="MediumSeaGreen" FontAttributes="Bold"/>
+                        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}" />
+
+                        <!-- GROUP SIZE -->
+                        <Grid ColumnDefinitions="Auto, *" ColumnSpacing="16">
+                            <Label Grid.Column="0" Text="groups" FontFamily="MaterialSymbols" FontSize="24" TextColor="#00E676" VerticalOptions="Start" Margin="0,2,0,0"/>
+                            <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Max Group Size" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                                    <Label x:Name="SizeValueLabel" Grid.Column="1" Text="15 Riders" TextColor="#00E676" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Cap the total number of allowed riders in this group." FontSize="13" TextColor="#757575"/>
+                                <Slider x:Name="SizeSlider" Minimum="2" Maximum="30" Value="15" ValueChanged="OnSizeSliderChanged" MinimumTrackColor="#00E676" Margin="0,4,0,0"/>
+                            </VerticalStackLayout>
+                        </Grid>
+
+                        <!-- LAG WARNING -->
+                        <Grid ColumnDefinitions="Auto, *" ColumnSpacing="16">
+                            <Label Grid.Column="0" Text="social_distance" FontFamily="MaterialSymbols" FontSize="24" TextColor="#1E88E5" VerticalOptions="Start" Margin="0,2,0,0"/>
+                            <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Lag Warning Distance" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                                    <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="#1E88E5" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Alerts the Lead rider if someone falls this far behind." FontSize="13" TextColor="#757575"/>
+                                <Slider x:Name="LagSlider" Minimum="0" Maximum="5000" Value="500" ValueChanged="OnSliderChanged" MinimumTrackColor="#1E88E5" Margin="0,4,0,0"/>
+                            </VerticalStackLayout>
+                        </Grid>
+
+                        <!-- REROUTE SENSITIVITY -->
+                        <Grid ColumnDefinitions="Auto, *" ColumnSpacing="16">
+                            <Label Grid.Column="0" Text="alt_route" FontFamily="MaterialSymbols" FontSize="24" TextColor="#FB8C00" VerticalOptions="Start" Margin="0,2,0,0"/>
+                            <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Reroute Sensitivity" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                                    <Label x:Name="SensitivityValueLabel" Grid.Column="1" Text="200m" TextColor="#FB8C00" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Distance threshold before the app declares a rider 'Off Route'. A loose setting allows for slight GPS variance." FontSize="13" TextColor="#757575" LineHeight="1.2"/>
+                                <Slider x:Name="SensitivitySlider" Minimum="50" Maximum="1000" Value="200" ValueChanged="OnSliderChanged" MinimumTrackColor="#FB8C00" Margin="0,4,0,0"/>
+                            </VerticalStackLayout>
+                        </Grid>
+
+                        <!-- SPLINTER WARNING -->
+                        <Grid ColumnDefinitions="Auto, *" ColumnSpacing="16">
+                            <Label Grid.Column="0" Text="linear_scale" FontFamily="MaterialSymbols" FontSize="24" TextColor="#FB8C00" VerticalOptions="Start" Margin="0,2,0,0"/>
+                            <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Splinter Warning" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                                    <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="#FB8C00" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Alerts the group if the convoy stretches too far from the Lead rider to the Sweep rider." FontSize="13" TextColor="#757575" LineHeight="1.2"/>
+                                <Slider x:Name="SplinterSlider" Minimum="0" Maximum="10000" Value="2000" ValueChanged="OnSliderChanged" MinimumTrackColor="#FB8C00" Margin="0,4,0,0"/>
+                            </VerticalStackLayout>
+                        </Grid>
+
+                        <!-- PITSTOP REMINDER -->
+                        <Grid ColumnDefinitions="Auto, *" ColumnSpacing="16">
+                            <Label Grid.Column="0" Text="local_cafe" FontFamily="MaterialSymbols" FontSize="24" TextColor="#1E88E5" VerticalOptions="Start" Margin="0,2,0,0"/>
+                            <VerticalStackLayout Grid.Column="1" Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Pitstop Reminder" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                                    <Label x:Name="PitstopValueLabel" Grid.Column="1" Text="100 km" TextColor="#1E88E5" FontAttributes="Bold"/>
+                                </Grid>
+                                <Label Text="Automated voice reminder for a rest stop. Set to 0 to turn off." FontSize="13" TextColor="#757575"/>
+                                <Slider x:Name="PitstopSlider" Minimum="0" Maximum="300" Value="100" ValueChanged="OnSliderChanged" MinimumTrackColor="#1E88E5" Margin="0,4,0,0"/>
+                            </VerticalStackLayout>
+                        </Grid>
+
+                        <!-- DYNAMIC ROUTING -->
+                        <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#252525}" Padding="16">
+                            <Border.StrokeShape>
+                                <RoundRectangle CornerRadius="12"/>
+                            </Border.StrokeShape>
+                            <Grid ColumnDefinitions="*, Auto" ColumnSpacing="16">
+                                <VerticalStackLayout Grid.Column="0" Spacing="4" VerticalOptions="Center">
+                                    <HorizontalStackLayout Spacing="8">
+                                        <Label Text="sync_alt" FontFamily="MaterialSymbols" FontSize="20" TextColor="#00E676" VerticalOptions="Center"/>
+                                        <Label Text="Dynamic Group Routing" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+                                    </HorizontalStackLayout>
+                                    <Label Text="Automatically synchronize the Lead rider's route and waypoints to the entire group." FontSize="13" TextColor="#757575" LineHeight="1.2"/>
+                                </VerticalStackLayout>
+                                <Switch x:Name="DynamicRoutingSwitch" Grid.Column="1" OnColor="#00E676" IsToggled="True" VerticalOptions="Center"/>
                             </Grid>
-                            <Label Text="Cap the total number of allowed riders." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="SizeSlider" Minimum="2" Maximum="30" Value="15" ValueChanged="OnSizeSliderChanged" MinimumTrackColor="MediumSeaGreen"/>
-                        </StackLayout>
+                        </Border>
 
-                        <!-- Lag Warning -->
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Lag Warning Distance" FontAttributes="Bold" VerticalOptions="Center"/>
-                                <Label x:Name="LagValueLabel" Grid.Column="1" Text="500m" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                            </Grid>
-                            <Label Text="Alerts the Lead if a rider falls this far behind." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="LagSlider" Minimum="0" Maximum="5000" Value="500" ValueChanged="OnSliderChanged" MinimumTrackColor="DodgerBlue"/>
-                        </StackLayout>
+                        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}" />
 
-                        <!-- NEW: Off-Route Detection Sensitivity -->
-                        <!-- Architectural standard: Loose for Highways, Tight for Cities. Crucial standard standard for Perspective #2 users. -->
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Reroute Sensitivity" FontAttributes="Bold" VerticalOptions="Center"/>
-                                <Label x:Name="SensitivityValueLabel" Grid.Column="1" Text="200m" TextColor="Orange" FontAttributes="Bold"/>
-                            </Grid>
-                            <Label Text="Distance standard before app standard says standard standard 'Diverted'. Loose standard allows standard Gmaps variance." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="SensitivitySlider" Minimum="50" Maximum="1000" Value="200" ValueChanged="OnSliderChanged" MinimumTrackColor="Orange"/>
-                        </StackLayout>
+                        <!-- ========================================== -->
+                        <!-- NETWORK PROTOCOL                           -->
+                        <!-- ========================================== -->
+                        <VerticalStackLayout Spacing="16">
+                            <Label Text="NETWORK SYNC PROTOCOL" FontAttributes="Bold" FontSize="12" TextColor="#9E9E9E" CharacterSpacing="1"/>
 
-                        <!-- Splinter Warning -->
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Splinter Warning" FontAttributes="Bold" VerticalOptions="Center"/>
-                                <Label x:Name="SplinterValueLabel" Grid.Column="1" Text="2000m" TextColor="Orange" FontAttributes="Bold"/>
-                            </Grid>
-                            <Label Text="Alerts if the convoy stretches too far from front to back." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="SplinterSlider" Minimum="0" Maximum="10000" Value="2000" ValueChanged="OnSliderChanged" MinimumTrackColor="Orange"/>
-                        </StackLayout>
+                            <!-- Protocol Picker -->
+                            <VerticalStackLayout Spacing="8">
+                                <Label Text="Convoy Tracking Protocol" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                                <Label Text="Dictates network aggressiveness for all riders. City driving requires faster updates." FontSize="13" TextColor="#757575"/>
+                                <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F5F5F5, Dark=#252525}" HeightRequest="48" Margin="0,4,0,0">
+                                    <Border.StrokeShape>
+                                        <RoundRectangle CornerRadius="12"/>
+                                    </Border.StrokeShape>
+                                    <Picker x:Name="ProtocolPicker" Title="Select Protocol" FontSize="14" TextColor="{AppThemeBinding Light=#212121, Dark=White}" Margin="8,0">
+                                        <Picker.Items>
+                                            <x:String>City / Tight Formations (Aggressive)</x:String>
+                                            <x:String>Highway / Long Haul (Optimized)</x:String>
+                                        </Picker.Items>
+                                    </Picker>
+                                </Border>
+                            </VerticalStackLayout>
 
-                        <!-- Pitstop Reminder -->
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Pitstop Reminder" FontAttributes="Bold" VerticalOptions="Center"/>
-                                <Label x:Name="PitstopValueLabel" Grid.Column="1" Text="100 km" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                            </Grid>
-                            <Label Text="Voice reminder for a rest stop (0 to turn off)." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="PitstopSlider" Minimum="0" Maximum="300" Value="100" ValueChanged="OnSliderChanged" MinimumTrackColor="DodgerBlue"/>
-                        </StackLayout>
+                            <!-- Min Distance -->
+                            <VerticalStackLayout Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Min Broadcast Distance" FontAttributes="Bold" FontSize="14" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}"/>
+                                    <Label x:Name="MinUpdateValueLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="#1E88E5"/>
+                                </Grid>
+                                <Label Text="Frequent updates at low speeds. Higher values conserve battery group-wide." FontSize="12" TextColor="#757575"/>
+                                <Slider x:Name="MinUpdateSlider" Minimum="5" Maximum="50" Value="10" MinimumTrackColor="#1E88E5" ValueChanged="OnSliderChanged"/>
+                            </VerticalStackLayout>
 
-                        <!-- Dynamic Routing -->
-                        <StackLayout Orientation="Horizontal" Spacing="10" Margin="0,5,0,5">
-                            <Switch x:Name="DynamicRoutingSwitch" OnColor="MediumSeaGreen" IsToggled="True" VerticalOptions="Center"/>
-                            <StackLayout VerticalOptions="Center">
-                                <Label Text="Dynamic Group Routing" FontAttributes="Bold" FontSize="14"/>
-                                <Label Text="Sync the Lead's route to the whole group." FontSize="12" TextColor="Gray"/>
-                            </StackLayout>
-                        </StackLayout>
+                            <!-- Max Distance -->
+                            <VerticalStackLayout Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <Label Text="Max Broadcast Distance" FontAttributes="Bold" FontSize="14" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}"/>
+                                    <Label x:Name="MaxUpdateValueLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="#1E88E5"/>
+                                </Grid>
+                                <Label Text="Distance threshold for guaranteed location updates at high speeds (Highway driving)." FontSize="12" TextColor="#757575"/>
+                                <Slider x:Name="MaxUpdateSlider" Minimum="50" Maximum="500" Value="100" MinimumTrackColor="#1E88E5" ValueChanged="OnSliderChanged"/>
+                            </VerticalStackLayout>
 
-                        <!-- Divider -->
-                        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#E0E0E0, Dark=#333}" Margin="0,10"/>
-
-                        <!-- Broadcast Optimizations (Admin-Enforced Protocol) -->
-                        <Label Text="Network Sync Protocol" FontAttributes="Bold" FontSize="16" HorizontalOptions="Center" Margin="0,0,0,10"/>
-
-                        <StackLayout Spacing="5">
-                            <Label Text="Convoy Tracking Protocol" FontAttributes="Bold" VerticalOptions="Center"/>
-                            <Label Text="Dictates network aggressiveness for all riders." FontSize="11" TextColor="Gray"/>
-                            <Border StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" BackgroundColor="{AppThemeBinding Light=#F8F9FA, Dark=#1E1E1E}" HeightRequest="40">
-                                <Border.StrokeShape>
-                                    <RoundRectangle CornerRadius="8"/>
-                                </Border.StrokeShape>
-                                <Picker x:Name="ProtocolPicker" Title="Select Protocol" FontSize="13">
-                                    <Picker.Items>
-                                        <x:String>City / Tight Formations (Aggressive)</x:String>
-                                        <x:String>Highway / Long Haul (Optimized)</x:String>
-                                    </Picker.Items>
-                                </Picker>
-                            </Border>
-                        </StackLayout>
-
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Min Broadcast Distance" FontAttributes="Bold" FontSize="14"/>
-                                <Label x:Name="MinUpdateValueLabel" Grid.Column="1" Text="10m" FontAttributes="Bold" TextColor="DodgerBlue"/>
-                            </Grid>
-                            <Label Text="Low standard speed standard updates standard (City standard driving). Higher standard value saves battery room-wide." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="MinUpdateSlider" Minimum="5" Maximum="50" Value="10" MinimumTrackColor="DodgerBlue" ValueChanged="OnSliderChanged"/>
-                        </StackLayout>
-
-                        <StackLayout Spacing="5">
-                            <Grid ColumnDefinitions="*,Auto">
-                                <Label Text="Max Broadcast Distance" FontAttributes="Bold" FontSize="14"/>
-                                <Label x:Name="MaxUpdateValueLabel" Grid.Column="1" Text="100m" FontAttributes="Bold" TextColor="DodgerBlue"/>
-                            </Grid>
-                            <Label Text="High standard speed standard updates standard (Highway standard driving)." FontSize="11" TextColor="Gray"/>
-                            <Slider x:Name="MaxUpdateSlider" Minimum="50" Maximum="500" Value="100" MinimumTrackColor="DodgerBlue" ValueChanged="OnSliderChanged"/>
-                        </StackLayout>
-
+                        </VerticalStackLayout>
                     </VerticalStackLayout>
                 </ScrollView>
 
-                <!-- Dynamic Buttons -->
-                <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="15">
-                    <Button Grid.Column="0" Text="Cancel" BackgroundColor="{AppThemeBinding Light=#F0F0F0, Dark=#333}" TextColor="{AppThemeBinding Light=#333, Dark=White}" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnCancelClicked"/>
-                    <Button x:Name="SubmitButton" Grid.Column="1" Text="Generate PIN" BackgroundColor="DarkOrange" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="50" Clicked="OnSubmitClicked"/>
+                <!-- Divider -->
+                <BoxView Grid.Row="1" VerticalOptions="End" HeightRequest="1" Color="{AppThemeBinding Light=#EEEEEE, Dark=#2A2A2A}"/>
+
+                <!-- ========================================== -->
+                <!-- BOTTOM ACTIONS                             -->
+                <!-- ========================================== -->
+                <Grid Grid.Row="2" ColumnDefinitions="*,*" ColumnSpacing="16" Padding="24" BackgroundColor="{AppThemeBinding Light=#FAFAFA, Dark=#1A1A1A}">
+                    <Button Grid.Column="0" 
+                            Text="CANCEL" 
+                            BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#333333}" 
+                            TextColor="{AppThemeBinding Light=#424242, Dark=White}" 
+                            FontAttributes="Bold" 
+                            FontSize="14"
+                            CharacterSpacing="1"
+                            CornerRadius="24" 
+                            HeightRequest="52" 
+                            Clicked="OnCancelClicked"/>
+
+                    <!-- Primary Call to Action -->
+                    <Button x:Name="SubmitButton" 
+                            Grid.Column="1" 
+                            Text="GENERATE PIN" 
+                            BackgroundColor="#FB8C00" 
+                            TextColor="White" 
+                            FontAttributes="Bold" 
+                            FontSize="14"
+                            CharacterSpacing="1"
+                            CornerRadius="24" 
+                            HeightRequest="52" 
+                            Clicked="OnSubmitClicked">
+                        <Button.Shadow>
+                            <Shadow Brush="#FB8C00" Offset="0,4" Opacity="0.3" Radius="8"/>
+                        </Button.Shadow>
+                    </Button>
                 </Grid>
+
             </Grid>
         </Border>
     </Grid>

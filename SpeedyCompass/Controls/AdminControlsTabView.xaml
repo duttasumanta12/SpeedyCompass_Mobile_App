@@ -2,13 +2,128 @@
 <ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="SpeedyCompass.Controls.AdminControlsTabView">
-    <VerticalStackLayout Spacing="15">
-        <Label Text="Ride Management" FontAttributes="Bold" FontSize="18" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-        <Button x:Name="PauseNavBtn" Text="⏸ Pause Ride" BackgroundColor="Goldenrod" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnPauseNavClicked" />
-        <Button x:Name="ResumeNavBtn" Text="▶️ Resume Ride" IsVisible="False" BackgroundColor="MediumSeaGreen" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnResumeJourneyClicked" />
-        <Button x:Name="MeetupPointBtn" Text="🔄 Sync Routes (Late Joiners)" BackgroundColor="DarkViolet" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnGenerateMeetupClicked" />
-        <Button Text="⚙️ Group Settings" BackgroundColor="DimGray" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnAdminSettingsClicked" />
-        <Button x:Name="CompleteNavBtn" Text="🏁 Finish Route" BackgroundColor="Crimson" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnCompleteNavClicked" />
-        <Button x:Name="ResetTripBtn" Text="✖️ Cancel / Reset Trip" BackgroundColor="Red" TextColor="White" HeightRequest="55" CornerRadius="15" FontAttributes="Bold" Clicked="OnResetDestinationClicked" />
+
+    <!-- UPGRADE: Included the Tap Animation Style locally -->
+    <ContentView.Resources>
+        <Style TargetType="Border" x:Key="AdminBtnStyle">
+            <Setter Property="StrokeThickness" Value="0" />
+            <Setter Property="StrokeShape">
+                <Setter.Value>
+                    <RoundRectangle CornerRadius="16" />
+                </Setter.Value>
+            </Setter>
+            <Setter Property="VisualStateManager.VisualStateGroups">
+                <VisualStateGroupList>
+                    <VisualStateGroup x:Name="CommonStates">
+                        <VisualState x:Name="Normal">
+                            <VisualState.Setters>
+                                <Setter Property="Scale" Value="1.0" />
+                                <Setter Property="Opacity" Value="1.0" />
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState x:Name="Pressed">
+                            <VisualState.Setters>
+                                <Setter Property="Scale" Value="0.96" />
+                                <Setter Property="Opacity" Value="0.6" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateGroupList>
+            </Setter>
+        </Style>
+    </ContentView.Resources>
+
+    <VerticalStackLayout Spacing="24" Padding="16,24">
+
+        <!-- HEADER -->
+        <HorizontalStackLayout Spacing="12" VerticalOptions="Center">
+            <Label Text="admin_panel_settings" FontFamily="MaterialSymbols" FontSize="26" TextColor="{AppThemeBinding Light=#1976D2, Dark=#64B5F6}" VerticalOptions="Center"/>
+            <Label Text="RIDE MANAGEMENT" FontAttributes="Bold" FontSize="16" CharacterSpacing="1.5" TextColor="{AppThemeBinding Light=#212121, Dark=White}" VerticalOptions="Center"/>
+        </HorizontalStackLayout>
+
+        <!-- ========================================== -->
+        <!-- ZONE 1: PRIMARY RIDE CONTROLS              -->
+        <!-- ========================================== -->
+        <VerticalStackLayout Spacing="12">
+
+            <!-- Pause Nav -->
+            <Border x:Name="PauseNavBtn" HeightRequest="64" BackgroundColor="#F57C00" Style="{StaticResource AdminBtnStyle}">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnPauseNavClicked" />
+                </Border.GestureRecognizers>
+                <HorizontalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
+                    <Label Text="pause" FontFamily="MaterialSymbols" FontSize="24" TextColor="White" VerticalOptions="Center"/>
+                    <Label Text="PAUSE RIDE" FontSize="16" FontAttributes="Bold" TextColor="White" CharacterSpacing="1" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+            </Border>
+
+            <!-- Resume Nav (Hidden by default) -->
+            <Border x:Name="ResumeNavBtn" HeightRequest="64" BackgroundColor="#00E676" Style="{StaticResource AdminBtnStyle}" IsVisible="False">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnResumeJourneyClicked" />
+                </Border.GestureRecognizers>
+                <HorizontalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
+                    <Label Text="play_arrow" FontFamily="MaterialSymbols" FontSize="24" TextColor="#1B5E20" VerticalOptions="Center"/>
+                    <Label Text="RESUME RIDE" FontSize="16" FontAttributes="Bold" TextColor="#1B5E20" CharacterSpacing="1" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+            </Border>
+
+            <!-- Complete Nav -->
+            <Border x:Name="CompleteNavBtn" HeightRequest="64" BackgroundColor="#3949AB" Style="{StaticResource AdminBtnStyle}">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnCompleteNavClicked" />
+                </Border.GestureRecognizers>
+                <HorizontalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
+                    <Label Text="sports_score" FontFamily="MaterialSymbols" FontSize="24" TextColor="White" VerticalOptions="Center"/>
+                    <Label Text="FINISH ROUTE" FontSize="16" FontAttributes="Bold" TextColor="White" CharacterSpacing="1" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+            </Border>
+
+        </VerticalStackLayout>
+
+        <!-- Subtle Divider -->
+        <BoxView HeightRequest="1" Color="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" Margin="0,4" />
+
+        <!-- ========================================== -->
+        <!-- ZONE 2: UTILITIES (Grid Layout)            -->
+        <!-- ========================================== -->
+        <Grid ColumnDefinitions="*, *" ColumnSpacing="12">
+
+            <Border x:Name="MeetupPointBtn" Grid.Column="0" HeightRequest="80" BackgroundColor="{AppThemeBinding Light=#F3E5F5, Dark=#38006B}" Style="{StaticResource AdminBtnStyle}">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnGenerateMeetupClicked" />
+                </Border.GestureRecognizers>
+                <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="4">
+                    <Label Text="sync" FontFamily="MaterialSymbols" FontSize="28" TextColor="{AppThemeBinding Light=#8E24AA, Dark=#CE93D8}" HorizontalOptions="Center"/>
+                    <Label Text="SYNC ROUTES" FontSize="12" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#8E24AA, Dark=#CE93D8}" HorizontalOptions="Center"/>
+                </VerticalStackLayout>
+            </Border>
+
+            <Border Grid.Column="1" HeightRequest="80" BackgroundColor="{AppThemeBinding Light=#EEEEEE, Dark=#424242}" Style="{StaticResource AdminBtnStyle}">
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnAdminSettingsClicked" />
+                </Border.GestureRecognizers>
+                <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="4">
+                    <Label Text="settings" FontFamily="MaterialSymbols" FontSize="28" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" HorizontalOptions="Center"/>
+                    <Label Text="SETTINGS" FontSize="12" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" HorizontalOptions="Center"/>
+                </VerticalStackLayout>
+            </Border>
+
+        </Grid>
+
+        <!-- ========================================== -->
+        <!-- ZONE 3: DANGER (Ghost Button)              -->
+        <!-- ========================================== -->
+        <!-- UPGRADE: Transparent background with red stroke explicitly defines this as a destructive action -->
+        <Border x:Name="ResetTripBtn" HeightRequest="64" BackgroundColor="Transparent" StrokeThickness="2" Stroke="#E53935" Margin="0,12,0,0" Style="{StaticResource AdminBtnStyle}">
+            <Border.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnResetDestinationClicked" />
+            </Border.GestureRecognizers>
+            <HorizontalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
+                <Label Text="cancel" FontFamily="MaterialSymbols" FontSize="24" TextColor="#E53935" VerticalOptions="Center"/>
+                <Label Text="CANCEL TRIP" FontSize="16" FontAttributes="Bold" TextColor="#E53935" CharacterSpacing="1" VerticalOptions="Center"/>
+            </HorizontalStackLayout>
+        </Border>
+
     </VerticalStackLayout>
 </ContentView>

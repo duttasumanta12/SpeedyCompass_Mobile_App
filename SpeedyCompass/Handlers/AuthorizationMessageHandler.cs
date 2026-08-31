@@ -1,5 +1,6 @@
-﻿using System.Net.Http.Headers;
-using Microsoft.Identity.Client;
+﻿using Microsoft.Identity.Client;
+using SpeedyCompass.Shared;
+using System.Net.Http.Headers;
 
 namespace SpeedyCompass.Services;
 
@@ -14,6 +15,10 @@ public class AuthorizationMessageHandler : DelegatingHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
+        if (!string.IsNullOrEmpty(CorrelationContext.Current))
+        {
+            request.Headers.Add("X-Correlation-ID", CorrelationContext.Current);
+        }
         // 1. Get the current user account
         var accounts = await _authService.GetAccounts();
         var account = accounts.FirstOrDefault();

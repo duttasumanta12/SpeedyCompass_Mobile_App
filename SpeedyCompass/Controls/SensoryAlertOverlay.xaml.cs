@@ -2,7 +2,6 @@ namespace SpeedyCompass.Controls;
 
 public partial class SensoryAlertOverlay : ContentView
 {
-    // Expose events so LobbyPage can handle the network calls
     public event EventHandler CrashCancelled;
     public event EventHandler CrashEmergencyConfirmed;
 
@@ -11,7 +10,21 @@ public partial class SensoryAlertOverlay : ContentView
         InitializeComponent();
     }
 
-    // Existing sensory flash logic
+    // NEW: Helper method to generate premium gradients dynamically
+    private void ApplyBackgroundGradient(Color startColor, Color endColor)
+    {
+        AlertBackgroundGrid.Background = new LinearGradientBrush
+        {
+            StartPoint = new Point(0, 0),
+            EndPoint = new Point(0, 1),
+            GradientStops = new GradientStopCollection
+            {
+                new GradientStop { Color = startColor, Offset = 0.0f },
+                new GradientStop { Color = endColor, Offset = 1.0f }
+            }
+        };
+    }
+
     public async Task TriggerAlertAsync(string alertType, string senderName, string alertMessage = "", Color alertColor = default)
     {
         int durationSeconds = 5;
@@ -20,30 +33,33 @@ public partial class SensoryAlertOverlay : ContentView
 
         if (alertType == "Emergency")
         {
-            AlertBackgroundGrid.BackgroundColor = Colors.Red;
+            ApplyBackgroundGradient(Color.FromArgb("#E53935"), Color.FromArgb("#B71C1C")); // Red gradient
             AlertTitleLabel.Text = "EMERGENCY STOP!";
-            AlertIconLabel.Text = "🛑";
+            AlertIconLabel.Text = "warning";
             durationSeconds = 10;
         }
         else if (alertType == "Refuel")
         {
-            AlertBackgroundGrid.BackgroundColor = Colors.DarkOrange;
+            ApplyBackgroundGradient(Color.FromArgb("#FFB74D"), Color.FromArgb("#F57C00")); // Orange gradient
             AlertTitleLabel.Text = "REFUEL STOP";
-            AlertIconLabel.Text = "⛽";
+            AlertIconLabel.Text = "local_gas_station";
             durationSeconds = 5;
         }
         else if (alertType == "Rest")
         {
-            AlertBackgroundGrid.BackgroundColor = Colors.DodgerBlue;
+            ApplyBackgroundGradient(Color.FromArgb("#64B5F6"), Color.FromArgb("#1976D2")); // Blue gradient
             AlertTitleLabel.Text = "REST STOP";
-            AlertIconLabel.Text = "☕";
+            AlertIconLabel.Text = "local_cafe";
             durationSeconds = 5;
         }
         else if (alertType == "Weather")
         {
-            AlertBackgroundGrid.BackgroundColor = alertColor;
+            // Fallback to SolidColorBrush since weather color is passed dynamically
+            AlertBackgroundGrid.Background = new SolidColorBrush(alertColor);
             AlertTitleLabel.Text = $"WEATHER ALERT: {alertMessage}";
-            AlertIconLabel.Text = senderName;
+
+            // FIX: Changed from senderName to a proper Material Symbol
+            AlertIconLabel.Text = "thunderstorm";
             durationSeconds = 5;
         }
         else { return; }
@@ -69,15 +85,14 @@ public partial class SensoryAlertOverlay : ContentView
         HideAlert();
     }
 
-    // =====================================================================
-    // NEW: DEDICATED CRASH UI LOGIC
-    // =====================================================================
     public void ShowCrashAlert()
     {
         MainThread.BeginInvokeOnMainThread(() =>
         {
-            AlertBackgroundGrid.BackgroundColor = Color.FromArgb("#E6D32F2F"); // Transparent Red
-            AlertIconLabel.Text = "⚠️";
+            // Use gradient instead of flat transparent red for consistency
+            ApplyBackgroundGradient(Color.FromArgb("#E53935"), Color.FromArgb("#B71C1C"));
+
+            AlertIconLabel.Text = "car_crash";
             AlertTitleLabel.Text = "CRASH DETECTED";
             AlertSenderLabel.Text = "Are you okay?";
 
@@ -86,8 +101,6 @@ public partial class SensoryAlertOverlay : ContentView
 
             IsVisible = true;
             Opacity = 1;
-
-            // THE FIX: Must be false so the buttons can actually be clicked!
             InputTransparent = false;
         });
     }

@@ -34,10 +34,17 @@ builder.Services.AddControllers();
 // 1. Add SignalR and configure it to use Azure SignalR Service.
 // It will automatically look for a connection string in your appsettings.json
 // under the key: "Azure:SignalR:ConnectionString"
+#if DEBUG
 builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
 {
     options.EnableDetailedErrors = true;
 });//.AddAzureSignalR();
+#else
+builder.Services.AddSignalR().AddHubOptions<CompassHub>(options =>
+{
+    options.EnableDetailedErrors = true;
+}).AddAzureSignalR();
+#endif
 
 builder.Services.AddMemoryCache();
 
@@ -62,7 +69,7 @@ builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSch
     {
         OnMessageReceived = context =>
         {
-            var accessToken = context.Request.Headers.Authorization.First()?.Replace("bearer ", string.Empty, StringComparison.OrdinalIgnoreCase);
+            var accessToken = context?.Request?.Headers?.Authorization.FirstOrDefault()?.Replace("bearer ", string.Empty, StringComparison.OrdinalIgnoreCase);
             var path = context.HttpContext.Request.Path;
 
             // If the request is for our hub and contains a token, attach it

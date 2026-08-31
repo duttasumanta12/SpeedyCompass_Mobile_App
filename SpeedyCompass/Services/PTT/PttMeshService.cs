@@ -90,13 +90,21 @@ public class PttMeshService : IPttMeshService
             .ToHashSet(StringComparer.Ordinal);
 
         // Full-mesh cleanup: remove stale/offline peers no longer in roster.
-        foreach (var stalePeerId in _peers.Keys.Where(id => !targetOnlinePeerIds.Contains(id)).ToList())
+        foreach (var peerId in _peers.Keys.ToList())
         {
-            if (_peers.TryRemove(stalePeerId, out var stalePc))
+            _peers.TryGetValue(peerId, out var pc);
+
+            bool isOffline = !targetOnlinePeerIds.Contains(peerId);
+            bool isDead = pc != null && (pc.connectionState == RTCPeerConnectionState.closed || pc.connectionState == RTCPeerConnectionState.failed);
+
+            if (isOffline || isDead)
             {
-                try { stalePc.close(); } catch { /* no-op */ }
-                RemovePeerState(stalePeerId);
-                Log($"Removed stale peer '{stalePeerId}' from mesh.");
+                if (_peers.TryRemove(peerId, out var stalePc))
+                {
+                    try { stalePc.close(); } catch { /* no-op */ }
+                    RemovePeerState(peerId);
+                    Log($"Removed peer '{peerId}' from mesh (Offline: {isOffline}, Dead: {isDead}).");
+                }
             }
         }
 
@@ -480,10 +488,19 @@ public class PttMeshService : IPttMeshService
                 byte[] pcmuData = rtpPacket.Payload;
                 byte[] pcmData = new byte[pcmuData.Length * 2];
 
+                // Define a volume multiplier (adjust between 1.5f to 4.0f based on testing)
+                float volumeGain = 3.0f;
+
                 for (int i = 0; i < pcmuData.Length; i++)
                 {
                     short pcmSample = MuLawDecoder.MuLawToLinearSample(pcmuData[i]);
-                    byte[] sampleBytes = BitConverter.GetBytes(pcmSample);
+
+                    int amplified = (int)(pcmSample * volumeGain);
+
+                    if (amplified > short.MaxValue) amplified = short.MaxValue;
+                    if (amplified < short.MinValue) amplified = short.MinValue;
+
+                    byte[] sampleBytes = BitConverter.GetBytes((short)amplified);
                     pcmData[i * 2] = sampleBytes[0];
                     pcmData[(i * 2) + 1] = sampleBytes[1];
                 }
@@ -574,47 +591,80 @@ public class PttMeshService : IPttMeshService
         _lastOfferAttemptUtcByPeer[peerGoogleId] = now;
         return true;
     }
-    
-   private void TouchIncomingAudioDucking()
-   {
+
+    private void TouchIncomingAudioDucking()
+    {
         if (_audioDucking == null) return;
         if (_isMyMicOpen) return; // local speaker path already requests focus
 
-       CancellationToken token;
+        CancellationToken token;
 
         lock (_duckingLock)
         {
-           if (!_isIncomingDuckActive)
+            if (!_isIncomingDuckActive)
             {
-               try { _audioDucking.RequestFocus(); } catch { /* no-op */ }
-_isIncomingDuckActive = true;
+                try { _audioDucking.RequestFocus(); } catch { /* no-op */ }
+                _isIncomingDuckActive = true;
             }
 
-_incomingDuckReleaseCts?.Cancel();
-_incomingDuckReleaseCts?.Dispose();
-_incomingDuckReleaseCts = new CancellationTokenSource();
-token = _incomingDuckReleaseCts.Token;
+            _incomingDuckReleaseCts?.Cancel();
+            _incomingDuckReleaseCts?.Dispose();
+            _incomingDuckReleaseCts = new CancellationTokenSource();
+            token = _incomingDuckReleaseCts.Token;
         }
 
-_ = Task.Run(async () =>
-        {
-                try
-            {
-        await Task.Delay(IncomingDuckHold, token);
+        _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(IncomingDuckHold, token);
                     }
-                catch (TaskCanceledException)
-            {
+                    catch (TaskCanceledException)
+                    {
                         return;
-                   }
-    
-               lock (_duckingLock)
-                   {
+                    }
+
+                    lock (_duckingLock)
+                    {
                         if (_isMyMicOpen) return;
                         if (!_isIncomingDuckActive) return;
-        
+
                         try { _audioDucking.ReleaseFocus(); } catch { /* no-op */ }
-        _isIncomingDuckActive = false;
+                        _isIncomingDuckActive = false;
                     }
-            }, token);
-       }
+                }, token);
+    }
+    public void StopSession()
+    {
+        Log("Stopping PTT Session and tearing down all WebRTC mesh connections...");
+
+        _currentGroupName = string.Empty;
+
+        // 1. Force close the microphone and release audio focus
+        if (_isMyMicOpen)
+        {
+            _audioEngine.StopRecording();
+            _isMyMicOpen = false;
+            try { _audioDucking?.ReleaseFocus(); } catch { }
+        }
+
+        _incomingDuckReleaseCts?.Cancel();
+        _isIncomingDuckActive = false;
+
+        // 2. Destroy ALL peer connections
+        foreach (var peerId in _peers.Keys.ToList())
+        {
+            if (_peers.TryRemove(peerId, out var pc))
+            {
+                try { pc.close(); } catch { }
+                RemovePeerState(peerId);
+            }
+        }
+
+        // 3. Clear pending tracking queues
+        _pendingPeerCreations.Clear();
+
+        PublishAudioLevels(0f, 0f, force: true);
+        Log("PTT Mesh completely reset.");
+    }
 }

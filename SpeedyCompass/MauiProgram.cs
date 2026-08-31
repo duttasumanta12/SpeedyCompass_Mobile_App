@@ -1,12 +1,14 @@
-﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Maui.Maps.Handlers;
+using Serilog;
 using SpeedyCompass.Controls;
 using SpeedyCompass.Engines;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared;
 using System.Net.Http;
+using System.Reflection;
 
 namespace SpeedyCompass
 {
@@ -15,6 +17,23 @@ namespace SpeedyCompass
         public static MauiApp CreateMauiApp()
         {
             var builder = MauiApp.CreateBuilder();
+
+            // 1. Load the Embedded JSON File
+            var assembly = Assembly.GetExecutingAssembly();
+
+            // The string format is: {ProjectNamespace}.{FileName}
+            using var stream = assembly.GetManifestResourceStream("SpeedyCompass.appsettings.json");
+
+            if (stream != null)
+            {
+                var config = new ConfigurationBuilder()
+                    .AddJsonStream(stream)
+                    .Build();
+
+                // 2. Inject it into the MAUI Configuration pool
+                builder.Configuration.AddConfiguration(config);
+            }
+
             builder
                 .UseMauiApp<App>()
                 .UseMauiMaps()
@@ -92,9 +111,19 @@ namespace SpeedyCompass
             builder.Services.AddSingleton<IRealTimeAudio, AndroidRealTimeAudio>();
 #endif
 
-#if DEBUG
-            builder.Logging.AddDebug();
-#endif
+            // 1. Configure the local file path inside the protected App Sandbox
+            var logPath = Path.Combine(FileSystem.AppDataDirectory, "logs", "speedycompass-.txt");
+
+            // 2. Build the Serilog configuration
+            Log.Logger = new LoggerConfiguration()
+                .MinimumLevel.Information()
+                .WriteTo.File(logPath,
+                    rollingInterval: RollingInterval.Day,
+                    retainedFileCountLimit: 7) // Keeps the last 7 days of logs
+                .CreateLogger();
+
+            // 3. Plug it into the built-in .NET ILogger system!
+            builder.Logging.AddSerilog(dispose: true);
 
             return builder.Build();
         }

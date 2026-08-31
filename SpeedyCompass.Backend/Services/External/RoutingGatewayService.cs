@@ -69,7 +69,7 @@ public class RoutingGatewayService
         {
             EncodedPolyline = route.GetProperty("geometry").GetString(),
             DistanceKm = Math.Round(route.GetProperty("distance").GetDouble() / 1000.0, 1),
-            EtaText = $"{Math.Round(route.GetProperty("duration").GetDouble() / 60.0)}m"
+            EtaText = FormatEta(route.GetProperty("duration").GetDouble())
         };
 
         if (req.IncludeVoiceSteps && route.TryGetProperty("legs", out var legs))
@@ -210,7 +210,13 @@ public class RoutingGatewayService
             result.DistanceKm = Math.Round(dist.GetDouble() / 1000.0, 1);
 
         if (mainRoute.TryGetProperty("duration", out var dur))
-            result.EtaText = dur.GetString()?.Replace("s", " sec");
+        {
+            var cleanSeconds = dur.GetString()?.Replace("s", "");
+            if (double.TryParse(cleanSeconds, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double durationSec))
+            {
+                result.EtaText = FormatEta(durationSec);
+            }
+        }
 
         if (mainRoute.TryGetProperty("travelAdvisory", out var advisory) && advisory.TryGetProperty("speedReadingIntervals", out var intervals))
         {
@@ -247,5 +253,10 @@ public class RoutingGatewayService
             }
         }
         return result;
+    }
+    private static string FormatEta(double totalSeconds)
+    {
+        var ts = TimeSpan.FromSeconds(totalSeconds);
+        return ts.Hours > 0 ? $"{ts.Hours}h {ts.Minutes}m" : $"{ts.Minutes}m";
     }
 }
