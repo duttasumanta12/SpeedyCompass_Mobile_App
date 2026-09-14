@@ -88,6 +88,9 @@ public partial class ProfileOverlay : ContentView
             HasConsent = ConsentCheckbox.IsChecked
         };
 
+        string selectedTierId = TierSelector.SelectedTier?.Id ?? "tier_free";
+        Preferences.Default.Set("User_Tier", selectedTierId);
+
         // Send it up to the parent page!
         ProfileSaved?.Invoke(this, profileData);
     }

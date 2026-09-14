@@ -1938,6 +1938,11 @@ public partial class LobbyPage : ContentPage
             {
                 voiceMessage = $"{senderName} requested a rest stop. Prepare to pull over soon.";
             }
+            else if (alertType.StartsWith("Formation_"))
+            {
+                string formation = alertType.Replace("Formation_", "").Replace("_", " ");
+                voiceMessage = $"{senderName} requested a formation change. Switch to {formation} formation.";
+            }
 
             _voiceEngine.Speak(voiceMessage);
 
@@ -2905,5 +2910,42 @@ public partial class LobbyPage : ContentPage
         }
 
         return DateTime.Now.AddHours(hours).AddMinutes(minutes).ToString("h:mm tt");
+    }
+    private async void OnFormationChangeClicked(object sender, EventArgs e)
+    {
+        // Only Admins or designated Lead Riders should dictate the formation
+        if (!_amIAdmin && _rideCache.MyRole != "Lead")
+        {
+            await DisplayAlert("Permission Denied", "Only the Admin or Lead Rider can change the group formation.", "OK");
+            return;
+        }
+
+        string flowId = CorrelationContext.GenerateNew();
+
+        // 1. Pop the selection menu
+        string formation = await DisplayActionSheet("Select Riding Formation", "Cancel", null,
+            "Single File", "Staggered", "Side by Side", "Diamond");
+
+        if (formation == "Cancel" || string.IsNullOrEmpty(formation)) return;
+
+        // 2. Format it safely for the backend (e.g. "Formation_Single_File")
+        string alertTag = "Formation_" + formation.Replace(" ", "_");
+
+        _logger?.LogInformation("[{FlowId}] Lead triggered formation change: {Formation}", flowId, formation);
+
+        // 3. Lock UI and Broadcast
+        try
+        {
+            SetActionButtonsEnabled(false);
+            await _signalRService.SendGroupAlert(GroupNameLabel.Text, alertTag, _myName);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(ex, "Formation Alert Broadcast", flowId);
+        }
+        finally
+        {
+            SetActionButtonsEnabled(true);
+        }
     }
 }

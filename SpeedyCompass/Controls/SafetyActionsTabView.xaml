@@ -99,6 +99,20 @@
             </Border>
         </Grid>
 
+        <!-- ======================================================= -->
+        <!-- THE FIX: NEW FORMATION BUTTON -->
+        <!-- ======================================================= -->
+        <Border HeightRequest="76" StrokeThickness="1.5" Stroke="#673AB7" BackgroundColor="{AppThemeBinding Light=#F3E5F5, Dark=#311B92}" Style="{StaticResource InteractiveTileStyle}">
+            <Border.GestureRecognizers>
+                <TapGestureRecognizer Tapped="OnFormationChangeClicked" />
+            </Border.GestureRecognizers>
+
+            <HorizontalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="12">
+                <Label Text="view_stream" FontFamily="MaterialSymbols" FontSize="26" TextColor="{AppThemeBinding Light=#673AB7, Dark=White}" VerticalOptions="Center"/>
+                <Label Text="CHANGE FORMATION" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#673AB7, Dark=White}" VerticalOptions="Center" CharacterSpacing="1.5"/>
+            </HorizontalStackLayout>
+        </Border>
+
         <!-- Native Nav -->
         <Border HeightRequest="76" StrokeThickness="1.5" Stroke="#0F9D58" BackgroundColor="{AppThemeBinding Light=#F1FAF4, Dark=#15261B}" Style="{StaticResource InteractiveTileStyle}">
             <Border.GestureRecognizers>

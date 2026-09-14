@@ -7,6 +7,7 @@ public partial class SafetyActionsTabView : ContentView
     public event EventHandler RestStopClicked;
     public event EventHandler LaunchNativeNavClicked;
     public event EventHandler PttClicked;
+    public event EventHandler FormationChangeClicked;
     private bool _isPttEnabled;
     private bool _isActionLocked = false;
 
@@ -53,4 +54,7 @@ public partial class SafetyActionsTabView : ContentView
         => ExecuteLockedAction(() => RestStopClicked?.Invoke(this, e));
     private void OnLaunchNativeNavClicked(object sender, EventArgs e) => LaunchNativeNavClicked?.Invoke(this, e);
     private void OnPttClicked(object sender, EventArgs e) => PttClicked?.Invoke(this, e);
+    private void OnFormationChangeClicked(object sender, EventArgs e)
+        => ExecuteLockedAction(() => FormationChangeClicked?.Invoke(this, e));
+
 }

@@ -23,7 +23,6 @@ public class PttMeshService : IPttMeshService
 
     // We use GoogleId as the key instead of ConnectionId so it survives reconnects!
     private readonly ConcurrentDictionary<string, RTCPeerConnection> _peers = new();
-    private readonly ConcurrentDictionary<string, byte> _pendingPeerCreations = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _negotiationByPeer = new();
     private readonly ConcurrentDictionary<string, bool> _remoteDescriptionSetByPeer = new();
     private readonly ConcurrentDictionary<string, ConcurrentQueue<RTCIceCandidateInit>> _pendingIceByPeer = new();
@@ -47,6 +46,7 @@ public class PttMeshService : IPttMeshService
     private readonly object _duckingLock = new();
     private CancellationTokenSource? _incomingDuckReleaseCts;
     private bool _isIncomingDuckActive = false;
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _peerCreationGates = new();
 
     public PttMeshService(SignalRService signalR, IRealTimeAudio audioEngine)
     {
@@ -89,7 +89,7 @@ public class PttMeshService : IPttMeshService
             .Select(r => r.GoogleId)
             .ToHashSet(StringComparer.Ordinal);
 
-        // Full-mesh cleanup: remove stale/offline peers no longer in roster.
+        // 1. Full-mesh cleanup: remove stale/offline peers no longer in roster.
         foreach (var peerId in _peers.Keys.ToList())
         {
             _peers.TryGetValue(peerId, out var pc);
@@ -108,16 +108,41 @@ public class PttMeshService : IPttMeshService
             }
         }
 
-        // Full-mesh create: connect to every online rider except self.
-        foreach (var rider in currentRoster)
-        {
-            if (rider.GoogleId == _myGoogleId || !rider.IsOnline) continue;
-            await TryCreatePeerConnectionAsync(
-                rider.GoogleId,
-                isInitiator: ShouldInitiateOffer(_myGoogleId, rider.GoogleId));
-        }
+        // 2. THE GLOBAL ORDER LOGIC
+        // Sort everyone deterministically by GoogleId so the order is identical on all devices
+        var globallyOrderedRoster = currentRoster
+            .Where(r => r.IsOnline)
+            .OrderBy(r => r.GoogleId)
+            .ToList();
 
-        // --- Self-healing logic ---
+        int myIndex = globallyOrderedRoster.FindIndex(r => r.GoogleId == _myGoogleId);
+        if (myIndex < 0) return; // Self not found in online roster
+
+        // Calculate a staggered start time based on our position in the order.
+        // User 0 waits 0ms. User 1 waits 1500ms. User 2 waits 3000ms.
+        int staggerDelayMs = myIndex * 1500;
+
+        // Run the creation in a background task so we don't block the SignalR thread
+        _ = Task.Run(async () =>
+        {
+            if (staggerDelayMs > 0)
+            {
+                Log($"Staggering mesh creation. My order index is {myIndex}, waiting {staggerDelayMs}ms...");
+                await Task.Delay(staggerDelayMs);
+            }
+
+            foreach (var rider in globallyOrderedRoster)
+            {
+                if (rider.GoogleId == _myGoogleId) continue;
+
+                // Your existing string comparison perfectly executes your "everyone except previous users" logic!
+                bool isInitiator = ShouldInitiateOffer(_myGoogleId, rider.GoogleId);
+
+                await TryCreatePeerConnectionAsync(rider.GoogleId, isInitiator);
+            }
+        });
+
+        // 3. --- Self-healing logic ---
         foreach (var peerId in targetOnlinePeerIds)
         {
             if (!_peers.TryGetValue(peerId, out var pc)) continue;
@@ -139,14 +164,12 @@ public class PttMeshService : IPttMeshService
         if (_peers.ContainsKey(targetGoogleId))
             return;
 
-        if (!_pendingPeerCreations.TryAdd(targetGoogleId, 0))
-        {
-            Log($"Peer creation already in progress for '{targetGoogleId}'. Skipping duplicate attempt.");
-            return;
-        }
-
+        // Use a lock to ensure only one thread creates the peer, but other threads WAIT for it
+        var gate = _peerCreationGates.GetOrAdd(targetGoogleId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
         try
         {
+            // Double-check pattern in case another thread just created it
             if (!_peers.ContainsKey(targetGoogleId))
             {
                 Log($"Creating {(isInitiator ? "initiator" : "responder")} peer for '{targetGoogleId}'.");
@@ -155,7 +178,7 @@ public class PttMeshService : IPttMeshService
         }
         finally
         {
-            _pendingPeerCreations.TryRemove(targetGoogleId, out _);
+            gate.Release();
         }
     }
 
@@ -173,7 +196,13 @@ public class PttMeshService : IPttMeshService
                         username = "openrelayproject",
                         credential = "openrelayproject",
                         credentialType = RTCIceCredentialType.password
-                    }
+                    },
+                new RTCIceServer {
+            urls = "turn:openrelay.metered.ca:443",
+            username = "openrelayproject",
+            credential = "openrelayproject",
+            credentialType = RTCIceCredentialType.password
+        }
             },
             iceTransportPolicy = RTCIceTransportPolicy.all // Try all methods
         };
@@ -385,28 +414,48 @@ public class PttMeshService : IPttMeshService
 
         if (!RTCIceCandidateInit.TryParse(json, out var ice) || ice == null)
         {
-            Log($"ICE parse failed for sender '{senderGoogleId}'. PayloadLength={json?.Length ?? 0}.");
+            Log($"ICE parse failed for sender '{senderGoogleId}'.");
             return;
         }
 
-        if (!_remoteDescriptionSetByPeer.TryGetValue(senderGoogleId, out var remoteSet) || !remoteSet)
+        bool requiresFallbackOffer = false;
+
+        // CRITICAL FIX: Lock the negotiation gate so we don't queue an ICE candidate 
+        // at the exact same millisecond HandleIncomingOffer is trying to flush the queue.
+        var gate = GetNegotiationGate(senderGoogleId);
+        await gate.WaitAsync();
+        try
         {
-            var queue = _pendingIceByPeer.GetOrAdd(senderGoogleId, _ => new ConcurrentQueue<RTCIceCandidateInit>());
-            queue.Enqueue(ice);
-            Log($"Queued ICE for '{senderGoogleId}' until remote description is set.");
-
-            if (ShouldInitiateOffer(_myGoogleId, senderGoogleId) &&
-                _peers.TryGetValue(senderGoogleId, out var peer) &&
-                (!_localOfferSentByPeer.TryGetValue(senderGoogleId, out var sent) || !sent))
+            if (!_remoteDescriptionSetByPeer.TryGetValue(senderGoogleId, out var remoteSet) || !remoteSet)
             {
-                Log($"ICE-first fallback: sending offer to '{senderGoogleId}'.");
-                await CreateAndSendOfferAsync(senderGoogleId, peer);
+                var queue = _pendingIceByPeer.GetOrAdd(senderGoogleId, _ => new ConcurrentQueue<RTCIceCandidateInit>());
+                queue.Enqueue(ice);
+                Log($"Queued ICE for '{senderGoogleId}' until remote description is set.");
+
+                if (ShouldInitiateOffer(_myGoogleId, senderGoogleId) &&
+                    (!_localOfferSentByPeer.TryGetValue(senderGoogleId, out var sent) || !sent))
+                {
+                    requiresFallbackOffer = true;
+                }
             }
-            return;
+            else
+            {
+                pc.addIceCandidate(ice);
+                Log($"Remote ICE added for '{senderGoogleId}'.");
+            }
+        }
+        finally
+        {
+            gate.Release();
         }
 
-        pc.addIceCandidate(ice);
-        Log($"Remote ICE added for '{senderGoogleId}'.");
+        // Call this OUTSIDE the lock to prevent a deadlock, because CreateAndSendOfferAsync 
+        // also requests the GetNegotiationGate internally.
+        if (requiresFallbackOffer)
+        {
+            Log($"ICE-first fallback: sending offer to '{senderGoogleId}'.");
+            await CreateAndSendOfferAsync(senderGoogleId, pc);
+        }
     }
 
     // --- PTT LOGIC ---
@@ -460,7 +509,12 @@ public class PttMeshService : IPttMeshService
             {
                 if (pc.connectionState == RTCPeerConnectionState.connected)
                 {
-                    pc.SendAudio((uint)FrameSize, pcmuData);
+                    // CRITICAL FIX: Clone the payload because SIPSorcery encrypts the array in-place.
+                    // Without this, the 2nd rider in the mesh gets double-encrypted garbage.
+                    byte[] payloadCopy = new byte[pcmuData.Length];
+                    Buffer.BlockCopy(pcmuData, 0, payloadCopy, 0, pcmuData.Length);
+
+                    pc.SendAudio((uint)FrameSize, payloadCopy);
                 }
             }
 
@@ -662,7 +716,7 @@ public class PttMeshService : IPttMeshService
         }
 
         // 3. Clear pending tracking queues
-        _pendingPeerCreations.Clear();
+        _peerCreationGates.Clear();
 
         PublishAudioLevels(0f, 0f, force: true);
         Log("PTT Mesh completely reset.");

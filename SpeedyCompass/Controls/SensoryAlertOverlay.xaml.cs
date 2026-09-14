@@ -62,6 +62,19 @@ public partial class SensoryAlertOverlay : ContentView
             AlertIconLabel.Text = "thunderstorm";
             durationSeconds = 5;
         }
+        else if (alertType.StartsWith("Formation_"))
+        {
+            // Parse "Formation_Single_File" -> "Single File"
+            string formation = alertType.Replace("Formation_", "").Replace("_", " ");
+
+            // Deep Purple (Highly visible, but distinct from Red/Emergency and Blue/Rest)
+            AlertBackgroundGrid.BackgroundColor = Color.Parse("#673AB7");
+            AlertTitleLabel.Text = $"FORMATION: {formation.ToUpper()}";
+
+            // 'view_stream' naturally looks like a staggered/single-file road layout
+            AlertIconLabel.Text = "view_stream";
+            durationSeconds = 6;
+        }
         else { return; }
 
         AlertSenderLabel.Text = $"Triggered by: {senderName}";

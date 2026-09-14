@@ -318,10 +318,17 @@ public partial class DestinationSearchView : ContentView
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Search Error: {ex.Message}"); }
     }
 
-    private async void OnSuggestionSelected(object sender, SelectedItemChangedEventArgs e)
+    private async void OnSuggestionSelected(object sender, SelectionChangedEventArgs e)
     {
-        if (e.SelectedItem == null) return;
-        var selectedPlace = (dynamic)e.SelectedItem;
+        // 1. Check if the selection is empty (this happens when we clear it at the end of the method)
+        if (e.CurrentSelection == null || e.CurrentSelection.Count == 0) return;
+
+        // 2. Get the selected item from the CurrentSelection list
+        var selectedItem = e.CurrentSelection.FirstOrDefault();
+        if (selectedItem == null) return;
+
+        // Proceed with your exact existing logic
+        var selectedPlace = (dynamic)selectedItem;
         string desc = selectedPlace.Description;
         string placeId = selectedPlace.PlaceId;
 
@@ -346,13 +353,16 @@ public partial class DestinationSearchView : ContentView
             {
                 _pendingLocation = new Location(details.Location.Latitude, details.Location.Longitude);
                 ConfirmDestButton.IsEnabled = true;
-                ConfirmDestButton.BackgroundColor = Colors.MediumSeaGreen;
+
+                // Updated to match the premium Material green we set in the new XAML
+                ConfirmDestButton.BackgroundColor = Color.FromArgb("#00E676");
 
                 PreviewRequested?.Invoke(this, new PlaceSelectedEventArgs { Location = _pendingLocation, Name = desc });
             }
         }
         catch (Exception) { /* Handle error */ }
 
+        // 3. Clear the selection so the user can tap the same result again if needed
         SuggestionsListView.SelectedItem = null;
     }
 

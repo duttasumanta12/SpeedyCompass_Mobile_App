@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<ContentView xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:models="clr-namespace:SpeedyCompass.Models"
+             x:Class="SpeedyCompass.Controls.TierSelectionControl">
+
+    <CollectionView x:Name="TiersCarousel"
+                    SelectionMode="None"
+                    
+                    HeightRequest="480">
+        <CollectionView.ItemsLayout>
+            <!-- Center snapping makes it feel like a premium carousel -->
+            <LinearItemsLayout Orientation="Horizontal" 
+                               ItemSpacing="16" 
+                               SnapPointsAlignment="Center" 
+                               SnapPointsType="MandatorySingle" />
+        </CollectionView.ItemsLayout>
+
+        <CollectionView.ItemTemplate>
+            <DataTemplate x:DataType="models:AppTierInfo">
+                <!-- Outer container to handle padding/shadows -->
+                <ContentView WidthRequest="300" Padding="8,16,8,24">
+                    <Border Stroke="{Binding ThemeColor}"
+                            StrokeThickness="{Binding IsSelected, Converter={StaticResource BoolToThicknessConverter}}"
+                            BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}"
+                            StrokeShape="RoundRectangle 24">
+
+                        <Border.Shadow>
+                            <Shadow Brush="Black" Offset="0,8" Radius="12" Opacity="0.15" />
+                        </Border.Shadow>
+
+                        <Border.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnTierCardTapped" CommandParameter="{Binding .}" />
+                        </Border.GestureRecognizers>
+
+                        <Grid>
+                            <VerticalStackLayout Padding="24" Spacing="12">
+
+                                <!-- Header -->
+                                <HorizontalStackLayout Spacing="12" VerticalOptions="Center">
+                                    <Border WidthRequest="48" HeightRequest="48" StrokeThickness="0" BackgroundColor="{Binding ThemeColor}" StrokeShape="RoundRectangle 12">
+                                        <Label Text="{Binding Icon}" FontFamily="MaterialSymbols" TextColor="White" FontSize="26" HorizontalOptions="Center" VerticalOptions="Center"/>
+                                    </Border>
+                                    <VerticalStackLayout VerticalOptions="Center">
+                                        <Label Text="{Binding Name}" FontSize="20" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#212121, Dark=White}" />
+                                        <Label Text="{Binding PriceText}" FontSize="14" TextColor="{Binding ThemeColor}" FontAttributes="Bold" />
+                                    </VerticalStackLayout>
+                                </HorizontalStackLayout>
+
+                                <Label Text="{Binding Description}" FontSize="13" TextColor="#757575" Margin="0,4,0,8" />
+                                <BoxView HeightRequest="1" Color="#E0E0E0" Opacity="0.5" Margin="0,0,0,8" />
+
+                                <!-- Features List -->
+                                <StackLayout BindableLayout.ItemsSource="{Binding Features}" Spacing="10">
+                                    <BindableLayout.ItemTemplate>
+                                        <DataTemplate x:DataType="x:String">
+                                            <Grid ColumnDefinitions="Auto, *">
+                                                <Label Grid.Column="0" Text="check_circle" FontFamily="MaterialSymbols" TextColor="#4CAF50" FontSize="18" Margin="0,0,10,0" VerticalOptions="Start" />
+                                                <Label Grid.Column="1" Text="{Binding .}" FontSize="13" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" LineBreakMode="WordWrap" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </BindableLayout.ItemTemplate>
+                                </StackLayout>
+                            </VerticalStackLayout>
+
+                            <!-- OVERLAY: Locked / Coming Soon -->
+                            <Border IsVisible="{Binding IsAvailable, Converter={StaticResource InvertedBoolConverter}}"
+                                    BackgroundColor="#B3000000" 
+                                    StrokeThickness="0"
+                                    ZIndex="10">
+                                <VerticalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="8">
+                                    <Label Text="lock" FontFamily="MaterialSymbols" TextColor="White" FontSize="40" HorizontalOptions="Center"/>
+                                    <Label Text="COMING SOON" TextColor="White" FontAttributes="Bold" FontSize="16" CharacterSpacing="2" HorizontalOptions="Center"/>
+                                </VerticalStackLayout>
+                            </Border>
+
+                            <!-- BADGE -->
+                            <Border IsVisible="{Binding BadgeText, Converter={StaticResource StringNotEmptyConverter}}"
+                                    BackgroundColor="{Binding ThemeColor}"
+                                    StrokeThickness="0"
+                                    StrokeShape="RoundRectangle 12"
+                                    HorizontalOptions="End"
+                                    VerticalOptions="Start"
+                                    Margin="0,-12,16,0"
+                                    Padding="12,4">
+                                <Label Text="{Binding BadgeText}" TextColor="White" FontSize="11" FontAttributes="Bold" CharacterSpacing="1"/>
+                            </Border>
+                        </Grid>
+                    </Border>
+                </ContentView>
+            </DataTemplate>
+        </CollectionView.ItemTemplate>
+    </CollectionView>
+</ContentView>

@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8" ?>
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:maps="clr-namespace:Microsoft.Maui.Controls.Maps;assembly=Microsoft.Maui.Controls.Maps"
@@ -9,214 +10,297 @@
              Title="Ride Lobby"
              Shell.NavBarIsVisible="False"
              Shell.PresentationMode="ModalAnimated">
-    <!-- 
-        1. THE FIX: Added Shell.NavBarIsVisible="False" to go full screen.
-        2. Removed text from Title="" (kept property for internal tracking just in case, but NavBar hide covers it).
-        3. Changed main Grid to RowDefinitions="*".
-    -->
-    <Grid RowDefinitions="*">
 
-        <!-- THE FIX: Deleted Row 0 Header Grid -->
+    <!-- UPGRADE: Centralized Animation Styles for interactive map elements -->
+    <ContentPage.Resources>
+        <Style TargetType="Border" x:Key="FloatingBtnStyle">
+            <Setter Property="StrokeThickness" Value="0" />
+            <Setter Property="VisualStateManager.VisualStateGroups">
+                <VisualStateGroupList>
+                    <VisualStateGroup x:Name="CommonStates">
+                        <VisualState x:Name="Normal">
+                            <VisualState.Setters>
+                                <Setter Property="Scale" Value="1.0" />
+                                <Setter Property="Opacity" Value="1.0" />
+                            </VisualState.Setters>
+                        </VisualState>
+                        <VisualState x:Name="Pressed">
+                            <VisualState.Setters>
+                                <Setter Property="Scale" Value="0.92" />
+                                <Setter Property="Opacity" Value="0.8" />
+                            </VisualState.Setters>
+                        </VisualState>
+                    </VisualStateGroup>
+                </VisualStateGroupList>
+            </Setter>
+        </Style>
+    </ContentPage.Resources>
 
+    <Grid>
         <!-- Hidden Label to satisfy existing C# bindings -->
         <Label x:Name="GroupNameLabel" IsVisible="False"/>
 
         <!-- ===================================================================== -->
-        <!-- MAIN MAP VIEW & FLOATING UI (Now in Grid.Row="0") -->
+        <!-- ALWAYS VISIBLE MAP LAYER                                              -->
         <!-- ===================================================================== -->
-        <Grid Grid.Row="0">
+        <controls:CustomMap x:Name="LiveMap" MapClicked="OnMapClicked" IsShowingUser="False" CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}" Margin="0,0,0,140" ZIndex="0" />
 
-            <!-- ALWAYS VISIBLE MAP - Margin intact for Peek Height -->
-            <controls:CustomMap x:Name="LiveMap" MapClicked="OnMapClicked" IsShowingUser="False" CustomPins="{Binding MapPins, Source={x:Reference ThisPage}}" Margin="0,0,0,140" />
+        <!-- Pin Overlay -->
+        <AbsoluteLayout x:Name="PinOverlayLayout" 
+                        InputTransparent="True" 
+                        CascadeInputTransparent="True" 
+                        ZIndex="10" 
+                        BindableLayout.ItemsSource="{Binding MapPins, Source={x:Reference ThisPage}}" 
+                        Margin="0,0,0,160">
+            <BindableLayout.ItemTemplate>
+                <DataTemplate>
+                    <controls:MapPinView AbsoluteLayout.LayoutBounds="0,0,-1,-1"
+                                         TranslationX="{Binding ScreenX}"
+                                         TranslationY="{Binding ScreenY}"
+                                         Username="{Binding Username}"
+                                         Speed="{Binding Speed}"
+                                         BatteryLevel="{Binding BatteryLevel}"
+                                         PinColor="{Binding PinColor}" />
+                </DataTemplate>
+            </BindableLayout.ItemTemplate>
+        </AbsoluteLayout>
 
-            <!-- Pin Overlay with intact margins -->
-            <AbsoluteLayout x:Name="PinOverlayLayout" 
-                            InputTransparent="True" 
-                            CascadeInputTransparent="True" 
-                            ZIndex="10" 
-                            Grid.RowSpan="2" 
-                            BindableLayout.ItemsSource="{Binding MapPins, Source={x:Reference ThisPage}}" 
-                            Margin="0,0,0,160">
+        <!-- Search Bar -->
+        <controls:DestinationSearchView x:Name="DestinationSearchControl" 
+                                        PreviewRequested="OnDestinationPreviewRequested" 
+                                        Confirmed="OnDestinationConfirmed" 
+                                        Cleared="OnDestinationCleared" 
+                                        ZIndex="20" />
 
-                <BindableLayout.ItemTemplate>
-                    <DataTemplate>
-                        <!-- 
-               Positioning (LayoutBounds + Translation) stays on the outer container.
-               Data (Username, Speed, Color) is passed via bindings INTO the component.
-            -->
-                        <controls:MapPinView AbsoluteLayout.LayoutBounds="0,0,-1,-1"
-                         TranslationX="{Binding ScreenX}"
-                                 TranslationY="{Binding ScreenY}"
-                     Username="{Binding Username}"
-                     Speed="{Binding Speed}"
-                     BatteryLevel="{Binding BatteryLevel}"
-                     PinColor="{Binding PinColor}" />
-                    </DataTemplate>
-                </BindableLayout.ItemTemplate>
-            </AbsoluteLayout>
+        <!-- ===================================================================== -->
+        <!-- FLOATING UI ELEMENTS                                                  -->
+        <!-- ===================================================================== -->
 
-            <controls:DestinationSearchView x:Name="DestinationSearchControl" 
-                                            PreviewRequested="OnDestinationPreviewRequested" 
-                                            Confirmed="OnDestinationConfirmed" 
-                                            Cleared="OnDestinationCleared" />
+        <!-- Turn Overlay -->
+        <Border x:Name="NextTurnOverlay" IsVisible="False" HorizontalOptions="Start" VerticalOptions="Start" Margin="16,16,0,0" Padding="16,12" BackgroundColor="{AppThemeBinding Light=#E6FFFFFF, Dark=#E61E1E1E}" StrokeThickness="1" Stroke="{AppThemeBinding Light=#E0E0E0, Dark=#333333}" ZIndex="25">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="16"/>
+            </Border.StrokeShape>
+            <Border.Shadow>
+                <Shadow Brush="Black" Offset="0,6" Opacity="0.15" Radius="12"/>
+            </Border.Shadow>
+            <Grid ColumnDefinitions="Auto, *" ColumnSpacing="12">
+                <!-- UPGRADE: Replaced ⬆️ with clean Material Symbol -->
+                <Label x:Name="NextTurnIcon" FontFamily="MaterialSymbols" Grid.Column="0" Text="turn_slight_right" FontSize="40" VerticalOptions="Center" TextColor="{AppThemeBinding Light=#1976D2, Dark=#64B5F6}"/>
+                <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="0">
+                    <Label x:Name="NextTurnDistLabel" Text="500m" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                    <Label x:Name="NextTurnInstructionLabel" Text="Continue straight" FontSize="13" TextColor="#757575" MaxLines="2" LineBreakMode="TailTruncation" WidthRequest="140"/>
+                </VerticalStackLayout>
+            </Grid>
+        </Border>
 
-            <!-- Turn Overlay -->
-            <Border x:Name="NextTurnOverlay" IsVisible="False" HorizontalOptions="Start" VerticalOptions="Start" Margin="15,15,0,0" Padding="10,8" BackgroundColor="{AppThemeBinding Light=#F2FFFFFF, Dark=#F21E1E1E}" StrokeThickness="0" ZIndex="25">
+        <!-- FLOATING MAP CONTROLS -->
+        <VerticalStackLayout x:Name="FloatingMapControls" IsVisible="False" HorizontalOptions="End" VerticalOptions="End" Margin="0,0,16,180" Spacing="12" ZIndex="30">
+
+            <!-- UPGRADE: Converted to Border to combine text and Material Symbols cleanly -->
+            <Border x:Name="ClearPoisBtn" IsVisible="False" BackgroundColor="#E53935" HeightRequest="48" WidthRequest="130" Margin="0,0,0,8" Style="{StaticResource FloatingBtnStyle}">
                 <Border.StrokeShape>
-                    <RoundRectangle CornerRadius="12"/>
+                    <RoundRectangle CornerRadius="24"/>
                 </Border.StrokeShape>
                 <Border.Shadow>
-                    <Shadow Brush="Black" Offset="0,4" Opacity="0.15" Radius="10"/>
+                    <Shadow Brush="#E53935" Offset="0,4" Opacity="0.3" Radius="8" />
                 </Border.Shadow>
-                <Grid ColumnDefinitions="Auto, *" ColumnSpacing="10">
-                    <Label x:Name="NextTurnIcon" FontFamily="MaterialSymbols" Grid.Column="0" Text="⬆️" FontSize="40" VerticalOptions="Center" TextColor="{AppThemeBinding Light=#111, Dark=White}"/>
-                    <VerticalStackLayout Grid.Column="1" VerticalOptions="Center" Spacing="0">
-                        <Label x:Name="NextTurnDistLabel" Text="500m" FontSize="14" FontAttributes="Bold" TextColor="{AppThemeBinding Light=Black, Dark=White}"/>
-                        <Label x:Name="NextTurnInstructionLabel" Text="Continue straight" FontSize="11" TextColor="Gray" MaxLines="2" LineBreakMode="TailTruncation" WidthRequest="120"/>
-                    </VerticalStackLayout>
-                </Grid>
+                <Border.GestureRecognizers>
+                    <TapGestureRecognizer Tapped="OnClearPoisClicked" />
+                </Border.GestureRecognizers>
+                <HorizontalStackLayout HorizontalOptions="Center" VerticalOptions="Center" Spacing="6">
+                    <Label Text="delete" FontFamily="MaterialSymbols" TextColor="White" FontSize="18" VerticalOptions="Center"/>
+                    <Label Text="CLEAR POIS" TextColor="White" FontAttributes="Bold" FontSize="12" VerticalOptions="Center" CharacterSpacing="0.5"/>
+                </HorizontalStackLayout>
             </Border>
 
-            <!-- FLOATING MAP CONTROLS -->
-            <VerticalStackLayout x:Name="FloatingMapControls" IsVisible="False" HorizontalOptions="End" VerticalOptions="End" Margin="0, 0, 15, 180" Spacing="15" ZIndex="30">
-                <Button x:Name="ClearPoisBtn" IsVisible="False" Text="🧹 Clear POIs" BackgroundColor="#D32F2F" TextColor="White" CornerRadius="25" HeightRequest="50" WidthRequest="120" FontAttributes="Bold" FontSize="12" Margin="0,0,0,10" Clicked="OnClearPoisClicked">
-                    <Button.Shadow>
-                        <Shadow Brush="Black" Offset="0,4" Opacity="0.3" Radius="5" />
-                    </Button.Shadow>
-                </Button>
-                <Button x:Name="HeadingUpButton" Text="🧭" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnHeadingUpClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
-                <Button x:Name="RecenterMapButton" Text="🎯" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnRecenterMapClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
-                <Button x:Name="MapFollowButton" Text="📍" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="MediumSeaGreen" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnMapFollowClicked" IsVisible="False" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
-                <Button x:Name="OverviewButton" Text="🗺️" FontSize="24" BackgroundColor="{AppThemeBinding Light=White, Dark=#333333}" TextColor="DodgerBlue" CornerRadius="27" WidthRequest="55" HeightRequest="55" Clicked="OnOverviewClicked" Shadow="{Shadow Brush=Black, Offset='0,4', Opacity=0.2, Radius=8}" />
-            </VerticalStackLayout>
+            <!-- UPGRADE: Replaced emojis with crisp Material map icons -->
+            <Button x:Name="HeadingUpButton" Text="explore" FontFamily="MaterialSymbols" FontSize="26" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" TextColor="#1E88E5" CornerRadius="28" WidthRequest="56" HeightRequest="56" Clicked="OnHeadingUpClicked">
+                <Button.Shadow>
+                    <Shadow Brush="Black" Offset="0,4" Opacity="0.2" Radius="10"/>
+                </Button.Shadow>
+            </Button>
 
-            <!-- ========================================== -->
-            <!-- BOTTOM SHEET DRAWER -->
-            <!-- ========================================== -->
-            <Border x:Name="ActionDrawer" VerticalOptions="End" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" StrokeThickness="0" Margin="0,0,0,-40" ZIndex="40">
-                <Border.Shadow>
-                    <Shadow Brush="Black" Offset="0,-4" Opacity="0.15" Radius="15" />
-                </Border.Shadow>
+            <Button x:Name="RecenterMapButton" Text="my_location" FontFamily="MaterialSymbols" FontSize="26" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" TextColor="#1E88E5" CornerRadius="28" WidthRequest="56" HeightRequest="56" Clicked="OnRecenterMapClicked">
+                <Button.Shadow>
+                    <Shadow Brush="Black" Offset="0,4" Opacity="0.2" Radius="10"/>
+                </Button.Shadow>
+            </Button>
 
-                <Grid RowDefinitions="Auto, Auto, Auto, *">
-                    <Grid Grid.Row="0">
-                        <!-- headers stay same -->
-                        <Grid x:Name="IdleHeader" Padding="15,15,15,5" BackgroundColor="Transparent" IsVisible="True">
-                            <Grid.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
-                                <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
-                            </Grid.GestureRecognizers>
-                            <VerticalStackLayout x:Name="AdminIdleHeader" HorizontalOptions="Center" VerticalOptions="Center" Spacing="2">
-                                <Label Text="Select a destination above" FontSize="16" FontAttributes="Bold" TextColor="Gray" HorizontalOptions="Center"/>
-                                <Label Text="to begin a new ride session." FontSize="12" TextColor="LightGray" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                            <VerticalStackLayout x:Name="RiderIdleHeader" HorizontalOptions="Center" VerticalOptions="Center" Spacing="2" IsVisible="False">
-                                <Label Text="Waiting for Admin" FontSize="16" FontAttributes="Bold" TextColor="Gray" HorizontalOptions="Center"/>
-                                <Label Text="to set the convoy destination." FontSize="12" TextColor="LightGray" HorizontalOptions="Center"/>
-                            </VerticalStackLayout>
-                        </Grid>
+            <Button x:Name="MapFollowButton" Text="navigation" FontFamily="MaterialSymbols" FontSize="26" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" TextColor="#00E676" CornerRadius="28" WidthRequest="56" HeightRequest="56" Clicked="OnMapFollowClicked" IsVisible="False">
+                <Button.Shadow>
+                    <Shadow Brush="#00E676" Offset="0,4" Opacity="0.3" Radius="10"/>
+                </Button.Shadow>
+            </Button>
 
-                        <Grid x:Name="PreNavigationHeader" ColumnDefinitions="*, Auto" Padding="15,15,15,5" BackgroundColor="Transparent" IsVisible="False">
-                            <Grid.GestureRecognizers>
-                                <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
-                                <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
-                            </Grid.GestureRecognizers>
-                            <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
-                                <Label x:Name="PreNavDestLabel" Text="Target Destination" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#333, Dark=White}" LineBreakMode="TailTruncation" MaxLines="1"/>
-                                <Label x:Name="PreNavDistLabel" Text="Calculating route..." FontSize="13" TextColor="DodgerBlue" FontAttributes="Bold"/>
-                            </VerticalStackLayout>
-                            <Button x:Name="StartJourneyButton" Grid.Column="1" Text="🚀 Start" BackgroundColor="DodgerBlue" TextColor="White" FontAttributes="Bold" CornerRadius="12" HeightRequest="45" Padding="15,0" Clicked="OnStartJourneyClicked" IsVisible="False" VerticalOptions="Center"/>
-                        </Grid>
-                        <controls:LiveTelemetryHeaderView x:Name="TelemetryHeaderControl" IsVisible="False" HeaderTapped="OnDrawerHandleTapped" HeaderPanUpdated="OnDrawerPanUpdated" />
-                    </Grid>
+            <Button x:Name="OverviewButton" Text="map" FontFamily="MaterialSymbols" FontSize="26" BackgroundColor="{AppThemeBinding Light=White, Dark=#2A2A2A}" TextColor="#1E88E5" CornerRadius="28" WidthRequest="56" HeightRequest="56" Clicked="OnOverviewClicked">
+                <Button.Shadow>
+                    <Shadow Brush="Black" Offset="0,4" Opacity="0.2" Radius="10"/>
+                </Button.Shadow>
+            </Button>
+        </VerticalStackLayout>
 
-                    <Grid Grid.Row="1" Padding="0,5,0,15" BackgroundColor="Transparent">
+
+        <!-- ========================================== -->
+        <!-- BOTTOM SHEET DRAWER                        -->
+        <!-- ========================================== -->
+        <!-- UPGRADE: Top-only corner radius for a true native bottom sheet look -->
+        <Border x:Name="ActionDrawer" VerticalOptions="End" BackgroundColor="{AppThemeBinding Light=White, Dark=#1E1E1E}" StrokeThickness="0" Margin="0,0,0,-40" ZIndex="40">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="24,24,0,0"/>
+            </Border.StrokeShape>
+            <Border.Shadow>
+                <Shadow Brush="Black" Offset="0,-6" Opacity="0.15" Radius="20" />
+            </Border.Shadow>
+
+            <Grid RowDefinitions="Auto, Auto, Auto, *">
+
+                <!-- Drawer Headers -->
+                <Grid Grid.Row="0">
+                    <!-- Idle Header -->
+                    <Grid x:Name="IdleHeader" Padding="16,16,16,8" BackgroundColor="Transparent" IsVisible="True">
                         <Grid.GestureRecognizers>
                             <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
                             <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
                         </Grid.GestureRecognizers>
-                        <BoxView HeightRequest="5" WidthRequest="40" CornerRadius="2.5" BackgroundColor="LightGray" HorizontalOptions="Center" />
+
+                        <VerticalStackLayout x:Name="AdminIdleHeader" HorizontalOptions="Center" VerticalOptions="Center" Spacing="2">
+                            <Label Text="Select a destination above" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" HorizontalOptions="Center"/>
+                            <Label Text="to begin a new ride session." FontSize="13" TextColor="#9E9E9E" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
+
+                        <VerticalStackLayout x:Name="RiderIdleHeader" HorizontalOptions="Center" VerticalOptions="Center" Spacing="2" IsVisible="False">
+                            <Label Text="Waiting for Admin" FontSize="16" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#424242, Dark=#E0E0E0}" HorizontalOptions="Center"/>
+                            <Label Text="to set the convoy destination." FontSize="13" TextColor="#9E9E9E" HorizontalOptions="Center"/>
+                        </VerticalStackLayout>
                     </Grid>
 
-                    <Grid Grid.Row="2" ColumnDefinitions="*, *, *, *" Margin="10,0,10,10">
-                        <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Safety" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <!-- TabStatsBtn is default blue -->
-                        <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Convoy" BackgroundColor="DodgerBlue" TextColor="White" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <Button x:Name="TabMapSettingsBtn" Grid.Column="2" Text="Map" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
-                        <Button x:Name="TabAdminBtn" Grid.Column="3" Text="Admin" BackgroundColor="Transparent" TextColor="Gray" CornerRadius="20" Margin="2" Clicked="OnDrawerTabClicked" />
+                    <!-- Pre-Nav Header -->
+                    <Grid x:Name="PreNavigationHeader" ColumnDefinitions="*, Auto" Padding="20,16,20,8" BackgroundColor="Transparent" IsVisible="False">
+                        <Grid.GestureRecognizers>
+                            <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
+                            <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
+                        </Grid.GestureRecognizers>
+
+                        <VerticalStackLayout Grid.Column="0" VerticalOptions="Center" Spacing="2">
+                            <Label x:Name="PreNavDestLabel" Text="Target Destination" FontSize="18" FontAttributes="Bold" TextColor="{AppThemeBinding Light=#212121, Dark=White}" LineBreakMode="TailTruncation" MaxLines="1"/>
+                            <Label x:Name="PreNavDistLabel" Text="Calculating route..." FontSize="13" TextColor="#1E88E5" FontAttributes="Bold"/>
+                        </VerticalStackLayout>
+
+                        <Button x:Name="StartJourneyButton" Grid.Column="1" Text="START" BackgroundColor="#1E88E5" TextColor="White" FontAttributes="Bold" CharacterSpacing="1" CornerRadius="16" HeightRequest="48" Padding="24,0" Clicked="OnStartJourneyClicked" IsVisible="False" VerticalOptions="Center">
+                            <Button.Shadow>
+                                <Shadow Brush="#1E88E5" Offset="0,4" Opacity="0.3" Radius="8"/>
+                            </Button.Shadow>
+                        </Button>
                     </Grid>
 
-                    <ScrollView Grid.Row="3" Padding="20,10,20,50">
-                        <Grid>
-                            <controls:SafetyActionsTabView x:Name="DrawerActionsTab" IsVisible="False" EmergencyStopClicked="OnEmergencyStopClicked" RefuelStopClicked="OnRefuelStopClicked" RestStopClicked="OnRestStopClicked" LaunchNativeNavClicked="OnLaunchNativeNavClicked" />
+                    <controls:LiveTelemetryHeaderView x:Name="TelemetryHeaderControl" IsVisible="False" HeaderTapped="OnDrawerHandleTapped" HeaderPanUpdated="OnDrawerPanUpdated" />
+                </Grid>
 
-                            <!-- ===================================================================== -->
-                            <!-- TAB 2: CONVOY (Unified Roster + Telemetry Merge) -->
-                            <!-- THE FIX: Wrapped in VSL to contain Roster + New Leave Button at bottom -->
-                            <!-- ===================================================================== -->
-                            <VerticalStackLayout x:Name="ConvoyTabContainer" IsVisible="True" Spacing="15">
+                <!-- Drag Handle -->
+                <Grid Grid.Row="1" Padding="0,4,0,16" BackgroundColor="Transparent">
+                    <Grid.GestureRecognizers>
+                        <TapGestureRecognizer Tapped="OnDrawerHandleTapped" />
+                        <PanGestureRecognizer PanUpdated="OnDrawerPanUpdated" />
+                    </Grid.GestureRecognizers>
+                    <BoxView HeightRequest="4" WidthRequest="36" CornerRadius="2" BackgroundColor="{AppThemeBinding Light=#E0E0E0, Dark=#424242}" HorizontalOptions="Center" />
+                </Grid>
 
-                                <VerticalStackLayout x:Name="DrawerStatsTab" IsVisible="True" Spacing="15">
+                <!-- Drawer Tabs -->
+                <Grid Grid.Row="2" ColumnDefinitions="*, *, *, *" Margin="16,0,16,12" ColumnSpacing="8">
+                    <Button x:Name="TabActionsBtn" Grid.Column="0" Text="Safety" BackgroundColor="Transparent" TextColor="#757575" FontAttributes="Bold" CornerRadius="16" HeightRequest="40" Clicked="OnDrawerTabClicked" />
+                    <!-- TabStatsBtn is default active -->
+                    <Button x:Name="TabStatsBtn" Grid.Column="1" Text="Convoy" BackgroundColor="#1E88E5" TextColor="White" FontAttributes="Bold" CornerRadius="16" HeightRequest="40" Clicked="OnDrawerTabClicked" />
+                    <Button x:Name="TabMapSettingsBtn" Grid.Column="2" Text="Map" BackgroundColor="Transparent" TextColor="#757575" FontAttributes="Bold" CornerRadius="16" HeightRequest="40" Clicked="OnDrawerTabClicked" />
+                    <Button x:Name="TabAdminBtn" Grid.Column="3" Text="Admin" BackgroundColor="Transparent" TextColor="#757575" FontAttributes="Bold" CornerRadius="16" HeightRequest="40" Clicked="OnDrawerTabClicked" />
+                </Grid>
 
-                                    <!-- THE FIX: Add the elegantly styled Convoy Name here -->
-                                    <Label Text="{Binding Source={x:Reference GroupNameLabel}, Path=Text}"
+                <!-- Drawer Content Areas -->
+                <ScrollView Grid.Row="3" Padding="0,0,0,50">
+                    <Grid>
+                        <controls:SafetyActionsTabView x:Name="DrawerActionsTab" IsVisible="False" EmergencyStopClicked="OnEmergencyStopClicked" RefuelStopClicked="OnRefuelStopClicked" RestStopClicked="OnRestStopClicked" LaunchNativeNavClicked="OnLaunchNativeNavClicked" FormationChangeClicked="OnFormationChangeClicked" />
+
+                        <!-- TAB 2: CONVOY -->
+                        <VerticalStackLayout x:Name="ConvoyTabContainer" IsVisible="True" Spacing="16" Padding="0">
+                            <VerticalStackLayout x:Name="DrawerStatsTab" IsVisible="True" Spacing="16">
+                                <Label Text="{Binding Source={x:Reference GroupNameLabel}, Path=Text}"
                                        FontSize="22"
                                        FontAttributes="Bold"
-                                       TextColor="{AppThemeBinding Light=#111, Dark=White}"
+                                       TextColor="{AppThemeBinding Light=#212121, Dark=White}"
                                        HorizontalOptions="Start"
-                                       Margin="0,5,0,0"/>
+                                       Margin="16,4,16,0"/>
 
-                                    <controls:ConvoyRosterTabView x:Name="RosterControl"
-                                          RiderTapped="OnRiderTapped"
-                                          CopyPinClicked="OnCopyPinClicked" />
-                                </VerticalStackLayout>
-
-                                <!-- THE FIX: Moved from top header, matched style, placed at bottom of roster -->
-                                <Button Text="Leave Group" 
-                                        BackgroundColor="#FFEBEB" 
-                                        TextColor="#D32F2F" 
-                                        CornerRadius="18" 
-                                        HeightRequest="40" 
-                                        HorizontalOptions="Fill" 
-                                        Clicked="OnLeaveGroupClicked" 
-                                        FontAttributes="Bold"
-                                        Margin="0,10,0,0"/>
+                                <controls:ConvoyRosterTabView x:Name="RosterControl"
+                                                              RiderTapped="OnRiderTapped"
+                                                              CopyPinClicked="OnCopyPinClicked" />
                             </VerticalStackLayout>
 
-                            <controls:AdminControlsTabView x:Name="DrawerAdminTab" IsVisible="False" PauseNavClicked="OnPauseNavClicked" ResumeNavClicked="OnResumeJourneyClicked" MeetupPointClicked="OnGenerateMeetupClicked" AdminSettingsClicked="OnAdminSettingsClicked" CompleteNavClicked="OnCompleteNavClicked" ResetTripClicked="OnResetDestinationClicked" />
+                            <!-- Leave Group Button -->
+                            <Button Text="LEAVE CONVOY" 
+                                    BackgroundColor="{AppThemeBinding Light=#FFF0F0, Dark=#331111}" 
+                                    TextColor="#E53935" 
+                                    CornerRadius="24" 
+                                    HeightRequest="48" 
+                                    HorizontalOptions="Fill" 
+                                    Clicked="OnLeaveGroupClicked" 
+                                    FontAttributes="Bold"
+                                    CharacterSpacing="1"
+                                    Margin="16,8,16,16"/>
+                        </VerticalStackLayout>
 
-                            <controls:MapSettingsTabView x:Name="DrawerMapSettingsTab" IsVisible="False" MapStyleChanged="OnMapStyleChanged" TrafficToggled="OnTrafficToggled" />
-                        </Grid>
-                    </ScrollView>
-                </Grid>
-            </Border>
+                        <controls:AdminControlsTabView x:Name="DrawerAdminTab" IsVisible="False" PauseNavClicked="OnPauseNavClicked" ResumeNavClicked="OnResumeJourneyClicked" MeetupPointClicked="OnGenerateMeetupClicked" AdminSettingsClicked="OnAdminSettingsClicked" CompleteNavClicked="OnCompleteNavClicked" ResetTripClicked="OnResetDestinationClicked" />
 
-            <!-- Overlays same -->
-            <!-- Your new Rider Management Overlay! -->
-            <controls:RiderManagementOverlay x:Name="RiderManagementOverlay" 
-                                     ActionSelected="OnRiderManagementActionSelected" 
-                                     Grid.RowSpan="100" 
-                                     Grid.ColumnSpan="100" />
-            <controls:SensoryAlertOverlay x:Name="SensoryAlertOverlay" Grid.RowSpan="100" ZIndex="999" />
-            <controls:PttOverlay x:Name="PttOverlay" Grid.RowSpan="100" ZIndex="2000" />
-            <controls:LocationDisabledOverlay x:Name="LocationDisabledOverlay" Grid.RowSpan="100" ZIndex="1000" OpenSettingsRequested="OnOpenSettingsClicked" RetryRequested="OnRetryLocationClicked" />
-            <controls:ConvoySettingsOverlay x:Name="ConvoySettingsOverlay" SettingsSubmitted="OnSettingsSubmitted" />
-            <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" Grid.RowSpan="100" Grid.ColumnSpan="100" ZIndex="9999" />
-            <controls:RideSummaryOverlay x:Name="RideSummaryOverlay" Grid.RowSpan="100" ZIndex="3000" CloseRequested="OnCloseRideSummaryClicked" />
-        </Grid>
+                        <controls:MapSettingsTabView x:Name="DrawerMapSettingsTab" IsVisible="False" MapStyleChanged="OnMapStyleChanged" TrafficToggled="OnTrafficToggled" />
+                    </Grid>
+                </ScrollView>
+            </Grid>
+        </Border>
+
+        <!-- ===================================================================== -->
+        <!-- FULL SCREEN OVERLAYS (Stacked correctly without RowSpans)             -->
+        <!-- ===================================================================== -->
+        <controls:RiderManagementOverlay x:Name="RiderManagementOverlay" ActionSelected="OnRiderManagementActionSelected" ZIndex="90" />
+        <controls:SensoryAlertOverlay x:Name="SensoryAlertOverlay" ZIndex="999" />
+        <controls:PttOverlay x:Name="PttOverlay" ZIndex="2000" />
+        <controls:LocationDisabledOverlay x:Name="LocationDisabledOverlay" ZIndex="1000" OpenSettingsRequested="OnOpenSettingsClicked" RetryRequested="OnRetryLocationClicked" />
+        <controls:ConvoySettingsOverlay x:Name="ConvoySettingsOverlay" SettingsSubmitted="OnSettingsSubmitted" ZIndex="2500" />
+        <controls:LoadingOverlay x:Name="GlobalLoadingOverlay" ZIndex="9999" />
+        <controls:RideSummaryOverlay x:Name="RideSummaryOverlay" ZIndex="3000" CloseRequested="OnCloseRideSummaryClicked" />
+
         <!-- BIGGER, CENTERED AUTO-PAUSE BANNER -->
-        <Frame x:Name="AutoPauseBanner" IsVisible="False" 
-               VerticalOptions="Center" HorizontalOptions="Center" 
-               WidthRequest="300" Padding="25,25" 
-               BackgroundColor="#E6000000" CornerRadius="16" HasShadow="True" ZIndex="200">
-            <Frame.GestureRecognizers>
+        <!-- UPGRADE: Replaced Frame with Border, glowing icon, and glassmorphism -->
+        <Border x:Name="AutoPauseBanner" 
+                IsVisible="False" 
+                VerticalOptions="Center" 
+                HorizontalOptions="Center" 
+                WidthRequest="320" 
+                Padding="24" 
+                StrokeThickness="1"
+                Stroke="#33FFFFFF"
+                BackgroundColor="#E6121212" 
+                ZIndex="200">
+            <Border.StrokeShape>
+                <RoundRectangle CornerRadius="24"/>
+            </Border.StrokeShape>
+            <Border.Shadow>
+                <Shadow Brush="Black" Offset="0,10" Opacity="0.4" Radius="20"/>
+            </Border.Shadow>
+            <Border.GestureRecognizers>
                 <TapGestureRecognizer Tapped="OnAutoPauseTapped" />
-            </Frame.GestureRecognizers>
-            <VerticalStackLayout Spacing="15" HorizontalOptions="Center">
-                <Label Text="🛑" FontSize="50" HorizontalOptions="Center"/>
-                <Label Text="You've been stopped for a while." FontSize="18" TextColor="White" FontAttributes="Bold" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
-                <Label Text="Tap here to Pause the ride for the group." FontSize="14" TextColor="#AAAAAA" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
+            </Border.GestureRecognizers>
+
+            <VerticalStackLayout Spacing="16" HorizontalOptions="Center">
+                <Label Text="front_hand" FontFamily="MaterialSymbols" FontSize="56" TextColor="#FB8C00" HorizontalOptions="Center">
+                    <Label.Shadow>
+                        <Shadow Brush="#FB8C00" Offset="0,0" Radius="16" Opacity="0.5"/>
+                    </Label.Shadow>
+                </Label>
+                <VerticalStackLayout Spacing="4">
+                    <Label Text="You've been stopped." FontSize="20" TextColor="White" FontAttributes="Bold" HorizontalOptions="Center" HorizontalTextAlignment="Center"/>
+                    <Label Text="Tap here to Pause the ride for the entire group." FontSize="14" TextColor="#B0BEC5" HorizontalOptions="Center" HorizontalTextAlignment="Center" LineHeight="1.2"/>
+                </VerticalStackLayout>
             </VerticalStackLayout>
-        </Frame>
+        </Border>
+
     </Grid>
 </ContentPage>
