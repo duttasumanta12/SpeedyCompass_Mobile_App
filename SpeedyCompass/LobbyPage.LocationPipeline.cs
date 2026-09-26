@@ -13,7 +13,7 @@ public partial class LobbyPage
     // --- LOCATION PROCESSING & TELEMETRY ---
     private void OnLocalLocationPushedFromBackground(object sender, LocalLocationUpdate e)
     {
-        if (_rideCache.RunningInBackground) return; // CPU Shield
+        //if (_rideCache.RunningInBackground) return; // CPU Shield
         // Instantly queue the hardware update. No blocking!
         _localLocationChannel.Writer.TryWrite(e);
     }
