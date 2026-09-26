@@ -61,3 +61,7 @@
 #*.PDF   diff=astextplain
 #*.rtf   diff=astextplain
 #*.RTF   diff=astextplain
+# Force C# and project files to be treated as text instead of auto-detected binary
+*.cs text
+*.csproj text
+*.sln text
