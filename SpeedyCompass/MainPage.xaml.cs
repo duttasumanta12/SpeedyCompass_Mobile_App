@@ -581,4 +581,12 @@ public partial class MainPage : ContentPage
             GlobalLoadingOverlay.Hide();
         }
     }
+    private async void OnContactUsTapped(object sender, TappedEventArgs e)
+    {
+        // Haptic feedback for a premium feel
+        HapticFeedback.Default.Perform(HapticFeedbackType.Click);
+
+        // Navigate to the globally registered Contact Us route
+        await Shell.Current.GoToAsync("ContactUsPage");
+    }
 }

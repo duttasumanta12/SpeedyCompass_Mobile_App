@@ -121,6 +121,9 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <MauiXaml Update="ContactUsPage.xaml">
+	    <Generator>MSBuild:Compile</Generator>
+	  </MauiXaml>
 	  <MauiXaml Update="Controls\ActiveGroupsList.xaml">
 	    <Generator>MSBuild:Compile</Generator>
 	  </MauiXaml>

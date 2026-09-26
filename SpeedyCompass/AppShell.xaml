@@ -7,7 +7,7 @@
     Shell.FlyoutBehavior="Disabled">
 
     <ShellContent
-        Title="Speedy Compass"
+        Title="Speedy Compass Link"
         ContentTemplate="{DataTemplate views:MainPage}"
         Route="LoginPage" />
 
