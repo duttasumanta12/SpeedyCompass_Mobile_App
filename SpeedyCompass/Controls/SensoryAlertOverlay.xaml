@@ -19,16 +19,35 @@
         <VerticalStackLayout VerticalOptions="Center" HorizontalOptions="Center" Spacing="16" MaximumWidthRequest="400">
 
             <!-- UPGRADE: Replaced emoji with Material Symbol, added drop shadow -->
-            <Label x:Name="AlertIconLabel" 
-                   Text="emergency" 
-                   FontFamily="MaterialSymbols"
-                   TextColor="White"
-                   FontSize="96" 
-                   HorizontalTextAlignment="Center">
-                <Label.Shadow>
-                    <Shadow Brush="Black" Offset="0,4" Radius="8" Opacity="0.3"/>
-                </Label.Shadow>
-            </Label>
+            <Grid HorizontalOptions="Center" HeightRequest="200" WidthRequest="200">
+
+                <!-- Standard Material Icon (For Crash/Weather/Refuel) -->
+                <!-- Font size increased slightly to match the new 200x200 container -->
+                <Label x:Name="AlertIconLabel" 
+                       Text="emergency" 
+                       FontFamily="MaterialSymbols"
+                       TextColor="White"
+                       FontSize="140" 
+                       HorizontalOptions="Center"
+                       VerticalOptions="Center"
+                       HorizontalTextAlignment="Center">
+                    <Label.Shadow>
+                        <Shadow Brush="Black" Offset="0,4" Radius="8" Opacity="0.3"/>
+                    </Label.Shadow>
+                </Label>
+
+                <!-- Image for Formations -->
+                <!-- AspectFit ensures it scales up cleanly to fill the 200x200 box -->
+                <Image x:Name="FormationImage"
+                       IsVisible="False"
+                       HorizontalOptions="Center"
+                       VerticalOptions="Center"
+                       Aspect="AspectFit">
+                    <Image.Shadow>
+                        <Shadow Brush="Black" Offset="0,4" Radius="8" Opacity="0.3"/>
+                    </Image.Shadow>
+                </Image>
+            </Grid>
 
             <!-- UPGRADE: Added CharacterSpacing for ALL CAPS legibility -->
             <Label x:Name="AlertTitleLabel" 

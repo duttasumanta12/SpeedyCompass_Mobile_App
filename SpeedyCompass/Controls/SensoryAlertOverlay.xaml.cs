@@ -30,6 +30,8 @@ public partial class SensoryAlertOverlay : ContentView
         int durationSeconds = 5;
         CrashControlsContainer.IsVisible = false;
         InputTransparent = true; // Block taps
+        AlertIconLabel.IsVisible = true;
+        FormationImage.IsVisible = false;
 
         if (alertType == "Emergency")
         {
@@ -67,12 +69,26 @@ public partial class SensoryAlertOverlay : ContentView
             // Parse "Formation_Single_File" -> "Single File"
             string formation = alertType.Replace("Formation_", "").Replace("_", " ");
 
-            // Deep Purple (Highly visible, but distinct from Red/Emergency and Blue/Rest)
             AlertBackgroundGrid.BackgroundColor = Color.Parse("#673AB7");
             AlertTitleLabel.Text = $"FORMATION: {formation.ToUpper()}";
 
-            // 'view_stream' naturally looks like a staggered/single-file road layout
-            AlertIconLabel.Text = "view_stream";
+            // Determine which image to load based on the string
+            string imageSource = alertType.ToLower() switch
+            {
+                "formation_staggered" => "formation_staggered.png",
+                "formation_single_file" => "formation_single_file.png",
+                "formation_double_file" => "formation_double_file.png",
+                "formation_diamond" => "formation_diamond.png",
+                "formation_v_formation" => "formation_v.png",
+                "formation_two_group" => "formation_two_group.png",
+                _ => "formation_staggered.png" // Fallback
+            };
+
+            // Hide the text icon and show the image
+            AlertIconLabel.IsVisible = false;
+            FormationImage.IsVisible = true;
+            FormationImage.Source = imageSource;
+
             durationSeconds = 6;
         }
         else { return; }

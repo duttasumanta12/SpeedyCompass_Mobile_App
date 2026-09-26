@@ -2916,19 +2916,25 @@ public partial class LobbyPage : ContentPage
         // Only Admins or designated Lead Riders should dictate the formation
         if (!_amIAdmin && _rideCache.MyRole != "Lead")
         {
-            await DisplayAlert("Permission Denied", "Only the Admin or Lead Rider can change the group formation.", "OK");
+            await DisplayAlertAsync("Permission Denied", "Only the Admin or Lead Rider can change the group formation.", "OK");
             return;
         }
 
         string flowId = CorrelationContext.GenerateNew();
 
-        // 1. Pop the selection menu
-        string formation = await DisplayActionSheet("Select Riding Formation", "Cancel", null,
-            "Single File", "Staggered", "Side by Side", "Diamond");
+        // 1. Pop the selection menu with the correct 6 formations
+        string formation = await DisplayActionSheetAsync("Select Riding Formation", "Cancel", null,
+            "Staggered",
+            "Single File",
+            "Double File",
+            "Diamond",
+            "V Formation",
+            "Two Group");
 
         if (formation == "Cancel" || string.IsNullOrEmpty(formation)) return;
 
-        // 2. Format it safely for the backend (e.g. "Formation_Single_File")
+        // 2. Format it safely for the backend
+        // E.g., "Two Group" -> "Formation_Two_Group"
         string alertTag = "Formation_" + formation.Replace(" ", "_");
 
         _logger?.LogInformation("[{FlowId}] Lead triggered formation change: {Formation}", flowId, formation);
