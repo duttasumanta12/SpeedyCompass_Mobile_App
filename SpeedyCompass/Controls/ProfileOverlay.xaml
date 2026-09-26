@@ -83,15 +83,6 @@
                         </Border>
                     </StackLayout>
 
-                    <!-- Keep Screen On Toggle -->
-                    <StackLayout Orientation="Horizontal" Spacing="10" Margin="0,5,0,0">
-                        <Switch x:Name="KeepScreenOnSwitch" OnColor="MediumSeaGreen" VerticalOptions="Center"/>
-                        <StackLayout VerticalOptions="Center">
-                            <Label Text="Keep Screen On" FontAttributes="Bold" FontSize="14"/>
-                            <Label Text="Prevents phone from sleeping." FontSize="12" TextColor="Gray"/>
-                        </StackLayout>
-                    </StackLayout>
-
                     <!-- ======================================================= -->
                     <!-- THE FIX: TIER SELECTION CONTROL INJECTED HERE           -->
                     <!-- ======================================================= -->

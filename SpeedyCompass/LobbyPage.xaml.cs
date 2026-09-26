@@ -180,7 +180,7 @@ public partial class LobbyPage : ContentPage
         });
         LiveMap.NativePoiClicked += OnNativePoiClicked;
 
-        DeviceDisplay.Current.KeepScreenOn = Preferences.Default.Get("KeepScreenOn", false);
+        DeviceDisplay.Current.KeepScreenOn = Preferences.Default.Get("Map_KeepScreenOn", false);
 
         _signalRService = signalRService;
         _logger = IPlatformApplication.Current?.Services.GetService<ILogger<LobbyPage>>();

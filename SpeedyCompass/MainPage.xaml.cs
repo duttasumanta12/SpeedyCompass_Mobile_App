@@ -1,4 +1,4 @@
-﻿using Microsoft.Identity.Client;
+using Microsoft.Identity.Client;
 using Microsoft.Maui.ApplicationModel;
 using SpeedyCompass.Services;
 using SpeedyCompass.Shared.Models;
@@ -393,9 +393,6 @@ public partial class MainPage : ContentPage
                 Preferences.Default.Set("VehicleNumber", updatedProfile.VehicleNumber);
                 Preferences.Default.Set("BloodGroup", updatedProfile.BloodGroup);
                 Preferences.Default.Set("HasConsented", updatedProfile.HasConsented);
-                Preferences.Default.Set("KeepScreenOn", e.KeepScreenOn);
-
-                DeviceDisplay.Current.KeepScreenOn = e.KeepScreenOn;
                 WelcomeNameLabel.Text = updatedProfile.Username;
 
                 await LoadGroupsAsync(isLoadMore: false, flowId);

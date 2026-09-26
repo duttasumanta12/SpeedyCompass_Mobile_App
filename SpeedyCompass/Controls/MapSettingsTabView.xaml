@@ -199,6 +199,15 @@
                     <Label Text="Automatically forces Eco-Tracker mode if your phone battery drops below this percentage to prevent your phone from dying during a ride." FontSize="13" TextColor="#757575"/>
                     <Slider x:Name="BatteryThrottleSlider" Minimum="5" Maximum="50" Value="20" ValueChanged="OnBatteryThrottleChanged" MinimumTrackColor="#E53935" Margin="0,8,0,0"/>
                 </VerticalStackLayout>
+
+                <Grid ColumnDefinitions="Auto, *, Auto" ColumnSpacing="16" Margin="0,0,0,8">
+                    <Label Grid.Column="0" Text="lightbulb" FontFamily="MaterialSymbols" FontSize="24" TextColor="#FFB300" VerticalOptions="Start" Margin="0,2,0,0"/>
+                    <VerticalStackLayout Grid.Column="1" Spacing="2">
+                        <Label Text="Keep Screen On" FontAttributes="Bold" FontSize="15" TextColor="{AppThemeBinding Light=#212121, Dark=White}"/>
+                        <Label Text="Prevents phone from sleeping during active rides. Consumes more battery." FontSize="13" TextColor="#757575"/>
+                    </VerticalStackLayout>
+                    <Switch x:Name="KeepScreenOnSwitch" Grid.Column="2" OnColor="#00E676" Toggled="OnKeepScreenOnToggled" VerticalOptions="Center" />
+                </Grid>
             </VerticalStackLayout>
 
         </VerticalStackLayout>

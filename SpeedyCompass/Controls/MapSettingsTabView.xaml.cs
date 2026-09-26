@@ -1,4 +1,5 @@
 using Microsoft.Maui.Controls.Maps;
+using Microsoft.Maui.Devices;
 using Microsoft.Maui.Maps;
 using SpeedyCompass.Shared.Constants; // For MapNavigationMode enum architectural
 
@@ -88,6 +89,12 @@ public partial class MapSettingsTabView : ContentView
         double weatherDist = Preferences.Default.Get("Map_WeatherLookAheadKm", 15.0);
         WeatherDistanceSlider.Value = weatherDist;
         WeatherDistanceLabel.Text = $"{Math.Round(weatherDist)} km";
+
+        bool keepScreenOn = Preferences.Default.Get("Map_KeepScreenOn", false);
+        KeepScreenOnSwitch.IsToggled = keepScreenOn;
+        DeviceDisplay.Current.KeepScreenOn = keepScreenOn; // Enforce it when the tab loads
+
+        _isInitializing = false;
     }
 
     // =====================================================================
@@ -220,5 +227,15 @@ public partial class MapSettingsTabView : ContentView
 
         // Save the exact double to Preferences
         Preferences.Default.Set("Map_WeatherLookAheadKm", e.NewValue);
+    }
+    private void OnKeepScreenOnToggled(object sender, ToggledEventArgs e)
+    {
+        if (_isInitializing) return;
+
+        // Save preference
+        Preferences.Default.Set("Map_KeepScreenOn", e.Value);
+
+        // Instantly apply to the device display
+        DeviceDisplay.Current.KeepScreenOn = e.Value;
     }
 }

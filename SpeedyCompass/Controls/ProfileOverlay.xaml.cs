@@ -7,7 +7,6 @@ public class ProfileSavedEventArgs : EventArgs
     public string BloodGroup { get; set; }
     public string EmergencyContact { get; set; }
     public string VehicleNumber { get; set; }
-    public bool KeepScreenOn { get; set; }
     public bool HasConsent { get; set; }
 }
 
@@ -55,7 +54,6 @@ public partial class ProfileOverlay : ContentView
         ProfileUsernameEntry.Text = username;
         ProfileContactEntry.Text = contact;
         ProfileVehicleEntry.Text = vehicle;
-        KeepScreenOnSwitch.IsToggled = keepScreenOn;
         ConsentCheckbox.IsChecked = consent;
 
         if (!string.IsNullOrEmpty(bloodGroup) && ProfileBloodGroupPicker.Items.Contains(bloodGroup))
@@ -84,7 +82,6 @@ public partial class ProfileOverlay : ContentView
             BloodGroup = ProfileBloodGroupPicker.SelectedItem?.ToString() ?? "Unknown",
             EmergencyContact = ProfileContactEntry.Text?.Trim() ?? "",
             VehicleNumber = ProfileVehicleEntry.Text?.Trim() ?? "",
-            KeepScreenOn = KeepScreenOnSwitch.IsToggled,
             HasConsent = ConsentCheckbox.IsChecked
         };
 
